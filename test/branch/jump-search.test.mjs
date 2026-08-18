@@ -223,28 +223,37 @@ test('a 200-branch index answers far inside a millisecond per query', () => {
   // Warm the JIT so the measurement is of the search, not of the first call.
   for (const q of queries) searchJump(wide, q, { limit: 8 });
 
-  const started = process.hrtime.bigint();
+  // The median round rather than the mean of all of them: this suite runs
+  // concurrently with eleven other lanes, and a round that lost the CPU to
+  // another worker measures the scheduler, not the search.
+  const roundMs = [];
   let found = 0;
   for (let r = 0; r < rounds; r++) {
+    const started = process.hrtime.bigint();
     for (const q of queries) found += searchJump(wide, q, { limit: 8 }).length;
+    roundMs.push(Number(process.hrtime.bigint() - started) / 1e6);
   }
-  const totalMs = Number(process.hrtime.bigint() - started) / 1e6;
-  const perQueryMs = totalMs / (rounds * queries.length);
+  const sorted = roundMs.slice().sort((a, b) => a - b);
+  const perQueryMs = sorted[Math.floor(sorted.length / 2)] / queries.length;
+  const meanMs = roundMs.reduce((a, b) => a + b, 0) / roundMs.length / queries.length;
 
   // And the deck a presenter actually stands in front of.
   for (const q of queries) searchJump(index, q, { limit: 8 });
-  const realStarted = process.hrtime.bigint();
+  const realRounds = [];
   for (let r = 0; r < rounds; r++) {
+    const started = process.hrtime.bigint();
     for (const q of queries) searchJump(index, q, { limit: 8 });
+    realRounds.push(Number(process.hrtime.bigint() - started) / 1e6);
   }
-  const realPerQueryMs = Number(process.hrtime.bigint() - realStarted) / 1e6 / (rounds * queries.length);
+  realRounds.sort((a, b) => a - b);
+  const realPerQueryMs = realRounds[Math.floor(realRounds.length / 2)] / queries.length;
 
   assert.ok(found > 0, 'the wide index matched nothing at all');
   assert.ok(perQueryMs < 1, `a query over 200 branches took ${perQueryMs.toFixed(4)}ms`);
   assert.ok(realPerQueryMs < 0.2, `a query over a real six-branch deck took ${realPerQueryMs.toFixed(4)}ms`);
   console.log([
-    `  jump search: ${(rounds * queries.length).toLocaleString('en-US')} queries × 2 indexes`,
-    `    200 branches: ${perQueryMs.toFixed(4)}ms per query (${totalMs.toFixed(1)}ms total)`,
+    `  jump search: ${(rounds * queries.length).toLocaleString('en-US')} queries × 2 indexes (median round)`,
+    `    200 branches: ${perQueryMs.toFixed(4)}ms per query (mean ${meanMs.toFixed(4)}ms)`,
     `    6 branches:   ${realPerQueryMs.toFixed(4)}ms per query`,
   ].join('\n'));
 });

@@ -168,16 +168,17 @@ test('FONT_UNAVAILABLE names the face that will actually render and the advance 
   const findings = await preflight(defectProof('FONT_UNAVAILABLE'));
   const finding = findings.find((f) => f.code === 'FONT_UNAVAILABLE');
   assert.equal(finding.severity, 2);
-  assert.equal(finding.detail.family, 'Recursive Display');
+  assert.equal(finding.detail.family, 'Inter');
   assert.equal(finding.detail.resolved, 'Arial');
   assert.match(finding.message, /Arial/);
   assert.equal(finding.autoFixAvailable, true);
+  assert.ok(finding.detail.recommendedStack.length > 1, 'the fix must have a better stack to offer');
 });
 
 test('FONT_UNAVAILABLE is silent when the user supplied a licensed font file', async () => {
   const proof = copy(cleanProof());
-  proof.brand.faces[1].family = 'Recursive Display';
-  proof.brand.faces[1].fallbackStack = ['Recursive Display', 'Arial'];
+  proof.brand.faces[1].family = 'Inter';
+  proof.brand.faces[1].fallbackStack = ['Inter', 'Arial'];
   proof.brand.faces[1].embeddable = true;
   const findings = await preflight(proof);
   assert.deepEqual(findings.filter((f) => f.code === 'FONT_UNAVAILABLE'), []);

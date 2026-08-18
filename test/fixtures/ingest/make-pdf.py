@@ -50,24 +50,29 @@ def raw_rgb(width, height, pixel):
     return bytes(pixel) * width * height
 
 
-# A 8x8 baseline JPEG, hand-assembled: SOI, APP0, DQT, SOF0, DHT, SOS, data, EOI.
-# The importer lifts DCTDecode bytes out unchanged, so what matters for the test
-# is that these bytes are a real JPEG and survive the round trip byte for byte.
-JPEG = bytes.fromhex(
-    'ffd8ffe000104a46494600010100000100010000'
-    'ffdb004300ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-    'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-    'ffffffffffff'
-    'ffc0000b080008000801011100'
-    'ffc4001f0000010501010101010100000000000000000102030405060708090a0b'
-    'ffc400b5100002010303020403050504040000017d01020300041105122131410613516107'
-    '227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a'
-    '434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a'
-    '92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9da'
-    'e1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9fa'
-    'ffda0008010100003f00d2cf20'
-    'ffd9'
-)
+def minimal_jpeg():
+    """An 8x8 baseline JPEG, assembled segment by segment.
+
+    Written out here rather than pasted as a hex blob so every segment length is
+    computed rather than trusted: a wrong length makes the file undecodable by
+    marker-scanning readers, which is exactly what the importer is.
+    """
+    def seg(marker, payload):
+        return bytes([0xFF, marker]) + len(payload + b'\0\0').to_bytes(2, 'big') + payload
+
+    app0 = seg(0xE0, b'JFIF\x00' + bytes([1, 1, 0, 0, 1, 0, 1, 0, 0]))
+    dqt = seg(0xDB, bytes([0x00]) + bytes([0x10] * 64))
+    sof0 = seg(0xC0, bytes([8]) + (8).to_bytes(2, 'big') + (8).to_bytes(2, 'big')
+               + bytes([1, 1, 0x11, 0]))
+    # One DC and one AC Huffman table, each defining a single one-bit code.
+    dc = seg(0xC4, bytes([0x00]) + bytes([1] + [0] * 15) + bytes([0x00]))
+    ac = seg(0xC4, bytes([0x10]) + bytes([1] + [0] * 15) + bytes([0x00]))
+    sos = seg(0xDA, bytes([1, 1, 0x00, 0x00, 0x3F, 0x00]))
+    scan = bytes([0x00])
+    return b'\xff\xd8' + app0 + dqt + sof0 + dc + ac + sos + scan + b'\xff\xd9'
+
+
+JPEG = minimal_jpeg()
 
 # ---------------------------------------------------------------------------
 # sample.pdf — classic xref table

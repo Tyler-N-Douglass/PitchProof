@@ -107,7 +107,12 @@ export async function emit(proof, options, deps) {
   const finalCss = [runtimeCss, fontCss, themeCss, userCss].filter((s) => s && s.trim()).join('\n\n');
 
   // ---- build, budget, rebuild ------------------------------------------
-  let working = { ...proof, emitOptions };
+  // §2: a Review build has "no presenter notes". The runtime already refuses to
+  // open presenter view without them, but a note that travels in the payload is
+  // a note a recipient can read out of the file — and presenter notes are where
+  // the internal read on the room lives. So they are removed from the model,
+  // not merely hidden.
+  let working = stripPresenterNotes({ ...proof, emitOptions }, emitOptions.includePresenterNotes);
   /** @type {import('./budget.js').DegradationLine[]} */
   let degradations = [];
   /** @type {{assetId: string, bytes: number, reason: string}[]} */
@@ -193,6 +198,25 @@ export async function emit(proof, options, deps) {
   }
 
   return ok(result);
+}
+
+/**
+ * Remove presenter notes from every beat when the build does not carry them.
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @param {boolean} keep
+ * @returns {import('../core/contracts.d.ts').Proof}
+ */
+export function stripPresenterNotes(proof, keep) {
+  if (keep) return proof;
+  const scrub = (scene) => ({
+    ...scene,
+    beats: (scene.beats || []).map((b) => (b.presenterNote === null ? b : { ...b, presenterNote: null })),
+  });
+  return {
+    ...proof,
+    spine: (proof.spine || []).map(scrub),
+    branches: (proof.branches || []).map((b) => ({ ...b, scenes: (b.scenes || []).map(scrub) })),
+  };
 }
 
 /**

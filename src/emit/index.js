@@ -21,7 +21,7 @@
  * @module emit/index
  */
 
-export { emit, buildDocument, layoutsMissingFor, staleCaptureFindings, STALE_CAPTURE_DAYS } from './emit.js';
+export { emit, buildDocument, layoutsMissingFor, staleCaptureFindings, stripPresenterNotes, STALE_CAPTURE_DAYS } from './emit.js';
 
 export {
   scanForNetworkReferences, scanModelAssets, scanCss, scanJs, scanAbsoluteUrls, scanNestedDataUri,

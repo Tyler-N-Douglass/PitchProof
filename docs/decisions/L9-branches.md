@@ -225,9 +225,13 @@ finds — which is how this lane found the `exitedFrom` defect. `anchoredOnly`
 exists because "the stack never nests deeper than the deck allows" is only a
 meaningful assertion when the walk cannot reach a branch the scene does not
 offer; with the jump index in play, depth is bounded by the number of jumps, not
-by the graph. `haltOn` keeps the property test at full strength while the L2
-defect is outstanding: the walk stops at the documented transition instead of
-the corpus being weakened around it.
+by the graph. `haltOn` exists because it kept the property test at full strength
+while the L2 `exitedFrom` defect was open (`docs/disputes/L9-branches.md` §1,
+now closed): the walk stopped at the documented transition instead of the corpus
+being weakened around it. It stays — rehearsal wants to stop at the first
+anomaly rather than walk on through the wreckage, and the next thing that needs
+fencing should not have to reinvent it — and it stays tested, so it still works
+when that happens.
 
 ---
 

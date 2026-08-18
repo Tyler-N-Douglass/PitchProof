@@ -25,8 +25,8 @@ import { contentId } from '../core/ids.js';
 import { blocksWithTrace, repairHeadingLevels, unrepairHeadingLevels } from './blocks.js';
 import { classifyChrome, dropNonRendered } from './chrome.js';
 import {
-  attrOf, bodyOf, byTag, cloneTree, elements, firstElement, linkParents,
-  normalizeSpace, selectorPath, tagOf, textOf,
+  attrOf, bodyOf, byTag, childrenOf, cloneTree, elements, firstElement, isText,
+  linkParents, normalizeSpace, selectorPath, tagOf, textOf,
 } from './dom.js';
 import { inferKindWithEvidence } from './kind.js';
 import { detectLocale, localeSignals } from './locale.js';
@@ -51,7 +51,9 @@ export function extractMeta(doc, base = {}) {
 
   const title = firstElement(doc, (n) => tagOf(n) === 'title');
   if (title) {
-    const text = textOf(title);
+    // `<title>` lives in `<head>`, which renders nothing, so its text is read
+    // directly rather than through the rendered-text helper.
+    const text = normalizeSpace(childrenOf(title).filter(isText).map((c) => c.text || '').join(''));
     if (text) meta.title = text;
   }
   const html = firstElement(doc, (n) => tagOf(n) === 'html');

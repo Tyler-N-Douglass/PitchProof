@@ -5,19 +5,26 @@ contract **as written** anyway. Everything below is built against; nothing here
 was worked around by changing a declared surface.
 
 The first entry is not an objection. It is a defect in a frozen module that the
-§17.8 property test found, and it is the most important thing in this file.
+§17.8 property test found. **It was accepted and fixed in `ec1dd38`**; the entry
+is kept in full because the §20 critic should be able to read what was found,
+how, and what closed it.
 
 ---
 
-## 1. DEFECT (blocking, L2 `src/runtime/nav.js`) — the reversible branch exit restores only the top frame
+## 1. DEFECT — **CLOSED, fixed in `ec1dd38`** (L2 `src/runtime/nav.js`) — the reversible branch exit restored only the top frame
 
-**Severity:** 1 — it strands the presenter mid-pitch, which is the §22.4 failure
-this lane exists to prevent. It is reachable in five keystrokes.
+**Status: resolved.** Reported by L9, accepted by the integrator, fixed in
+`ec1dd38` as proposed. The fence and the pin this lane held in the meantime are
+both gone; see "Resolution" at the end of this entry. Nothing here is
+outstanding.
+
+**Severity when open:** 1 — it stranded the presenter mid-pitch, which is the
+§22.4 failure this lane exists to prevent. It was reachable in five keystrokes.
 
 **Where:** `src/runtime/nav.js`, `case 'nextScene'` (the automatic branch exit)
 and `reenterExited`.
 
-**What happens.** Advancing past the last beat of a branch returns and records
+**What happened.** Advancing past the last beat of a branch returns and records
 `exitedFrom = { from, frame }`, where `frame` is the **single** top stack frame
 (D15). `reenterExited` then pushes that one frame back when the presenter steps
 backwards. That is correct for `returnPolicy: 'anchor'`, which pops exactly one
@@ -83,13 +90,39 @@ function reenterExited(deck, state, action) {
 `stateHash` does not include `exitedFrom`, so the fix cannot change a single
 rendered state or any §17.9 hash.
 
-**Until it lands.** The property test fences exactly this transition with
-`haltOn` and asserts the fence caught the documented shape and nothing else, so
-no assertion is relaxed and no *new* defect can hide behind it. The pinned test
-asserts the broken behaviour deliberately and therefore **fails the moment the
-patch lands** — at which point the fence and the pin must both be deleted. The
-correct assertions to replace them with are written in that test's closing
-comment.
+**How it was held while open.** The property test fenced exactly this transition
+with `haltOn` and asserted the fence had caught the documented shape and nothing
+else, so no assertion was relaxed and no *new* defect could hide behind it. A
+pinned test asserted the broken behaviour deliberately, so it would fail the
+moment the patch landed.
+
+### Resolution — `ec1dd38`
+
+The integrator landed the patch above, plus one thing this lane asked for
+implicitly and did not propose: `checkInvariants` now tests the floor
+(`stack[0].sequenceId === SPINE`) rather than assuming it, so a state of this
+shape can never again pass every check and throw an action later.
+
+L9 then, in this order:
+
+1. **removed the `haltOn` fence** — all 1000 × 200 walks run unfenced;
+2. **deleted the pinned test** and replaced it with the positive regression it
+   named, `the nextSpineScene auto-exit restores the whole return stack
+   (regression, ec1dd38)`, which walks the same five keystrokes and asserts the
+   whole stack comes back, the state is sound floor included, `r` returns to the
+   spine, and `return` under `nextSpineScene` still moves the pitch on;
+3. **re-ran everything green.** The unfenced corpus now completes 200,000
+   transitions with 38,603 jumps and 22,038 returns (up from 32,025 and 18,387,
+   because 342 walks were previously truncated at the fence), a maximum stack
+   depth of 14, and 1000/1000 walks terminating on the last beat of the spine
+   with an empty stack.
+4. **swept harder than the suite does**, as a one-off, to be sure nothing else
+   was hiding behind the fence: 5,000 walks × 400 steps = **2,000,000
+   transitions** over decks generated with 1–12 spine scenes and 1–14 branches,
+   one walk in five restricted to anchored jumps, reaching a stack depth of 24.
+   Zero unsound states, zero throws, 5000/5000 terminating on the spine.
+
+Nothing else in the reducer surfaced.
 
 ---
 

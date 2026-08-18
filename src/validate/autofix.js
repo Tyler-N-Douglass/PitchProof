@@ -17,6 +17,18 @@
  * that *is* the revert, and `test/validate/autofix.test.mjs` asserts it by deep
  * comparison for every fix on every finding it offers.
  *
+ * A fix declares what it does, because not every defect can be made to
+ * disappear by editing a model:
+ *
+ *  - `resolves` — re-running preflight no longer reports the finding. This is
+ *    every fix but two.
+ *  - `plan` — the edit instructs the emitter, and the byte count comes down when
+ *    the budgeter acts on it. Resampling pixels needs an image codec, which is
+ *    L10's, not a pure function's over a Proof.
+ *  - `mitigates` — the finding stands because it is true, and the fix reduces
+ *    its consequence. A brand face that cannot be embedded stays unembeddable;
+ *    what the fix changes is which face renders in its place.
+ *
  * Five codes are deliberately **not** auto-fixable, and the reasons matter:
  *
  *  - `TEXT_OVERFLOW` — the fix is to rewrite the sentence or change the type
@@ -220,6 +232,12 @@ const FIXERS = {
       && stack.every((s, i) => s === face.fallbackStack[i]);
     if (same) return null;
     return {
+      // The face is still unavailable afterwards — that is a true fact about the
+      // project, and it keeps being reported. What the fix changes is which face
+      // takes its place: the metric-closest one available, rather than whatever
+      // the machine happens to default to. That is the difference between a
+      // substitution nobody notices and §22.2's overflow.
+      effect: 'mitigates',
       label: `Set the ${d.role} fallback stack to ${stack.join(', ')}`,
       apply(current) {
         const next = clone(current);
@@ -299,7 +317,7 @@ export function autoFixes(proof, findings) {
       // 'resolves' — re-running preflight on the fixed proof no longer reports
       // this finding. 'plan' — the edit instructs the emitter, and the finding
       // clears when the emitter acts on it. Nothing else is legal.
-      effect: fix.effect === 'plan' ? 'plan' : 'resolves',
+      effect: fix.effect === 'plan' || fix.effect === 'mitigates' ? fix.effect : 'resolves',
     });
   }
   return out;

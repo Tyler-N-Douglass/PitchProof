@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="referrer" content="no-referrer">
+<title>PitchProof Studio</title>
+<!--
+  The studio shell.
+
+  There is not one external reference in this document, and there will never be
+  one: `scripts/build.mjs` replaces the three markers below with the inlined
+  stylesheet, the embedded artifact runtime, and the studio bundle. Fonts are
+  named, never fetched — §15 asks for Geist with a local fallback stack, so a
+  machine that has it uses it and a machine that does not falls through to the
+  system UI face rather than reaching for a network.
+-->
+<!--PITCHPROOF_STYLES-->
+</head>
+<body>
+<div id="pp-studio-root"></div>
+<noscript>
+  <div class="st-noscript">
+    <h1>PitchProof Studio</h1>
+    <p>The studio is a JavaScript application that runs entirely in this browser — there is no server behind it. Enable JavaScript for this page to use it.</p>
+    <p>The proof artifacts it emits are separate files, and they open with no network at all.</p>
+  </div>
+</noscript>
+<!--PITCHPROOF_RUNTIME-->
+<!--PITCHPROOF_SCRIPT-->
+<script>
+/* Boot. The bundle above assigns its namespace to `PitchProofStudio`. */
+(function () {
+  var studio = window.PitchProofStudio;
+  var root = document.getElementById('pp-studio-root');
+  if (!studio || typeof studio.bootStudio !== 'function') {
+    if (root) {
+      root.textContent = 'The studio bundle did not load. Rebuild with `node scripts/build.mjs`.';
+    }
+    return;
+  }
+  studio.bootStudio({ document: document, window: window }).catch(function (error) {
+    if (!root) return;
+    root.textContent = 'The studio could not start: ' + (error && error.message ? error.message : String(error));
+  });
+})();
+</script>
+</body>
+</html>

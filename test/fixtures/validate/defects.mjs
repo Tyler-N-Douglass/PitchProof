@@ -220,10 +220,11 @@ export function defectProof(code) {
       return p;
 
     case 'FONT_UNAVAILABLE':
-      p.brand.faces[1].family = 'Recursive Display';
-      // No usable fallback declared: the artifact would land on whatever the
-      // machine's default sans happens to be.
-      p.brand.faces[1].fallbackStack = ['Recursive Display'];
+      // A real webfont the artifact cannot embed, declared with no fallback at
+      // all: the artifact lands on whatever the machine's default sans happens
+      // to be, rather than on a metric-compatible face someone chose.
+      p.brand.faces[1].family = 'Inter';
+      p.brand.faces[1].fallbackStack = ['Inter'];
       return p;
 
     case 'TEXT_OVERFLOW':

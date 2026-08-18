@@ -26,7 +26,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Pcg32 } from '../../src/core/prng.js';
+import { Pcg32, fnv1a64 } from '../../src/core/prng.js';
 import {
   srgbToLinear, linearToSrgb, hexToRgb, rgbToHex, hexAlpha,
   rgbToOklab, oklabToRgb, linearRgbToOklab, oklabToLinearRgb,
@@ -59,10 +59,16 @@ function wcagLuminanceOracle(rgb) {
   return 0.2126 * chan(rgb[0]) + 0.7152 * chan(rgb[1]) + 0.0722 * chan(rgb[2]);
 }
 
-/** A seeded sweep of the sRGB cube; the same points on every machine. */
-function cubeSweep(count, streamName) {
-  const rng = new Pcg32('pitchproof-v1', 0xC01Fn);
-  void streamName;
+/**
+ * A seeded sweep of the sRGB cube — the same points on every machine, per §5.
+ * The substream name is folded into the seed so two sweeps in this file cover
+ * different points rather than repeating one another.
+ * @param {number} count
+ * @param {string} substream
+ * @returns {number[][]}
+ */
+function cubeSweep(count, substream) {
+  const rng = new Pcg32('pitchproof-v1', fnv1a64(`pitchproof/substream/${substream}`));
   /** @type {number[][]} */
   const out = [];
   for (let i = 0; i < count; i++) out.push([rng.nextInt(256), rng.nextInt(256), rng.nextInt(256)]);

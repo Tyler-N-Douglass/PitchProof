@@ -61,7 +61,9 @@
   --pp-sc-index-num-w: 32px;
   --pp-sc-index-row-gap: 10px;
   --pp-sc-list-marker-w: 14px;
-  --pp-sc-map-legend-h: 56px;
+  --pp-sc-map-canvas-min-h: 180px;
+  --pp-sc-map-legend-cols: 1;
+  --pp-sc-map-legend-h: 96px;
   --pp-sc-note-gap: 12px;
   --pp-sc-note-pad: 12px;
   --pp-sc-note-w: 100%;
@@ -125,7 +127,9 @@
     --pp-sc-index-num-w: 44px;
     --pp-sc-index-row-gap: 12px;
     --pp-sc-list-marker-w: 16px;
-    --pp-sc-map-legend-h: 64px;
+    --pp-sc-map-canvas-min-h: 240px;
+    --pp-sc-map-legend-cols: 3;
+    --pp-sc-map-legend-h: 88px;
     --pp-sc-note-gap: 24px;
     --pp-sc-note-pad: 14px;
     --pp-sc-note-w: 260px;
@@ -190,7 +194,9 @@
     --pp-sc-index-num-w: 52px;
     --pp-sc-index-row-gap: 14px;
     --pp-sc-list-marker-w: 18px;
-    --pp-sc-map-legend-h: 72px;
+    --pp-sc-map-canvas-min-h: 280px;
+    --pp-sc-map-legend-cols: 4;
+    --pp-sc-map-legend-h: 88px;
     --pp-sc-note-gap: 32px;
     --pp-sc-note-pad: 16px;
     --pp-sc-note-w: 320px;
@@ -600,6 +606,10 @@
   background: var(--pp-surface-alt);
 }
 .pp-figure--tall .pp-img { height: 100%; object-fit: cover; }
+/* A captured hero is evidence, not the scene: it takes at most a third of the
+   frame inside a content column, so the copy beside it stays the subject. */
+.pp-block--media .pp-img { max-height: 34vh; }
+.pp-figure--tall .pp-img { max-height: none; }
 .pp-img-missing {
   display: flex;
   align-items: center;
@@ -729,7 +739,20 @@
 .pp-fan-card-head { border-bottom: 1px solid var(--pp-border); padding-bottom: 4px; }
 .pp-fan-card-label { margin: 0; }
 .pp-fan-card-meta { margin: 2px 0 0; opacity: 0.62; }
-.pp-fan-card-body { flex: 1 1 auto; min-height: 0; display: grid; gap: 4px; align-content: start; }
+.pp-fan-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  overflow: hidden;
+  /* Content that runs past the card fades out rather than being sliced through
+     the middle of a line. It is still reported to the overflow detector with
+     its clamp, so the scene that needs a shorter blurb is a finding, not a
+     surprise on the projector. */
+  mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 22px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 22px), transparent);
+}
 .pp-fan-card-title { margin: 0; }
 .pp-fan-card-blurb { margin: 0; opacity: 0.86; }
 .pp-fan-card-empty { margin: 0; opacity: 0.7; }
@@ -799,10 +822,21 @@
   color: var(--pp-on-surface);
 }
 .pp-stack-step--source .pp-stack-body { background: var(--pp-surface-alt); color: var(--pp-on-surface-alt); }
-.pp-stack-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.pp-stack-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; }
+.pp-stack-head-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.pp-stack-head-right .pp-provenance { margin: 0; }
 .pp-stack-label { margin: 0; min-width: 0; }
 .pp-stack-meta { margin: 0; opacity: 0.62; }
-.pp-stack-content { flex: 1 1 auto; min-height: 0; display: grid; gap: 4px; align-content: start; }
+.pp-stack-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 18px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 18px), transparent);
+}
 .pp-stack-title { margin: 0; }
 .pp-stack-blurb { margin: 0; opacity: 0.86; }
 .pp-stack-empty { margin: 0; opacity: 0.7; }
@@ -925,7 +959,7 @@
   gap: var(--pp-sc-row-gap);
   min-height: 0;
 }
-.pp-map-canvas { flex: 1 1 auto; min-height: 0; }
+.pp-map-canvas { flex: 1 1 auto; min-height: var(--pp-sc-map-canvas-min-h); }
 .pp-map-svg { width: 100%; height: 100%; display: block; }
 
 .pp-map-box {
@@ -947,13 +981,15 @@
   padding: 0;
   list-style: none;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(var(--pp-sc-map-legend-cols), minmax(0, 1fr));
+  grid-auto-rows: var(--pp-sc-map-legend-h);
   gap: var(--pp-sc-fan-gap);
-  min-height: var(--pp-sc-map-legend-h);
+  flex: 0 0 auto;
   align-content: start;
 }
 .pp-map-chip {
   min-width: 0;
+  overflow: hidden;
   padding: var(--pp-sc-card-pad);
   border: 1px solid var(--pp-border);
   border-radius: var(--pp-radius);
@@ -988,7 +1024,7 @@
 .pp-index-num-text { margin: 0; }
 .pp-index-text { min-width: 0; }
 .pp-index-title { margin: 0; }
-.pp-index-blurb { margin: 4px 0 0; opacity: 0.74; }
+.pp-index-blurb { margin: 4px 0 0; opacity: 0.74; max-width: 90ch; }
 
 /* ------------------------------------------------------- md: 768px and wider
  *
@@ -1006,16 +1042,12 @@
   .pp-fan-grid[data-pp-n="2"] { --pp-sc-fan-cols: 2; }
 
   .pp-side-row { grid-template-columns: minmax(0, 1fr) var(--pp-sc-note-w); }
-
-  .pp-map-legend { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* ------------------------------------------------------ lg: 1400px and wider */
 
 @media (min-width: 1400px) {
   .pp-fan-grid[data-pp-n="3"] { --pp-sc-fan-cols: 3; }
-
-  .pp-map-legend { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 /* --------------------------------------------------------- reduced motion

@@ -59,7 +59,7 @@ import {
 import { SeedBook, DEFAULT_SEED } from '../core/prng.js';
 import {
   hexToOklch, oklchToHex, contrastRatio, luminanceOfHex, contrastFromLuminance,
-  maxChromaAt, deltaEok, hueDistance, meanHue, oklchToOklab, hexToOklab,
+  maxChromaAt, deltaEok, hueDistance, meanHue, hexToOklab,
   MAX_CONTRAST, SRGB_HUES, rgbToHex, hexToRgb,
 } from './oklab.js';
 import {

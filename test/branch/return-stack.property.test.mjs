@@ -42,7 +42,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildDeck, SPINE } from '../../src/runtime/deck.js';
-import { checkInvariants, beatsOf, initialState, navigate, NavInvariantError } from '../../src/runtime/nav.js';
+import { checkInvariants, beatsOf, initialState, navigate } from '../../src/runtime/nav.js';
 import { randomWalkTrace, driveToSpineEnd, orphanReasons } from '../../src/branch/walk.js';
 import { nestingDepths, branchCoverage } from '../../src/branch/graph.js';
 import { generateBranchyProof } from '../fixtures/branch/generate-deck.mjs';

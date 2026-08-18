@@ -96,7 +96,12 @@ function renderStep(ctx, step, index, total) {
   h('div', { class: 'pp-stack-body' },
     h('div', { class: 'pp-stack-head' },
       h('p', { class: 'pp-stack-label', 'data-pp-tx': 'stepLabel', 'data-pp-clamp': '1' }, step.title),
-      step.meta ? h('p', { class: 'pp-stack-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, step.meta) : null),
+      // The provenance label rides in the header rather than under the content:
+      // a state in a chain is one or two lines tall, and a label below the copy
+      // would push that copy out of its own step.
+      h('div', { class: 'pp-stack-head-right' },
+        step.meta ? h('p', { class: 'pp-stack-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, step.meta) : null,
+        provenanceLabel(step.rendition, ctx))),
     h('div', { class: 'pp-stack-content' },
       lead && lead.type !== 'paragraph' && lead.type !== 'heading'
         ? renderBlock(lead, { media: ctx.media, density: 'condensed', clampParagraph: 2, maxListItems: 3, maxTableRows: 3 })
@@ -104,6 +109,5 @@ function renderStep(ctx, step, index, total) {
           title ? h('p', { class: 'pp-stack-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '1' }, title) : null,
           blurb ? h('p', { class: 'pp-stack-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2' }, blurb) : null,
           !title && !blurb ? h('p', { class: 'pp-stack-empty', 'data-pp-tx': 'caption' }, 'No content blocks at this state.') : null,
-        ]),
-    provenanceLabel(step.rendition, ctx)));
+        ])));
 }

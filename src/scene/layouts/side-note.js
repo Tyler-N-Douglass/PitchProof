@@ -116,7 +116,20 @@ function notesFor(ctx, mainBlocks) {
       });
     }
   });
-  return notes.map((note, i) => ({ ...note, index: i }));
+  // Notes that anchor to the same block would otherwise pile into one row and
+  // stretch it, pushing the next paragraph of the client's page a screen down.
+  // Spreading them — one per row, never above the block they belong to, order
+  // preserved — keeps each note beside its subject without deforming the
+  // column it annotates.
+  let cursor = -1;
+  return notes
+    .map((note, i) => ({ ...note, index: i }))
+    .sort((a, b) => (a.row === b.row ? a.index - b.index : a.row - b.row))
+    .map((note) => {
+      cursor = Math.max(note.row, cursor + 1);
+      return { ...note, row: cursor };
+    })
+    .sort((a, b) => a.index - b.index);
 }
 
 /** @returns {import('../../core/vdom.js').VNode} */

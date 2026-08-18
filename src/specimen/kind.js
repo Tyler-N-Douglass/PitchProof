@@ -15,7 +15,7 @@
  * no amount of markup should talk us out of that.
  */
 
-import { attrOf, byTag, elements, firstElement, tagOf, textOf } from './dom.js';
+import { attrOf, byTag, childrenOf, elements, firstElement, isElement, tagOf, textOf } from './dom.js';
 
 /** @typedef {'page'|'article'|'product'|'campaign'|'document'|'image'|'fragment'} SpecimenKind */
 
@@ -43,6 +43,9 @@ const URL_KIND = [
   [/\/(blog|news|article|articles|insights|stories|story|press|newsroom|resources\/blog)\//i, 'article'],
   [/\/(product|products|p|sku|shop|store|item|catalog)\//i, 'product'],
   [/\/(lp|landing|campaign|campaigns|promo|promotion|offer|offers|get|try|demo|webinar)\//i, 'campaign'],
+  // Documentation and support pages are marked up as `<article>` constantly;
+  // the URL is the better witness for what they are.
+  [/\/(docs|documentation|reference|guides?|manual|support|help)\//i, 'page'],
 ];
 
 /**
@@ -165,12 +168,19 @@ export function inferKindWithEvidence(doc, url, context = {}) {
 
   for (const e of structuralEvidence(doc)) evidence.push({ source: 'structure', kind: e.kind, weight: e.weight, why: e.why });
 
-  // A capture with no `<html>`/`<body>` wrapper is a fragment: pasted markup,
-  // an email module, a component. Only claimed when nothing stronger applies.
-  const isFragment = Boolean(doc)
-    && !firstElement(doc, (n) => tagOf(n) === 'body' || tagOf(n) === 'html')
+  // A capture with no head matter and no landmarks is a fragment: pasted
+  // markup, an email module, a component. A parser always synthesises
+  // `<html>`/`<body>`, so their presence proves nothing — what a real page has
+  // and a fragment does not is a title, meta tags and a page skeleton.
+  const head = doc ? firstElement(doc, (n) => tagOf(n) === 'head') : null;
+  const hasHeadMatter = head
+    ? childrenOf(head).some((c) => isElement(c) && ['title', 'meta', 'link'].includes(tagOf(c)))
+    : false;
+  const hasSkeleton = Boolean(doc)
+    && Boolean(firstElement(doc, (n) => ['main', 'article', 'nav', 'header', 'footer', 'aside'].includes(tagOf(n))));
+  const isFragment = Boolean(doc) && !hasHeadMatter && !hasSkeleton
     && (context.blocks ? context.blocks.length <= 6 : true);
-  if (isFragment) evidence.push({ source: 'structure', kind: 'fragment', weight: 0.8, why: 'no document wrapper' });
+  if (isFragment) evidence.push({ source: 'structure', kind: 'fragment', weight: 0.8, why: 'no head matter and no page skeleton' });
 
   /** @type {Map<string, number>} */
   const totals = new Map();

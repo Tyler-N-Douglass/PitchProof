@@ -5,7 +5,10 @@
  * Three properties are asserted for every fix the engine offers, on every
  * finding it offers one for:
  *
- *  1. **It works.** Applying it makes the finding go away.
+ *  1. **It works.** Applying it makes the finding go away — or, for the two fixes
+ *     the emitter carries out rather than the model (`effect: 'plan'`), it
+ *     changes the instruction the emitter follows. Nothing else is legal, and
+ *     the test below enumerates which fixes are which.
  *  2. **It is pure.** The proof handed in is byte-identical afterwards, which is
  *     what makes the fix reversible: the "undo" state is the object you already
  *     had. Apply-then-revert is therefore not a separate code path that could
@@ -27,9 +30,28 @@ import { FINDING_CODES } from '../../src/core/contracts.js';
 import {
   runPreflight, autoFixes, autoFixCommand, applyAll, FIXABLE_CODES, summarize,
 } from '../../src/validate/index.js';
+
 import { cleanProof, defectProof, copy, NOW } from '../fixtures/validate/defects.mjs';
 
 const preflight = (proof, options = {}) => runPreflight(proof, { clock: () => NOW, ...options });
+
+/**
+ * Codes whose fix is an instruction to the emitter rather than a model edit that
+ * clears the finding on its own. Resampling pixels needs an image codec, which
+ * belongs to L10's budgeter; what preflight can honestly do is hand it a plan.
+ */
+const PLANNED = {
+  ASSET_OVERSIZE: 'the byte count comes down when the budgeter recompresses, not when the option changes',
+  SIZE_BUDGET_EXCEEDED: 'the same recompression, applied to the whole budget',
+};
+
+/**
+ * Codes whose fix reduces the consequence of a finding that remains true. The
+ * post-condition is that the fix is no longer offered afterwards.
+ */
+const MITIGATED = {
+  FONT_UNAVAILABLE: 'the face stays unembeddable; the fix decides which face renders instead',
+};
 
 /** Codes deliberately left unfixable, with the reason each one is. */
 const UNFIXABLE = {
@@ -59,6 +81,24 @@ test('every auto-fix resolves the finding that produced it', async () => {
     }
     assert.ok(fixes.length > 0, `${code} declared a fix but offered none`);
     for (const fix of fixes) {
+      assert.ok(['resolves', 'plan', 'mitigates'].includes(fix.effect), `${code}: a fix must declare its effect`);
+      if (code in MITIGATED) {
+        assert.equal(fix.effect, 'mitigates', `${code}: ${MITIGATED[code]}`);
+        const fixed = fix.apply(proof);
+        const after = await preflight(fixed);
+        const still = after.find((f) => f.id === fix.finding.id);
+        assert.ok(still, `${code}: a mitigated finding stays reported, because it is still true`);
+        assert.equal(still.autoFixAvailable, false, `${code}: the fix must not be offered twice`);
+        assert.deepEqual(autoFixes(fixed, after).filter((f) => f.finding.code === code), []);
+        continue;
+      }
+      if (code in PLANNED) {
+        assert.equal(fix.effect, 'plan', `${code}: ${PLANNED[code]}`);
+        const fixed = fix.apply(proof);
+        assert.notEqual(fixed.emitOptions.imageQuality, proof.emitOptions.imageQuality);
+        continue;
+      }
+      assert.equal(fix.effect, 'resolves', `${code}: this fix must clear its own finding`);
       const fixed = fix.apply(proof);
       const after = await preflight(fixed);
       const remaining = after.filter((f) => f.id === fix.finding.id);
@@ -117,13 +157,27 @@ test('an auto-fix command is stamped so the history shows what the tool did', as
   assert.equal(stack.undoLabel, fix.label);
 });
 
+/**
+ * Apply the offered fixes, re-run preflight, and repeat until nothing fixable is
+ * left. Fixing a palette is genuinely iterative: deriving `primary` dark enough
+ * to carry a headline changes what `onPrimary` has to clear, so a single pass
+ * over findings computed against the *original* palette cannot be the whole
+ * answer, and pretending otherwise would be the bug.
+ */
+async function fixToFixpoint(proof, rounds = 6) {
+  let current = proof;
+  for (let i = 0; i < rounds; i++) {
+    const findings = await preflight(current);
+    const fixes = autoFixes(current, findings).filter((f) => f.effect === 'resolves');
+    if (fixes.length === 0) return { proof: current, findings, rounds: i };
+    current = fixes[0].apply(current);
+  }
+  return { proof: current, findings: await preflight(current), rounds };
+}
+
 test('the contrast fix derives a colour that actually meets the minimum', async () => {
   const proof = defectProof('CONTRAST_FAIL');
-  const findings = await preflight(proof);
-  const fixes = autoFixes(proof, findings);
-  assert.ok(fixes.length > 0);
-  const fixed = applyAll(proof, fixes);
-  const after = await preflight(fixed);
+  const { proof: fixed, findings: after } = await fixToFixpoint(proof);
   assert.deepEqual(after.filter((f) => f.code === 'CONTRAST_FAIL'), []);
 
   const onPrimary = fixed.brand.colors.find((c) => c.role === 'onPrimary');
@@ -172,7 +226,7 @@ test('the font fix rewrites the fallback stack to the face that will actually re
   const [fix] = autoFixes(proof, findings).filter((f) => f.finding.code === 'FONT_UNAVAILABLE');
   const fixed = fix.apply(proof);
   const face = fixed.brand.faces.find((f) => f.role === 'display');
-  assert.equal(face.fallbackStack[0], 'Recursive Display', 'the requested face stays first — it may yet be installed');
+  assert.equal(face.fallbackStack[0], 'Inter', 'the requested face stays first — it may yet be installed');
   assert.ok(face.fallbackStack.includes('Arial'));
   assert.ok(face.metricDelta && typeof face.metricDelta.avgAdvance === 'number');
   assert.ok(fixed.brand.manualOverrides.some((p) => p.includes('fallbackStack')));
@@ -201,10 +255,11 @@ test('fixes compose: applying every offered fix leaves a proof that can emit', a
 
   const findings = await preflight(proof);
   assert.ok(summarize(findings).blocking > 0, 'the fixture must actually block');
-  const fixed = applyAll(proof, autoFixes(proof, findings));
-  const after = await preflight(fixed);
-  assert.equal(summarize(after).blocking, 0, `still blocking:\n  ${after.filter((f) => f.severity === 1).map((f) => f.message).join('\n  ')}`);
+  const { proof: fixed, findings: after, rounds } = await fixToFixpoint(proof, 12);
+  assert.equal(summarize(after).blocking, 0, `still blocking after ${rounds} rounds:\n  ${after.filter((f) => f.severity === 1).map((f) => f.message).join('\n  ')}`);
   assert.equal(summarize(after).canEmit, true);
+  assert.ok(fixed.brand.manualOverrides.length > 0);
+  assert.ok(rounds < 12, 'auto-fixing must converge rather than oscillate');
 });
 
 test('autoFixes offers nothing for findings that did not advertise a fix', async () => {

@@ -151,9 +151,17 @@ export function resolveBoxFace(family, brand, weight = 400) {
   }
 
   const base = resolveFace(requested, { available, weight });
-  if (chosen === null) return { ...base, stack: stack.length ? stack.concat(base.stack) : base.stack };
+  /** Merge the declared stack with the recommended one, keeping declaration order. */
+  const merged = () => {
+    const out = stack.slice();
+    for (const name of base.stack) {
+      if (!out.some((s) => normalizeFamily(s) === normalizeFamily(name))) out.push(name);
+    }
+    return out;
+  };
+  if (chosen === null) return { ...base, stack: stack.length ? merged() : base.stack };
   if (normalizeFamily(chosen) === normalizeFamily(base.resolved)) {
-    return { ...base, stack: stack.concat(base.stack.filter((s) => !stack.some((t) => normalizeFamily(t) === normalizeFamily(s)))) };
+    return { ...base, stack: merged() };
   }
   return {
     ...base,

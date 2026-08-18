@@ -4849,7 +4849,7 @@ function renderGrid(ctx, rends) {
           : null),
       h('div', { class: 'pp-fan-card-body' },
         title ? h('p', { class: 'pp-fan-card-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '2' }, title) : null,
-        blurb ? h('p', { class: 'pp-fan-card-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '4' }, blurb) : null,
+        blurb ? h('p', { class: 'pp-fan-card-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '3' }, blurb) : null,
         !title && !blurb
           ? h('p', { class: 'pp-fan-card-empty', 'data-pp-tx': 'caption' }, 'No content blocks on this rendition.')
           : null),
@@ -4959,7 +4959,12 @@ function renderStep(ctx, step, index, total) {
   h('div', { class: 'pp-stack-body' },
     h('div', { class: 'pp-stack-head' },
       h('p', { class: 'pp-stack-label', 'data-pp-tx': 'stepLabel', 'data-pp-clamp': '1' }, step.title),
-      step.meta ? h('p', { class: 'pp-stack-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, step.meta) : null),
+      // The provenance label rides in the header rather than under the content:
+      // a state in a chain is one or two lines tall, and a label below the copy
+      // would push that copy out of its own step.
+      h('div', { class: 'pp-stack-head-right' },
+        step.meta ? h('p', { class: 'pp-stack-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, step.meta) : null,
+        provenanceLabel(step.rendition, ctx))),
     h('div', { class: 'pp-stack-content' },
       lead && lead.type !== 'paragraph' && lead.type !== 'heading'
         ? renderBlock(lead, { media: ctx.media, density: 'condensed', clampParagraph: 2, maxListItems: 3, maxTableRows: 3 })
@@ -4967,8 +4972,7 @@ function renderStep(ctx, step, index, total) {
           title ? h('p', { class: 'pp-stack-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '1' }, title) : null,
           blurb ? h('p', { class: 'pp-stack-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2' }, blurb) : null,
           !title && !blurb ? h('p', { class: 'pp-stack-empty', 'data-pp-tx': 'caption' }, 'No content blocks at this state.') : null,
-        ]),
-    provenanceLabel(step.rendition, ctx)));
+        ])));
 }
 
 __exports["stack"] = stack;
@@ -5244,7 +5248,20 @@ function notesFor(ctx, mainBlocks) {
       });
     }
   });
-  return notes.map((note, i) => ({ ...note, index: i }));
+  // Notes that anchor to the same block would otherwise pile into one row and
+  // stretch it, pushing the next paragraph of the client's page a screen down.
+  // Spreading them — one per row, never above the block they belong to, order
+  // preserved — keeps each note beside its subject without deforming the
+  // column it annotates.
+  let cursor = -1;
+  return notes
+    .map((note, i) => ({ ...note, index: i }))
+    .sort((a, b) => (a.row === b.row ? a.index - b.index : a.row - b.row))
+    .map((note) => {
+      cursor = Math.max(note.row, cursor + 1);
+      return { ...note, row: cursor };
+    })
+    .sort((a, b) => a.index - b.index);
 }
 
 /** @returns {import('../../core/vdom.js').VNode} */
@@ -6594,15 +6611,40 @@ function fanColumns(bp, n) {
 }
 
 /**
- * The scale the `systemMap` SVG is drawn at: `preserveAspectRatio="xMidYMid
- * meet"` on a 960×540 viewBox inside the body box is exactly `min(w/960,
- * h/540)`, so this is not an approximation of the CSS, it is the CSS.
- * @param {'sm'|'md'|'lg'} bp
+ * The height the `systemMap` legend takes: one row of chips per
+ * `--pp-sc-map-legend-cols`, at `--pp-sc-map-legend-h` each.
+ * @param {'sm'|'md'|'lg'} bpIn
+ * @param {number} [n]   how many chips the legend holds
  * @returns {number}
  */
-function mapScale(bp) {
+function mapLegendHeight(bpIn, n = 1) {
+  const bp = breakpointId(bpIn);
+  const cols = Math.max(1, geom(bp, 'map-legend-cols'));
+  const rows = Math.max(1, Math.ceil(Math.max(1, n) / cols));
+  return rows * geom(bp, 'map-legend-h') + (rows - 1) * geom(bp, 'fan-gap');
+}
+
+/**
+ * The scale the `systemMap` SVG is drawn at: `preserveAspectRatio="xMidYMid
+ * meet"` on a 960x540 viewBox inside the canvas box is exactly `min(w/960,
+ * h/540)`, so this is not an approximation of the CSS, it is the CSS.
+ *
+ * The canvas is what the body box has left once the legend has taken its rows,
+ * floored at `--pp-sc-map-canvas-min-h` — the same floor `.pp-map-canvas`
+ * declares. At the small breakpoint a five-output map plus its legend is taller
+ * than the frame; the scene scrolls, and the floor is what keeps the drawing
+ * legible rather than squeezing it to nothing.
+ * @param {'sm'|'md'|'lg'} bpIn
+ * @param {number} [n]   the legend's chip count
+ * @returns {number}
+ */
+function mapScale(bpIn, n = 1) {
+  const bp = breakpointId(bpIn);
   const s = stageBox(bp);
-  const canvasHeight = Math.max(0, s.bodyHeightPx - geom(breakpointId(bp), 'map-legend-h') - geom(breakpointId(bp), 'row-gap'));
+  const canvasHeight = Math.max(
+    geom(bp, 'map-canvas-min-h'),
+    s.bodyHeightPx - mapLegendHeight(bp, n) - geom(bp, 'row-gap'),
+  );
   return Math.min(s.bodyWidthPx / MAP_DESIGN.width, canvasHeight / MAP_DESIGN.height);
 }
 
@@ -6763,16 +6805,19 @@ function boxGeometry(slot, bpIn, params = {}) {
 
     // -------------------------------------------------------------- systemMap
     case 'mapCanvas': {
-      const scale = mapScale(bp);
+      const scale = mapScale(bp, n);
       return { widthPx: MAP_DESIGN.width * scale, heightPx: MAP_DESIGN.height * scale };
     }
     case 'mapLegend': {
-      const gap = geom(bp, 'fan-gap');
-      const cols = Math.max(1, Math.min(n, bp === 'sm' ? 1 : bp === 'md' ? 3 : 4));
-      return inset(trackWidth(s.contentWidthPx, cols, gap), geom(bp, 'map-legend-h'), geom(bp, 'card-pad'));
+      const cols = Math.max(1, geom(bp, 'map-legend-cols'));
+      return inset(
+        trackWidth(s.contentWidthPx, cols, geom(bp, 'fan-gap')),
+        geom(bp, 'map-legend-h'),
+        geom(bp, 'card-pad'),
+      );
     }
     case 'mapText': {
-      const scale = mapScale(bp);
+      const scale = mapScale(bp, n);
       return {
         widthPx: (params.unitWidth || MAP_DESIGN.width) * scale,
         heightPx: (params.unitHeight || MAP_DESIGN.height) * scale,
@@ -6803,6 +6848,7 @@ __exports["stagePadPx"] = stagePadPx;
 __exports["breakpointId"] = breakpointId;
 __exports["stageBox"] = stageBox;
 __exports["fanColumns"] = fanColumns;
+__exports["mapLegendHeight"] = mapLegendHeight;
 __exports["mapScale"] = mapScale;
 __exports["trackWidth"] = trackWidth;
 __exports["boxGeometry"] = boxGeometry;
@@ -7061,6 +7107,9 @@ function systemMap(ctx) {
   const outputs = outputBoxes(outputCount);
 
   const arrowId = ctx.el('map/arrow');
+  // The legend's chip count decides how much height is left for the drawing,
+  // so it travels with every element whose size scales with the drawing.
+  const legendCount = Math.max(1, shown.length);
   const source = { x: MAP.sourceX, y: 210, w: MAP.nodeW, h: 120 };
   const transform = { x: MAP.transformX, y: 210, w: MAP.nodeW, h: 120 };
 
@@ -7076,6 +7125,8 @@ function systemMap(ctx) {
       h('div', { class: 'pp-map-canvas' },
         h('svg', {
           class: 'pp-map-svg',
+          'data-pp-box': 'mapCanvas',
+          'data-pp-n': String(legendCount),
           viewBox: `0 0 ${MAP_DESIGN.width} ${MAP_DESIGN.height}`,
           preserveAspectRatio: 'xMidYMid meet',
           role: 'img',
@@ -7113,11 +7164,11 @@ function systemMap(ctx) {
 
         node(ctx, {
           box: source, path: 'map/source', group: 'map/source', tone: 'source',
-          title: sourceLabel, meta: sourceMeta, index: null,
+          title: sourceLabel, meta: sourceMeta, index: null, legendCount,
         }),
         node(ctx, {
           box: transform, path: 'map/transform', group: 'map/transform', tone: 'transform',
-          title: transformLabel, meta: transformMeta, index: null,
+          title: transformLabel, meta: transformMeta, index: null, legendCount,
         }),
         shown.map((rendition, i) => node(ctx, {
           box: outputs[i],
@@ -7127,6 +7178,7 @@ function systemMap(ctx) {
           title: renditionLabel(rendition, i),
           meta: renditionMeta(rendition),
           index: i + 1,
+          legendCount,
         })),
         overflow > 0
           ? node(ctx, {
@@ -7137,14 +7189,15 @@ function systemMap(ctx) {
             title: `${overflow} more ${overflow === 1 ? 'rendition' : 'renditions'}`,
             meta: 'in this scene',
             index: null,
+            legendCount,
           })
           : null)),
 
-      h('ul', { class: 'pp-map-legend', 'data-pp-n': String(Math.max(1, shown.length)) },
+      h('ul', { class: 'pp-map-legend', 'data-pp-n': String(legendCount) },
         shown.map((rendition, i) => h('li', {
           class: 'pp-map-chip',
           'data-pp-box': 'mapLegend',
-          'data-pp-n': String(Math.max(1, shown.length)),
+          'data-pp-n': String(legendCount),
           'data-pp-el': ctx.el(`map/legend/${i}`),
           'data-pp-group': 'map/outputs',
           'data-pp-rendition': rendition.id,
@@ -7210,6 +7263,7 @@ function node(ctx, spec) {
       h('tspan', {
         'data-pp-tx': 'mapNodeMeta',
         'data-pp-box': 'mapText',
+        'data-pp-n': String(spec.legendCount || 1),
         'data-pp-unit-w': String(innerW),
         'data-pp-unit-h': String(MAP.lineStep.meta),
         'data-pp-ws': 'nowrap',
@@ -7221,6 +7275,7 @@ function node(ctx, spec) {
       dy: i === 0 ? '0' : String(MAP.lineStep.title),
       'data-pp-tx': 'mapNodeTitle',
       'data-pp-box': 'mapText',
+      'data-pp-n': String(spec.legendCount || 1),
       'data-pp-unit-w': String(innerW),
       'data-pp-unit-h': String(MAP.lineStep.title),
       'data-pp-ws': 'nowrap',
@@ -7236,6 +7291,7 @@ function node(ctx, spec) {
       dy: i === 0 ? '0' : String(MAP.lineStep.meta),
       'data-pp-tx': 'mapNodeMeta',
       'data-pp-box': 'mapText',
+      'data-pp-n': String(spec.legendCount || 1),
       'data-pp-unit-w': String(innerW),
       'data-pp-unit-h': String(MAP.lineStep.meta),
       'data-pp-ws': 'nowrap',
@@ -7743,6 +7799,7 @@ function collectTextBoxes(node, env) {
         containerId: `${slot}#${ordinal}`,
         widthPx: size.widthPx,
         heightPx: size.heightPx,
+        scaleN: params.n || next.scaleN,
       };
     }
 
@@ -7763,7 +7820,12 @@ function collectTextBoxes(node, env) {
       if (text.trim()) {
         const spec = TYPE_ROLES[role];
         if (!spec) throw new Error(`scene/measure: element declares unknown text role "${role}"`);
-        const resolved = styleForRole(role, bp, brand, { scale: spec.svg ? mapScale(bp) : 1 });
+        // SVG roles are drawn in design units and scale with the drawing, whose
+        // scale depends on how many legend chips sit under it — the count the
+        // element carries as `data-pp-n`.
+        const resolved = styleForRole(role, bp, brand, {
+          scale: spec.svg ? mapScale(bp, next.scaleN) : 1,
+        });
         /** @type {MeasuredBox} */
         const box = {
           elementId: next.elementId,
@@ -7798,6 +7860,7 @@ function collectTextBoxes(node, env) {
     containerId: 'stage#0',
     widthPx: root.widthPx,
     heightPx: root.heightPx,
+    scaleN: 1,
   });
   return boxes;
 }
@@ -8175,6 +8238,7 @@ __exports["stageBox"] = __require("scene/geometry.js").stageBox;
 __exports["boxGeometry"] = __require("scene/geometry.js").boxGeometry;
 __exports["breakpointId"] = __require("scene/geometry.js").breakpointId;
 __exports["mapScale"] = __require("scene/geometry.js").mapScale;
+__exports["mapLegendHeight"] = __require("scene/geometry.js").mapLegendHeight;
 __exports["fanColumns"] = __require("scene/geometry.js").fanColumns;
 __exports["stagePadPx"] = __require("scene/geometry.js").stagePadPx;
 __exports["trackWidth"] = __require("scene/geometry.js").trackWidth;
