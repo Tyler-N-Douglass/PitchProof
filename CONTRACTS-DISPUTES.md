@@ -34,6 +34,11 @@ extension fields or encoded records, which §4 permits.
 | 9 | L5 | `LogoAsset` | Nowhere to say §7's "a proper inverse asset is needed" | Optional `needsInverseAsset` |
 | 10 | L5 | `BrandSystem.imagery.saturationBias` | A bare `number` with no declared scale | Defined as signed −1..+1 about an exported anchor |
 | 11 | L8 | `Scene` | Nowhere to record how its beats were grouped | Derived from the layout's own structure |
+| 12 | L3 | `ContentBlock.list` | Cannot express a nested list, so `.pptx`/`.docx` sub-bullets flatten — and §18.3 forbids encoding depth into the text | Flattened, with the loss recorded |
+| 13 | L10, L11 | `Finding.locus` | Cannot name a line in a file, a colour role, a face, a beat or a rendition. **Three lanes extended it three different ways** | Each lane's extension is optional and additive; a v2 should settle one shape |
+| 14 | L11 | `FIXED_SEVERITY` | Pins three of the fourteen codes and says nothing about the other eleven, though §14 forbids lowering any of them | L11 publishes all fourteen in one table, load-time-checked against `FIXED_SEVERITY` |
+| 15 | L10 | `TypeFace.embeddable` | Nowhere to carry the font file the flag asserts rights over | L5's optional `fontFile`/`rightsAssertion`; `deps.fonts` at emit |
+| 16 | L10 | `EmitResult` | No field for what could **not** be degraded | Reported in `degradations` with a reason |
 
 ## Against `API.md` (the integration surface, not the frozen contracts)
 
@@ -50,13 +55,23 @@ integrator's document, not a frozen contract.
 | 17 | L9 | `OverlayDefinition` | An overlay cannot receive input through the surface it is given | Lane publishes `installBranchInputBridge`; the composition root calls it |
 | 18 | L8 | `measureScene(scene, ctx, breakpoint)` | Takes the scene twice (`scene` and `ctx.scene`) | Built as declared; the two are asserted equal |
 | 19 | L8 | `LayoutContext` | Cannot see the recipes that produced its renditions, nor the breakpoint it renders at | Built as declared — a layout that saw the breakpoint could not be a pure function of its context |
-| 20 | L8 | `SceneMeasurement.boxes` | Cannot express cumulative overflow across sibling boxes | Per-box, as declared; L11 aggregates |
+| 20 | L8, L11 | `SceneMeasurement.boxes` | Cannot express cumulative overflow across sibling boxes, nor a box's position, so sibling-stack overflow is out of reach | L8 adds an optional `containerId`; L11 aggregates by it. Position remains unavailable — a documented gap, not a worked-around one |
+| 21 | L11 | `runPreflight` | The declared signature has no place for the rendered document, which the network and provenance rules need | Preflight renders scenes itself from L2's layout registry |
+| 22 | L11, L10, L7 | `hasPromotionRecord` | Used by three lanes and declared by none | Published by L7; now declared |
+| 23 | L3 | `RawCapture.assets` | Nowhere to put the alt text and intrinsic size the importer already knows and `MediaRef` wants two steps later | Optional `aliases`, plus namespaced `meta` |
+| 24 | L3 | `DocNode.parent` | The back-reference makes the tree cyclic and unserialisable | Exported `plainTree`/`serialize` produce an acyclic copy |
+| 25 | L3 | `importOoxml` | Returns one capture where a deck is arguably n specimens | One capture, with slides as sections |
+| 26 | L10 | D10's allowlist | Makes an outbound link in the prospect's **own content** a severity-1 refusal — right rule, arguably wrong section | Built as written; a rendered `cta` href is refused |
+| 27 | L10 | D10's allowlist | `mailto:` and `tel:` are refused, and probably should not be — neither reaches a network | Built as written |
+| 28 | L10 | — | The artifact composition root was unowned by any lane | Resolved: `src/artifact.js`, DECISIONS D19 |
 
 ## Defects found in already-frozen code, and closed
 
 | # | Found by | Where | What | Closed |
 |---|---|---|---|---|
 | D1 | L9's return-stack property test | `src/runtime/nav.js` (L2) | `exitedFrom` recorded one return frame where `returnPolicy: 'nextSpineScene'` unwinds the whole stack, so stepping back left the stack floored on a branch and the next return threw — the §22.4 stranding case | `ec1dd38`; DECISIONS D18. L9 removed its fence and replaced its pin with a regression test |
+| D3 | L10's `verify-offline.mjs` | `src/core/vdom.js` (L1) and `src/runtime/host.js` (L2) | `value` was set with `setAttribute`, which sets a form control's *default*, and `mount` rebuilt the subtree on every repaint — so the jump index re-rendered per keystroke with its caret at 0 and a presenter typing `appr` got `rppa`, matching nothing. §11's named interaction did not work at all | `db31f4c`; DECISIONS D22 |
+| D4 | L11's real-lane bridge | `src/emit/provenance.js` (L10) | `assertProvenance` kept only the *last* subtree carrying a `data-pp-rendition`, and `splitBeforeAfter` marks three — so every illustrative rendition in a split scene was falsely reported unlabelled at severity 1, blocking the emit on a correct proof | Fixed by L10, unioning across scopes |
 | D2 | L9's overlay work | `src/runtime/keymap.js` (L2) | `ArrowUp`/`ArrowDown` resolved to `prevScene`/`nextScene` while a text field had focus, so arrowing through the jump results also walked the presentation behind the overlay | Fixed: while typing, only `whileTyping` bindings resolve, which is Escape alone. L9's capture-phase interception is now the outer of two defences rather than the only one |
 
 ## Recorded non-disputes

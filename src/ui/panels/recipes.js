@@ -136,41 +136,34 @@ function renderPasteSurface(app, specimen, recipe) {
         : 'What this variant is — a locale, a channel, a breakpoint, a review state.'),
   }),
 
+  h('textarea', {
+    class: 'st-input st-textarea st-align-paste',
+    rows: '9',
+    placeholder: 'Paste the rendition here.\n\nBlank lines separate blocks. A leading # makes a heading, a leading - makes a list, a leading > makes a quote.',
+    value: paste,
+    'aria-label': 'Rendition paste',
+    [ACT_ATTR]: 'rendition.pasteDraft',
+    [KEY_ATTR]: 'paste-body',
+  }),
+
+  // The alignment itself: one row per pair, so a block that matched sits beside
+  // the block it matched, and a block that did not sits beside a gap. §9 asks
+  // for "block-level alignment to the source specimen"; a gap is the part of
+  // that which is worth seeing.
   h('div', { class: 'st-align' },
     h('div', { class: 'st-align-head' },
-      h('span', null, specimen ? `Source · ${truncate(specimen.title, 30)}` : 'Source'),
-      h('span', null, 'Rendition'),
+      h('span', { class: 'st-align-title' }, specimen ? `Source · ${truncate(specimen.title, 28)}` : 'Source'),
+      h('span', { class: 'st-align-title' }, 'Rendition'),
       h('span', { class: 'st-align-score' }, parsed.length
-        ? h('span', null, 'Alignment ', h('strong', { class: cx('st-mono', alignment.score < 0.5 && 'st-warn') }, formatPercent(alignment.score)))
-        : 'Nothing pasted yet')),
-    h('div', { class: 'st-align-body' },
-      h('div', { class: 'st-align-col' },
-        sourceBlocks.length
-          ? h('ol', { class: 'st-align-list' }, sourceBlocks.map((b, i) => h('li', {
-            class: cx('st-align-cell', isPaired(alignment, i, 0) ? null : 'st-align-cell--unmatched'),
-            [KEY_ATTR]: `src-${i}`,
-          },
-          badge(b.type, 'dim'),
-          h('span', { class: 'st-align-text' }, truncate(blockSummary(b), 160)))))
-          : h('p', { class: 'st-align-empty' }, 'Pick a specimen to see its blocks here.')),
-      h('div', { class: 'st-align-col' },
-        h('textarea', {
-          class: 'st-input st-textarea st-align-paste',
-          rows: '14',
-          placeholder: 'Paste the rendition here.\n\nBlank lines separate blocks. A leading # makes a heading, a leading - makes a list, a leading > makes a quote.',
-          value: paste,
-          'aria-label': 'Rendition paste',
-          [ACT_ATTR]: 'rendition.pasteDraft',
-          [KEY_ATTR]: 'paste-body',
-        }),
-        parsed.length
-          ? h('ol', { class: 'st-align-list' }, parsed.map((b, i) => h('li', {
-            class: cx('st-align-cell', isPaired(alignment, i, 1) ? null : 'st-align-cell--unmatched'),
-            [KEY_ATTR]: `out-${i}`,
-          },
-          badge(b.type, 'dim'),
-          h('span', { class: 'st-align-text' }, truncate(blockSummary(b), 160)))))
-          : null))),
+        ? h('span', null, 'Aligned ', h('strong', { class: cx('st-mono', alignment.score < 0.5 && 'st-warn') }, formatPercent(alignment.score)))
+        : 'nothing pasted yet')),
+    h('div', { class: 'st-align-rows' }, alignRows(alignment, sourceBlocks, parsed).map((pairRow, i) => h('div', {
+      class: cx('st-align-row', (pairRow.left === null || pairRow.right === null) && 'st-align-row--gap'),
+      [KEY_ATTR]: `row-${i}`,
+    },
+    renderCell(sourceBlocks[pairRow.left], pairRow.left === null),
+    renderCell(parsed[pairRow.right], pairRow.right === null)))),
+    sourceBlocks.length ? null : h('p', { class: 'st-align-empty' }, 'Pick a specimen to see its blocks here.')),
 
   parsed.length && alignment.score < 0.5
     ? notice('warn', `Only ${formatPercent(alignment.score)} of the blocks line up. That is fine when the rendition deliberately restructures the page — and a sign the paste lost its shape when it does not.`)
@@ -186,13 +179,36 @@ function renderPasteSurface(app, specimen, recipe) {
 }
 
 /**
+ * The rows to draw: L7's pairs when it gave any, otherwise one row per position
+ * so the two sides still line up rather than collapsing into two lists.
  * @param {{pairs: [number|null, number|null][]}} alignment
- * @param {number} index
- * @param {0|1} side
- * @returns {boolean}
+ * @param {any[]} source
+ * @param {any[]} parsed
+ * @returns {{left: number|null, right: number|null}[]}
  */
-function isPaired(alignment, index, side) {
-  return (alignment.pairs || []).some((p) => p[side] === index && p[0] !== null && p[1] !== null);
+function alignRows(alignment, source, parsed) {
+  const pairs = alignment && Array.isArray(alignment.pairs) ? alignment.pairs : [];
+  if (pairs.length) return pairs.map(([left, right]) => ({ left, right }));
+  const n = Math.max(source.length, parsed.length);
+  return Array.from({ length: n }, (_, i) => ({
+    left: i < source.length ? i : null,
+    right: i < parsed.length ? i : null,
+  }));
+}
+
+/**
+ * One side of an alignment row. An absent block renders as an explicit gap
+ * rather than as nothing, because "this block has no counterpart" is the
+ * finding the surface exists to show.
+ * @param {any} block
+ * @param {boolean} empty
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderCell(block, empty) {
+  if (empty || !block) return h('div', { class: 'st-align-cell st-align-cell--gap' }, h('span', { class: 'st-align-gap' }, 'no counterpart'));
+  return h('div', { class: 'st-align-cell' },
+    badge(block.type, 'dim'),
+    h('span', { class: 'st-align-text' }, truncate(blockSummary(block), 200)));
 }
 
 /**

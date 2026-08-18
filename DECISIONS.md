@@ -418,8 +418,13 @@ and indexes the rest rather than copying them.
 | L5 Brand type/logo/shape | `docs/decisions/L5-type-logo-shape.md` | 23 |
 | L6 Specimen | `docs/decisions/L6-specimen.md` | 16 |
 | L7 Recipes | `docs/decisions/L7-recipes.md` | 16 |
-| L8 Scenes | `docs/decisions/L8-scenes.md` | — |
+| L8 Scenes | `docs/decisions/L8-scenes.md` | 21 |
 | L9 Branches | `docs/decisions/L9-branches.md` | 12 |
+| L3 Ingest | `docs/decisions/L3-ingest.md` | 20 |
+| L10 Emitter | `docs/decisions/L10-emit.md` | 23 |
+| L11 Validate | `docs/decisions/L11-validate.md` | 14 |
+
+162 lane decisions in total, alongside the 22 cross-cutting ones here.
 
 **Why.** A lane's reasoning is most useful next to the code it explains, and
 flattening six documents into one would have lost the attribution that makes a
