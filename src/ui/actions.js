@@ -32,6 +32,7 @@ import { downloadText, readFiles, pickFiles, safeFilename } from './io.js';
 import { emitBlockers, proofDigest } from './gate.js';
 import { SETTING_KEYS } from './constants.js';
 import * as M from './model.js';
+import { planBeats, revealableElements } from './reveal.js';
 
 // ---------------------------------------------------------------------------
 // Small helpers the actions share
@@ -964,6 +965,21 @@ export const ACTIONS = [
     id: 'beat.add', label: 'Add a beat', group: 'Scenes', palette: false, control: true,
     mutates: true, sample: (app) => ({ arg: (app.proof.spine[0] || {}).id || 'sc_none' }),
     run: (app, arg) => app.mutate('Add beat', (doc) => M.addBeat(doc, String(arg)), { scope: 'scenes' }),
+  },
+  {
+    id: 'beat.autoPlan', label: 'Plan the beats for a scene', group: 'Scenes', palette: false, control: true,
+    mutates: true, sample: (app) => ({ arg: (app.proof.spine[0] || {}).id || 'sc_none' }),
+    run: (app, arg) => {
+      const at = M.findScene(app.proof, String(arg));
+      if (!at) return undefined;
+      const elements = revealableElements(app, at.scene);
+      if (!elements.length) {
+        app.notify('warn', 'This layout renders nothing a beat can reveal, so the scene shows in full from beat one.');
+        return undefined;
+      }
+      const beats = planBeats(at.scene, elements);
+      return app.mutate('Plan beats', (doc) => M.patchScene(doc, String(arg), { beats }), { scope: 'scenes' });
+    },
   },
   {
     id: 'beat.remove', label: 'Remove a beat', group: 'Scenes', palette: false, control: true,

@@ -15,13 +15,14 @@
  * @module ui/panels/scenes
  */
 
-import { h, cx, collectByAttr, textOf } from '../../core/vdom.js';
+import { h, cx } from '../../core/vdom.js';
 import {
   badge, button, empty, field, notice, pair, pairs, row, section, select, textarea, toolbar,
 } from '../components.js';
 import { humanize, plural, truncate } from '../format.js';
-import { allScenes, danglingReveals, findScene, layoutChoices } from '../model.js';
-import { REVEAL_ATTR, revealedAt } from '../../runtime/beats.js';
+import { danglingReveals, findScene, layoutChoices } from '../model.js';
+import { revealedAt } from '../../runtime/beats.js';
+import { revealableElements } from '../reveal.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
 
 /**
@@ -183,7 +184,14 @@ function renderBeats(app, scene) {
   return section({
     title: 'Beats',
     subtitle: 'Beat n shows everything from beats 0..n. Backward navigation restores the exact prior state (§10).',
-    actions: toolbar(button({ act: 'beat.add', arg: scene.id, variant: 'ghost' }, 'Add a beat')),
+    actions: toolbar(
+      button({
+        act: 'beat.autoPlan', arg: scene.id, variant: 'ghost',
+        disabled: elements.length === 0,
+        title: elements.length ? 'One beat per element this layout renders' : 'This layout renders nothing revealable',
+      }, 'Plan the beats'),
+      button({ act: 'beat.add', arg: scene.id, variant: 'ghost' }, 'Add a beat'),
+    ),
   },
   dangling.length
     ? notice('warn', `${plural(dangling.length, 'reveal')} on this scene point at elements this layout does not render. They will do nothing on stage. Change the layout back, or clear them below.`)
@@ -251,31 +259,4 @@ function renderBeats(app, scene) {
       button({ act: 'beat.add', arg: scene.id, variant: 'primary' }, 'Add the first beat')));
 }
 
-/**
- * Every element the scene's layout renders that a beat can reveal, taken from
- * the real rendered tree rather than from a guess about the layout.
- * @param {any} app
- * @param {any} scene
- * @returns {{id: string, label: string}[]}
- */
-export function revealableElements(app, scene) {
-  const runtime = app.preview.model(app.proof);
-  if (!runtime) return [];
-  let tree;
-  try { tree = runtime.renderScene(scene); } catch { return []; }
-  return collectByAttr(tree, REVEAL_ATTR).map((el) => ({
-    id: String(el.a[REVEAL_ATTR]),
-    label: labelFor(el),
-  }));
-}
-
-/**
- * @param {any} el
- * @returns {string}
- */
-function labelFor(el) {
-  const text = textOf(el).replace(/\s+/g, ' ').trim();
-  if (text) return text;
-  const cls = String(el.a.class || '').split(/\s+/).find((c) => c.startsWith('pp-'));
-  return cls || el.t;
-}
+export { revealableElements };
