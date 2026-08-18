@@ -217,7 +217,7 @@ const assetMissing = {
       if (scene.specimenId && !specimenById.has(scene.specimenId)) {
         out.push(makeFinding({
           code: 'ASSET_MISSING',
-          severity: reachable ? undefined : 2,
+          severity: reachable ? 1 : 2,
           locus: { sceneId: scene.id, branchId: branchId || undefined, specimenId: scene.specimenId },
           key: `scene-specimen:${scene.id}`,
           message: `Scene ${scene.id} is built on specimen "${scene.specimenId}", which is not in the proof. The "before" side of this scene would be empty.`,
@@ -228,7 +228,7 @@ const assetMissing = {
         if (renditionById.has(id)) continue;
         out.push(makeFinding({
           code: 'ASSET_MISSING',
-          severity: reachable ? undefined : 2,
+          severity: reachable ? 1 : 2,
           locus: { sceneId: scene.id, branchId: branchId || undefined },
           key: `scene-rendition:${scene.id}:${id}`,
           message: `Scene ${scene.id} shows rendition "${id}", which is not in the proof. The "after" side of this scene would be empty.`,
@@ -436,7 +436,7 @@ const branchNoReturn = {
         : 'The presenter can still reach it from the jump index and still gets back, but the deck never says where it belongs.';
       return makeFinding({
         code: 'BRANCH_NO_RETURN',
-        severity: worst.severity === 1 ? undefined : 2,
+        severity: worst.severity,
         locus: { branchId },
         key: `noreturn:${branchId}`,
         autoFixAvailable: canFix,
@@ -699,7 +699,7 @@ const specimenEmpty = {
       const scenes = usedBy.get(specimen.id) || [];
       out.push(makeFinding({
         code: 'SPECIMEN_EMPTY',
-        severity: scenes.length > 0 ? undefined : 2,
+        severity: scenes.length > 0 ? 1 : 2,
         locus: { specimenId: specimen.id, sceneId: scenes[0] },
         key: `empty:${specimen.id}`,
         message: scenes.length > 0
@@ -807,7 +807,7 @@ const sizeBudgetExceeded = {
     const overBy = total - maxBytes;
     return [makeFinding({
       code: 'SIZE_BUDGET_EXCEEDED',
-      severity: blocking ? undefined : 2,
+      severity: blocking ? 1 : 2,
       key: blocking ? 'floor' : 'total',
       autoFixAvailable: !blocking && canRecompress,
       message: blocking

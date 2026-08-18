@@ -71,14 +71,39 @@ test('a branch reachable only through an anchor is not an orphan either', async 
   assert.deepEqual(findings.filter((f) => f.code === 'BRANCH_UNREACHABLE'), []);
 });
 
-test('a branch whose last scene has no resolvable return blocks emit', async () => {
+test('an unanchored branch warns rather than blocks — nobody is stranded', async () => {
   const findings = await preflight(defectProof('BRANCH_NO_RETURN'));
   const finding = findings.find((f) => f.code === 'BRANCH_NO_RETURN');
   assert.ok(finding);
-  assert.equal(finding.severity, 1, 'stranding the presenter mid-pitch blocks emit');
   assert.equal(finding.locus.branchId, 'bn_deadend');
-  assert.match(finding.message, /stranded/);
-  assert.equal(finding.detail.returnPolicy, 'anchor');
+  assert.deepEqual(finding.detail.reasons, ['unanchored']);
+  assert.equal(finding.severity, 2, 'a jump still reaches it and still returns; the declaration is what is missing');
+  assert.match(finding.message, /never says where it belongs/);
+  assert.equal(finding.autoFixAvailable, true);
+});
+
+test('an anchor chain that never reaches the spine strands the presenter, and blocks', async () => {
+  const proof = copy(cleanProof());
+  // bn_inner is offered only from a scene inside bn_outer, and bn_outer itself
+  // is anchored nowhere. Following "next spine scene" out of bn_inner therefore
+  // walks a chain that never arrives at the spine.
+  addBranch(proof, 'bn_outer', { objection: 'The outer objection', scenes: [scene('sc_outer0', 1)] });
+  proof.branches.find((b) => b.id === 'bn_outer').scenes[0].branchAnchors = ['bn_inner'];
+  addBranch(proof, 'bn_inner', { objection: 'The inner objection', returnPolicy: 'nextSpineScene' });
+
+  const findings = await preflight(proof);
+  const inner = findings.find((f) => f.code === 'BRANCH_NO_RETURN' && f.locus.branchId === 'bn_inner');
+  assert.ok(inner, 'the unreachable chain must be caught');
+  assert.equal(inner.severity, 1, 'stranding the presenter mid-pitch blocks emit');
+  assert.match(inner.message, /stranded/);
+  assert.deepEqual(inner.detail.reasons, ['anchor-chain-never-reaches-spine']);
+
+  const fixes = autoFixes(proof, findings).filter((f) => f.finding.id === inner.id);
+  assert.equal(fixes.length, 1);
+  assert.match(fixes[0].label, /to its anchor/);
+  const fixed = fixes[0].apply(proof);
+  const after = await preflight(fixed);
+  assert.deepEqual(after.filter((f) => f.code === 'BRANCH_NO_RETURN' && f.locus.branchId === 'bn_inner'), []);
 });
 
 test('a branch with no scenes at all has nowhere to return from', async () => {
@@ -91,14 +116,15 @@ test('a branch with no scenes at all has nowhere to return from', async () => {
   assert.equal(finding.autoFixAvailable, false, 'no fix invents scenes');
 });
 
-test("a 'nextSpineScene' branch with no spine to return to is caught", async () => {
+test('a proof with no spine leaves every branch with nothing to return to', async () => {
   const proof = copy(cleanProof());
   proof.spine = [];
   proof.branches[0].returnPolicy = 'nextSpineScene';
   const findings = await preflight(proof);
   const finding = findings.find((f) => f.code === 'BRANCH_NO_RETURN');
-  assert.ok(finding);
-  assert.match(finding.message, /the spine is empty/);
+  assert.ok(finding, 'a branch hanging off an empty spine must be reported');
+  assert.equal(finding.detail.spineLength, 0);
+  assert.equal(finding.autoFixAvailable, false, 'no fix invents a spine');
 });
 
 test('a branch nested inside another branch resolves its return through its anchor', async () => {
@@ -117,18 +143,18 @@ test('a branch nested inside another branch resolves its return through its anch
   assert.deepEqual(findings.filter((f) => f.code.startsWith('BRANCH_')), []);
 });
 
-test('the auto-fix for a stranded branch actually resolves it', async () => {
+test('the auto-fix for an unanchored branch anchors it, and the finding clears', async () => {
   const proof = defectProof('BRANCH_NO_RETURN');
   const findings = await preflight(proof);
   const fixes = autoFixes(proof, findings).filter((f) => f.finding.code === 'BRANCH_NO_RETURN');
   assert.equal(fixes.length, 1);
-  assert.match(fixes[0].label, /next spine scene/);
+  assert.match(fixes[0].label, /Anchor branch/);
   const fixed = fixes[0].apply(proof);
   assert.deepEqual(declaredCoverage(buildDeck(fixed)).noReturn, []);
   const after = await preflight(fixed);
   assert.deepEqual(after.filter((f) => f.code === 'BRANCH_NO_RETURN'), []);
   // Purity: the proof handed in is untouched.
-  assert.equal(proof.branches.find((b) => b.id === 'bn_deadend').returnPolicy, 'anchor');
+  assert.deepEqual(proof.spine[0].branchAnchors, []);
 });
 
 test('the auto-fix for an orphan branch makes it reachable', async () => {

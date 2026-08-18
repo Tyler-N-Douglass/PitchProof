@@ -180,7 +180,28 @@ test('attack 14: !important cannot beat the law either', async () => {
 
 test('attack 15: drop the rendition scoping attribute and under-label the scene', async () => {
   const result = await attempt({ layout: { omitRenditionAttr: true, omitLabel: true } });
-  assertBlocked(result, /contains 0 \.pp-provenance element/, 'an unscoped scene with no labels');
+  assertBlocked(result, /has 0 spare \.pp-provenance element/, 'an unscoped scene with no labels');
+});
+
+test('attack 16: render illustrative content without declaring it', async () => {
+  // Dropping `data-pp-rendition` is the obvious way to escape a subtree check.
+  // The rendition's own label text is still on screen, so the content-based
+  // fallback catches it.
+  const result = await attempt({ layout: { omitRenditionAttr: true, omitLabel: true } });
+  assertBlocked(result, /unscoped rendition/, 'undeclared illustrative content');
+});
+
+test('a rendition a layout does not render needs no label', async () => {
+  // `quoteCard` pulls one quotation out of a scene's renditions. What is not on
+  // screen has nothing to label, and demanding one would refuse an honest proof.
+  const { registerAllLayouts } = await import('../../src/scene/index.js');
+  const { resetLayouts } = await import('../../src/runtime/layouts.js');
+  resetLayouts();
+  registerAllLayouts();
+  const proof = emitProof();
+  const quoted = { ...proof, spine: proof.spine.map((s, i) => (i === 1 ? { ...s, layout: 'quoteCard' } : s)) };
+  const result = await emit(quoted, {}, { runtimeJs, runtimeCss, clock: FIXED_CLOCK });
+  assert.equal(result.ok, true, result.ok ? '' : result.error);
 });
 
 test('a @media print rule that hides the label is not an attack', async () => {
@@ -205,9 +226,29 @@ test('client-supplied renditions need no label and none is demanded', () => {
 });
 
 test('a properly promoted rendition needs no label', () => {
-  const proof = emitProof({ promotionNote: 'promoted by: a.reviewer@northwind.example on 2026-02-14T10:12:00.000Z' });
+  // The fixture's verified rendition is promoted through L7's
+  // `promoteProvenance`, which is the only route to `verified-by-user` (§9).
+  const proof = emitProof();
+  const verified = proof.renditions.find((r) => r.provenance === 'verified-by-user');
+  assert.ok(verified, 'the fixture must carry a promoted rendition');
+  assert.match(verified.notes, /\[\[pp-promotion:/, 'the promotion must be on the record, not in prose');
   const findings = assertProvenance(proof, '', runtimeCss, { renderScene: () => null });
   assert.equal(findings.filter((f) => /promotion record/.test(f.message)).length, 0);
+});
+
+test('a promotion record copied from another rendition does not verify', () => {
+  const proof = emitProof();
+  const verified = proof.renditions.find((r) => r.provenance === 'verified-by-user');
+  const stolen = {
+    ...proof,
+    renditions: proof.renditions.map((r) => (r.provenance === 'illustrative' && r.label === 'SMS'
+      ? { ...r, provenance: 'verified-by-user', notes: verified.notes }
+      : r)),
+  };
+  const findings = assertProvenance(stolen, '', runtimeCss, { renderScene: () => null });
+  const unearned = findings.filter((f) => /no promotion record/.test(f.message));
+  assert.equal(unearned.length, 1, 'a record written for another rendition must not verify this one');
+  assert.equal(unearned[0].severity, 1);
 });
 
 test('assertProvenance refuses rather than assumes when it cannot render a scene', () => {

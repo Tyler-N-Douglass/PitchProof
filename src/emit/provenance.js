@@ -209,6 +209,64 @@ export function nodeText(node) {
 }
 
 /**
+ * Does this rendition appear in a rendered scene at all?
+ *
+ * A layout is free to select: `quoteCard` pulls one quotation, `sideNote` shows
+ * one note. A rendition the scene lists but does not put on screen has nothing
+ * to label, and demanding a label for it would refuse a perfectly honest proof.
+ *
+ * The check is content-based rather than declaration-based on purpose. Reading
+ * only `data-pp-rendition` would let a layout render illustrative content and
+ * escape the law simply by not declaring it, so the rendition's own label text,
+ * its block text and its media are looked for in the tree as well.
+ *
+ * @param {any} tree
+ * @param {import('../core/contracts.d.ts').Rendition} rendition
+ * @returns {boolean}
+ */
+export function renditionAppearsIn(tree, rendition) {
+  const text = nodeText(tree).replace(/\s+/g, ' ');
+  const label = String(rendition.label || '').trim();
+  if (label.length >= 3 && text.includes(label)) return true;
+  for (const block of rendition.blocks || []) {
+    for (const run of blockTextRuns(block)) {
+      const probe = run.replace(/\s+/g, ' ').trim().slice(0, 40);
+      if (probe.length >= 12 && text.includes(probe)) return true;
+    }
+  }
+  const uris = new Set((rendition.media || []).map((m) => m.dataUri).filter(Boolean));
+  if (uris.size === 0) return false;
+  let found = false;
+  walkWithChain(tree, (node) => {
+    if (found) return;
+    for (const value of Object.values(node.a || {})) {
+      if (typeof value === 'string' && uris.has(value)) { found = true; return; }
+    }
+  });
+  return found;
+}
+
+/**
+ * The text runs a content block renders. A local reader rather than
+ * `core/contracts.blockText`, because this only needs the strings and must not
+ * throw on a block shape it has not seen.
+ * @param {any} block
+ * @returns {string[]}
+ */
+function blockTextRuns(block) {
+  if (!block || typeof block !== 'object') return [];
+  /** @type {string[]} */
+  const out = [];
+  if (typeof block.text === 'string') out.push(block.text);
+  if (typeof block.label === 'string') out.push(block.label);
+  if (typeof block.attribution === 'string') out.push(block.attribution);
+  if (typeof block.caption === 'string') out.push(block.caption);
+  if (Array.isArray(block.items)) for (const item of block.items) if (typeof item === 'string') out.push(item);
+  if (Array.isArray(block.rows)) for (const row of block.rows) if (Array.isArray(row)) for (const cell of row) if (typeof cell === 'string') out.push(cell);
+  return out;
+}
+
+/**
  * Judge one label against the final stylesheet.
  *
  * @param {import('./css.js').ElementDesc[]} chain  html → label
@@ -409,10 +467,21 @@ export function assertProvenance(proof, html, css, options = {}) {
 
     labelsSeenAnywhere += labels.length;
 
+    // A rendition can be rendered by more than one element in a scene — a
+    // panel head and a body cell, say — and the label lives in exactly one of
+    // them. Union across every subtree carrying the id, rather than letting the
+    // last one seen decide, which would report a labelled rendition as bare.
     for (const scope of scopes) {
       const inside = labels.filter((l) => chainStartsWith(l.chain.slice(prefix.length), scope.chain));
-      scoped.set(scope.id, inside);
+      const already = scoped.get(scope.id) || [];
+      for (const hit of inside) if (!already.includes(hit)) already.push(hit);
+      scoped.set(scope.id, already);
     }
+
+    // A layout may select: `quoteCard` pulls one quotation out of the scene's
+    // renditions and shows only that. What is not on screen has nothing to
+    // label, so the requirement is scoped to what the scene actually rendered.
+    const unscopedShown = needed.filter((r) => !scoped.has(r.id) && renditionAppearsIn(tree, r));
 
     for (const rendition of needed) {
       const own = scoped.get(rendition.id);
@@ -426,12 +495,16 @@ export function assertProvenance(proof, html, css, options = {}) {
         }
         continue;
       }
-      // No scoping attribute: the scene must at least carry one label per
+      if (!unscopedShown.includes(rendition)) continue;   // not on screen, nothing to label
+
+      // On screen but not scoped: the scene must at least carry one label per
       // rendition that needs one.
-      if (labels.length < needed.length) {
+      const scopedLabelCount = [...scoped.values()].reduce((sum, list) => sum + list.length, 0);
+      const spareLabels = labels.length - scopedLabelCount;
+      if (spareLabels < unscopedShown.length) {
         findings.push(provenanceFinding(
-          `Scene ${scene.id} renders ${needed.length} rendition(s) needing a provenance label but contains ${labels.length} .${PROVENANCE_LABEL_CLASS} element(s). `
-          + `Rendition "${rendition.label}" (${rendition.id}, provenance "${rendition.provenance}") is unlabelled.`,
+          `Scene ${scene.id} renders ${unscopedShown.length} unscoped rendition(s) needing a provenance label but has ${spareLabels} spare `
+          + `.${PROVENANCE_LABEL_CLASS} element(s). Rendition "${rendition.label}" (${rendition.id}, provenance "${rendition.provenance}") is unlabelled.`,
           { sceneId: scene.id, branchId: branchId || undefined, renditionId: rendition.id, specimenId: rendition.specimenId, check: 'label-count' },
         ));
       }

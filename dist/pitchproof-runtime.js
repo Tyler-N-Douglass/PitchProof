@@ -1656,8 +1656,11 @@ __modules["runtime/keymap.js"] = function (__exports, __require) {
  * asserts that every key §12 names is bound.
  *
  * Resolution is context-sensitive in exactly two ways, both necessary:
- *   - while a text input has focus (the jump-index search), only Escape,
- *     Enter and the arrow keys the list uses are runtime keys;
+ *   - while a text input has focus (the jump-index search), **only bindings
+ *     marked `whileTyping` resolve at all** — which is Escape, and nothing
+ *     else. Arrow keys belong to whatever list the field drives; handing them
+ *     to the deck would walk the presentation behind the overlay while the
+ *     presenter is still typing;
  *   - while an overlay is open, Escape closes it before anything else sees it.
  *
  * @module runtime/keymap
@@ -1690,9 +1693,6 @@ const BINDINGS = /** @type {Binding[]} */ ([
   { keys: ['f', 'F'], command: 'toggleFullscreen', label: 'Full screen', group: 'Present' },
   { keys: ['Escape', 'Esc'], command: 'escape', label: 'Close overlay', group: 'Present', whileTyping: true },
 ]);
-
-/** Keys the jump-index list consumes while its search field has focus. */
-const TYPING_PASSTHROUGH = new Set(['Escape', 'Esc', 'Enter', 'ArrowUp', 'ArrowDown', 'Tab']);
 
 /** @type {Map<string, Binding>} */
 const INDEX = (() => {
@@ -1727,9 +1727,11 @@ function resolveKey(event, context = { overlay: null, typing: false }) {
   const binding = INDEX.get(event.key);
   if (!binding) return null;
 
-  if (context.typing) {
-    if (!TYPING_PASSTHROUGH.has(event.key) && !binding.whileTyping) return null;
-  }
+  // While a text field has focus the runtime keeps only what it must: Escape.
+  // Everything else — including the arrows — belongs to the control the field
+  // drives. L9's jump overlay intercepts them in the capture phase as well, so
+  // this is the inner of two defences rather than the only one.
+  if (context.typing && !binding.whileTyping) return null;
 
   // While the screen is blanked, only the keys that can un-blank it or open the
   // presenter view respond. A stray arrow key must not advance the deck behind
@@ -4499,6 +4501,29 @@ const PRODUCED_BY_LABEL = {
 };
 
 /**
+ * A rendition's `notes` as something a client may see, or null.
+ *
+ * §4 gives `Rendition` one free-text field, and L7's `promoteProvenance` writes
+ * its promotion record into it ("promoted: verified by … on …"). That record is
+ * internal bookkeeping about who signed something off; putting it on screen in
+ * front of the client would be a small but real leak of the seller's process
+ * into the client's room. A note that opens with that marker is not rendered.
+ * Everything else the user wrote is rendered verbatim.
+ *
+ * Filed as a dispute against the contract (docs/disputes/L8-scenes.md): one
+ * field carrying both an annotation and an audit record is what forces this.
+ * @param {import('../core/contracts.d.ts').Rendition|null|undefined} rendition
+ * @returns {string|null}
+ */
+function presentableNotes(rendition) {
+  if (!rendition || typeof rendition.notes !== 'string') return null;
+  const text = rendition.notes.trim();
+  if (!text) return null;
+  if (/^promoted\s*:/i.test(text)) return null;
+  return text;
+}
+
+/**
  * The state every layout needs and no layout should improvise: a scene with
  * nothing to show yet. It says which piece is missing, because the studio
  * preview is where this is seen and a blank panel there costs the user minutes.
@@ -4574,6 +4599,7 @@ __exports["panelHead"] = panelHead;
 __exports["displayUrl"] = displayUrl;
 __exports["specimenMeta"] = specimenMeta;
 __exports["renditionMeta"] = renditionMeta;
+__exports["presentableNotes"] = presentableNotes;
 __exports["emptyState"] = emptyState;
 __exports["countLabel"] = countLabel;
 __exports["waveGroup"] = waveGroup;
@@ -5153,7 +5179,7 @@ const { h } = __require("core/vdom.js");
 const { alignPair } = __require("scene/align.js");
 const { renderBlock } = __require("scene/blocks.js");
 const { blockText } = __require("core/contracts.js");
-const { sceneHead, provenanceLabel, emptyState, waveGroup, specimenMeta, specimenTitle, renditionLabel } = __require("scene/parts.js");
+const { sceneHead, provenanceLabel, emptyState, waveGroup, presentableNotes, specimenMeta, specimenTitle, renditionLabel } = __require("scene/parts.js");
 
 
 
@@ -5227,8 +5253,9 @@ function notesFor(ctx, mainBlocks) {
   const notes = [];
   rends.forEach((rendition, rIndex) => {
     const label = renditionLabel(rendition, rIndex);
-    if (typeof rendition.notes === 'string' && rendition.notes.trim()) {
-      notes.push({ row: 0, index: notes.length, label, kind: 'note', block: null, text: rendition.notes.trim(), rendition });
+    const written = presentableNotes(rendition);
+    if (written) {
+      notes.push({ row: 0, index: notes.length, label, kind: 'note', block: null, text: written, rendition });
     }
     const blocks = Array.isArray(rendition.blocks) ? rendition.blocks : [];
     const pairs = alignPair(mainBlocks, blocks);
@@ -8244,6 +8271,7 @@ __exports["PROVENANCE_LABEL_CLASS"] = __require("scene/parts.js").PROVENANCE_LAB
 __exports["PROVENANCE_LABEL_TEXT"] = __require("scene/parts.js").PROVENANCE_LABEL_TEXT;
 __exports["needsProvenanceLabel"] = __require("scene/parts.js").needsProvenanceLabel;
 __exports["provenanceLabel"] = __require("scene/parts.js").provenanceLabel;
+__exports["presentableNotes"] = __require("scene/parts.js").presentableNotes;
 __exports["stageBox"] = __require("scene/geometry.js").stageBox;
 __exports["boxGeometry"] = __require("scene/geometry.js").boxGeometry;
 __exports["breakpointId"] = __require("scene/geometry.js").breakpointId;

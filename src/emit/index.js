@@ -30,7 +30,7 @@ export {
 } from './scan.js';
 
 export {
-  assertProvenance, judgeLabelStyle, resolveBackground, describeElement, walkWithChain,
+  assertProvenance, judgeLabelStyle, resolveBackground, describeElement, walkWithChain, renditionAppearsIn,
   documentChainPrefix, allScenesOf, nodeText, provenanceFinding,
   PROVENANCE_LABEL_CLASS, MIN_LABEL_FONT_PX, RENDITION_ATTR,
 } from './provenance.js';

@@ -132,35 +132,105 @@ test('a severity-1 finding survives every auto-fix that does not actually fix it
   assert.deepEqual(fixes, [], 'SPECIMEN_EMPTY has no safe fix; offering one would be the override');
 });
 
+/**
+ * Strip comments and string literals from a source file, keeping line numbers,
+ * so prose *about* the law is not mistaken for the law being broken. Block
+ * comment state carries across lines; a JSDoc paragraph is not code.
+ * @param {string} source
+ * @returns {string[]} one entry per line, code only
+ */
+export function codeLines(source) {
+  const out = [];
+  let inBlock = false;
+  for (const raw of source.split('\n')) {
+    let line = raw;
+    let code = '';
+    let i = 0;
+    while (i < line.length) {
+      if (inBlock) {
+        const end = line.indexOf('*/', i);
+        if (end < 0) { i = line.length; break; }
+        inBlock = false;
+        i = end + 2;
+        continue;
+      }
+      const ch = line[i];
+      const next = line[i + 1];
+      if (ch === '/' && next === '*') { inBlock = true; i += 2; continue; }
+      if (ch === '/' && next === '/') break;
+      if (ch === '"' || ch === "'" || ch === '`') {
+        // A string literal is data, not control flow. Keep the quotes so a
+        // property key still reads as one, and drop the contents.
+        const quote = ch;
+        i++;
+        while (i < line.length) {
+          if (line[i] === '\\') { i += 2; continue; }
+          if (line[i] === quote) { i++; break; }
+          i++;
+        }
+        code += `${quote}${quote}`;
+        continue;
+      }
+      code += ch;
+      i++;
+    }
+    out.push(code);
+  }
+  return out;
+}
+
 test('src/ contains no code path that lets a severity-1 finding through', () => {
   /**
-   * Patterns an override would have to use. Each pairs an override verb with a
-   * severity or finding noun, so ordinary uses of the words (a `force` flag on a
-   * storage save, an `ignore` list of file globs) do not trip it.
+   * An override has to be an *identifier* or a *call*, not a word that happens
+   * to sit near another word. `disabled: !gate.canEmit` is the emit button being
+   * greyed out because a finding blocks — the law being enforced, not evaded —
+   * and it must not trip this check, while `skipSeverity`, `bypassPreflight` and
+   * `emit(proof, {force: true})` all must.
    */
   const patterns = [
-    { re: /\b(override|suppress|waive|bypass|silence|unblock|skip|ignore|disable)[A-Za-z]*\s*[:(]?\s*[^;\n]{0,40}\b(severity|finding|preflight|blocking|emit)\b/i, what: 'an override verb applied to severity, findings, preflight or emit' },
-    { re: /\bseverity\s*(!==?|===?)\s*1\s*\?\s*(false|null|undefined|\[\])/i, what: 'a conditional that discards severity-1' },
-    { re: /\bfilter\s*\(\s*\(?\s*\w+\s*\)?\s*=>\s*\w+\.severity\s*(!==|>)\s*1\s*\)/, what: 'a filter that drops severity-1 findings' },
-    { re: /\bcanEmit\s*=\s*(true|!)/, what: 'canEmit assigned rather than computed' },
-    { re: /\ballow(Blocking|Severity|Emit)\b/i, what: 'an allow-flag for blocking findings' },
-    { re: /\bforce\s*(&&|\|\|)?\s*.{0,20}\bseverity\b/i, what: 'a force flag consulted alongside severity' },
+    { re: /\b(override|suppress|waive|bypass|silence|unblock|skip|ignore|disable|allow|force)[A-Za-z]*?(Severity|Findings|Finding|Preflight|Blocking|Block|Emit|Validation|Rules|Rule|Gate)\b/, what: 'an override-shaped identifier' },
+    { re: /\b(severity|finding|findings|preflight|blocking|emit|validation)[A-Z]?\w*\s*(Override|Bypass|Waiver|Escape)\b/i, what: 'an override-shaped identifier' },
+    { re: /\b(emit|runPreflight|dryRun|autoFixes)\s*\([^)]{0,120}\b(force|override|bypass|skipValidation|ignoreFindings)\s*:/, what: 'an override argument passed to a gate function' },
+    { re: /\bseverity\s*(!==?|===?)\s*1\s*\?\s*(false|null|\[\])/, what: 'a conditional that discards severity-1' },
+    { re: /\.filter\s*\(\s*\(?\s*\w+\s*\)?\s*=>\s*\w+\.severity\s*(!==|>)\s*1\s*\)/, what: 'a filter that drops severity-1 findings' },
+    { re: /\bcanEmit\s*[:=]\s*(true|!\w)/, what: 'canEmit asserted rather than computed' },
+    { re: /\b(force|override|bypass)\b[^;\n]{0,30}\bseverity\s*(===?|!==?|<|>)/, what: 'a force flag consulted alongside severity' },
   ];
 
   /** @type {string[]} */
   const hits = [];
   for (const file of jsFiles(join(ROOT, 'src'))) {
-    const lines = readFileSync(file, 'utf8').split('\n');
-    lines.forEach((raw, i) => {
-      // Prose about the law is not the law being broken.
-      const code = raw.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
+    codeLines(readFileSync(file, 'utf8')).forEach((code, i) => {
       if (!code.trim()) return;
       for (const p of patterns) {
-        if (p.re.test(code)) hits.push(`${relative(ROOT, file)}:${i + 1}  ${p.what}\n      ${raw.trim()}`);
+        if (p.re.test(code)) hits.push(`${relative(ROOT, file)}:${i + 1}  ${p.what}\n      ${code.trim()}`);
       }
     });
   }
   assert.deepEqual(hits, [], `§14 forbids an override flag; found:\n  ${hits.join('\n  ')}`);
+});
+
+test('the scanner itself catches an override when one is planted', () => {
+  const planted = [
+    'function emitAnyway(findings) { return findings.filter((f) => f.severity !== 1); }',
+    'const skipFindings = true;',
+    'emit(proof, { force: true });',
+    'return { canEmit: true };',
+    'const bypassPreflight = options.bypassPreflight;',
+  ];
+  const patterns = [
+    /\b(override|suppress|waive|bypass|silence|unblock|skip|ignore|disable|allow|force)[A-Za-z]*?(Severity|Findings|Finding|Preflight|Blocking|Block|Emit|Validation|Rules|Rule|Gate)\b/,
+    /\b(emit|runPreflight|dryRun|autoFixes)\s*\([^)]{0,120}\b(force|override|bypass|skipValidation|ignoreFindings)\s*:/,
+    /\.filter\s*\(\s*\(?\s*\w+\s*\)?\s*=>\s*\w+\.severity\s*(!==|>)\s*1\s*\)/,
+    /\bcanEmit\s*[:=]\s*(true|!\w)/,
+  ];
+  for (const line of planted) {
+    assert.ok(patterns.some((re) => re.test(line)), `the scanner would miss: ${line}`);
+  }
+  // And the two shapes that read like an override but are the law being kept.
+  for (const line of ['disabled: !gate.canEmit || app.ui.emit.running,', "act: 'emit.download', disabled: blocking.length > 0,"]) {
+    assert.ok(!patterns.some((re) => re.test(line)), `the scanner false-positives on: ${line}`);
+  }
 });
 
 test('the words "there is no override flag" are not the only thing enforcing it', async () => {
@@ -171,10 +241,15 @@ test('the words "there is no override flag" are not the only thing enforcing it'
   proof.brand.colors.find((c) => c.role === 'primary').hex = '#EDEFF5';   // CONTRAST_FAIL
   proof.specimens[0].blocks.push({ type: 'media', ref: 'md_gone' });      // ASSET_MISSING
   proof.specimens[0].blocks.push({ type: 'raw', html: '<img src="https://x.example.invalid/p.gif">' });  // NETWORK_REFERENCE
+  // An anchor chain that never reaches the spine: BRANCH_NO_RETURN at severity 1.
+  const outerScene = { ...copy(proof.spine[0]), id: 'sc_outer', beats: [{ id: 'sc_outer_b0', reveals: ['e'], presenterNote: null, dwellHintMs: null }], branchAnchors: ['bn_inner'] };
   proof.branches.push({
-    id: 'bn_stranded', objection: 'x', aliases: [], returnPolicy: 'anchor',
-    scenes: [{ ...copy(proof.spine[0]), id: 'sc_stranded' }],
-  });                                                                     // BRANCH_NO_RETURN
+    id: 'bn_outer', objection: 'The outer objection', aliases: [], returnPolicy: 'anchor', scenes: [outerScene],
+  });
+  proof.branches.push({
+    id: 'bn_inner', objection: 'The inner objection', aliases: [], returnPolicy: 'nextSpineScene',
+    scenes: [{ ...copy(proof.spine[0]), id: 'sc_inner', beats: [{ id: 'sc_inner_b0', reveals: ['e'], presenterNote: null, dwellHintMs: null }] }],
+  });
 
   const findings = await validate.runPreflight(proof, { clock });
   const blocking = new Set(findings.filter((f) => f.severity === 1).map((f) => f.code));

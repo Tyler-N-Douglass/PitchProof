@@ -399,3 +399,48 @@ too, because it only asserted that the opening scene was non-blank.
 
 The seam is now asserted directly: the integration test navigates and then
 requires zero placeholders and all three overlays to open and close.
+
+---
+
+## D20 — Lane decisions live in `docs/decisions/`, indexed from here
+
+**Unsettled by:** §23 requires every judgment call the spec did not settle to be
+recorded with its rationale. With twelve lanes writing in parallel, a single
+appended file would have been a merge conflict on every commit.
+
+**Decision.** Each lane filed its own `docs/decisions/L<n>-*.md` in full. This
+file keeps the cross-cutting decisions (D1–D19, which govern more than one lane)
+and indexes the rest rather than copying them.
+
+| Lane | Document | Entries |
+|---|---|---|
+| L4 Brand colour | `docs/decisions/L4-color.md` | 17 |
+| L5 Brand type/logo/shape | `docs/decisions/L5-type-logo-shape.md` | 23 |
+| L6 Specimen | `docs/decisions/L6-specimen.md` | 16 |
+| L7 Recipes | `docs/decisions/L7-recipes.md` | 16 |
+| L8 Scenes | `docs/decisions/L8-scenes.md` | — |
+| L9 Branches | `docs/decisions/L9-branches.md` | 12 |
+
+**Why.** A lane's reasoning is most useful next to the code it explains, and
+flattening six documents into one would have lost the attribution that makes a
+decision reviewable — the §20 critic needs to know *who* decided something and
+against what evidence, not just that it was decided.
+
+---
+
+## D21 — While a text field has focus, the runtime keeps only Escape
+
+**Unsettled by:** §12 gives `/` the jump index and arrow keys the deck, and does
+not say what an arrow key means while the jump search has focus.
+
+**Decision.** `resolveKey` returns nothing while `typing` is true unless the
+binding is marked `whileTyping`, which is Escape and nothing else. The arrows,
+Enter and Tab belong to whatever control the field drives.
+
+**Why.** The original set let `ArrowUp`/`ArrowDown` through "for the list the
+field drives" — but the keymap then resolved them to `prevScene`/`nextScene`, so
+arrowing through the jump results also walked the presentation behind the
+overlay while the presenter was still typing. L9 filed it as a dispute against
+this file and defended against it in the capture phase; that interception is now
+the outer of two defences rather than the only one. A presenter searching for an
+objection must not be moving the deck the room is looking at.

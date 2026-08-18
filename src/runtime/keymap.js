@@ -9,8 +9,11 @@
  * asserts that every key §12 names is bound.
  *
  * Resolution is context-sensitive in exactly two ways, both necessary:
- *   - while a text input has focus (the jump-index search), only Escape,
- *     Enter and the arrow keys the list uses are runtime keys;
+ *   - while a text input has focus (the jump-index search), **only bindings
+ *     marked `whileTyping` resolve at all** — which is Escape, and nothing
+ *     else. Arrow keys belong to whatever list the field drives; handing them
+ *     to the deck would walk the presentation behind the overlay while the
+ *     presenter is still typing;
  *   - while an overlay is open, Escape closes it before anything else sees it.
  *
  * @module runtime/keymap
@@ -43,9 +46,6 @@ export const BINDINGS = /** @type {Binding[]} */ ([
   { keys: ['f', 'F'], command: 'toggleFullscreen', label: 'Full screen', group: 'Present' },
   { keys: ['Escape', 'Esc'], command: 'escape', label: 'Close overlay', group: 'Present', whileTyping: true },
 ]);
-
-/** Keys the jump-index list consumes while its search field has focus. */
-const TYPING_PASSTHROUGH = new Set(['Escape', 'Esc', 'Enter', 'ArrowUp', 'ArrowDown', 'Tab']);
 
 /** @type {Map<string, Binding>} */
 const INDEX = (() => {
@@ -80,9 +80,11 @@ export function resolveKey(event, context = { overlay: null, typing: false }) {
   const binding = INDEX.get(event.key);
   if (!binding) return null;
 
-  if (context.typing) {
-    if (!TYPING_PASSTHROUGH.has(event.key) && !binding.whileTyping) return null;
-  }
+  // While a text field has focus the runtime keeps only what it must: Escape.
+  // Everything else — including the arrows — belongs to the control the field
+  // drives. L9's jump overlay intercepts them in the capture phase as well, so
+  // this is the inner of two defences rather than the only one.
+  if (context.typing && !binding.whileTyping) return null;
 
   // While the screen is blanked, only the keys that can un-blank it or open the
   // presenter view respond. A stray arrow key must not advance the deck behind

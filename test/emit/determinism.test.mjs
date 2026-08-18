@@ -149,7 +149,11 @@ test('findings are deterministic in id and order', async () => {
 test('degradation plans are deterministic', async () => {
   registerTestLayouts();
   const proof = emitProof({ imageEdge: 200 });
-  const budget = 260_000;
+  // Measure the artifact at full fidelity, then ask for a fraction of it. A
+  // hardcoded budget would silently become unreachable the moment the runtime
+  // bundle grows, and the test would then be asserting the wrong thing.
+  const full = await emit(proof, { maxBytes: 50_000_000 }, deps);
+  const budget = Math.round(full.value.bytes * 0.85);
   const a = await emit(proof, { maxBytes: budget }, deps);
   const b = await emit(proof, { maxBytes: budget }, deps);
   assert.equal(a.ok, true, a.ok ? '' : a.error);

@@ -33,8 +33,10 @@ test('the artifact survives its own scanner', async () => {
 });
 
 test('the artifact survives its own scanner with a large, degraded proof too', async () => {
-  const { html, value } = await emitOk(emitProof({ imageEdge: 200 }), { maxBytes: 260_000 });
-  assert.ok(value.degradations.length > 0);
+  const proof = emitProof({ imageEdge: 200 });
+  const full = await emitOk(proof, { maxBytes: 50_000_000 });
+  const { html, value } = await emitOk(proof, { maxBytes: Math.round(full.value.bytes * 0.85) });
+  assert.ok(value.degradations.length > 0, 'the tightened budget must actually force degradation');
   assert.deepEqual(scanForNetworkReferences(html), []);
 });
 

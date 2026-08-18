@@ -398,7 +398,7 @@ export function detectBoxOverflow(box, where, brand) {
         : '';
     findings.push(makeFinding({
       code: 'TEXT_OVERFLOW',
-      severity: widthSeverity === 1 ? undefined : 2,
+      severity: widthSeverity,
       locus: { sceneId: where.sceneId },
       key: `${where.breakpoint}|${key}|width`,
       autoFixAvailable: false,
@@ -428,7 +428,7 @@ export function detectBoxOverflow(box, where, brand) {
       const chars = fittingCharCount(box, style);
       findings.push(makeFinding({
         code: 'TEXT_OVERFLOW',
-        severity: heightSeverity === 1 ? undefined : 2,
+        severity: heightSeverity,
         locus: { sceneId: where.sceneId },
         key: `${where.breakpoint}|${key}|height`,
         autoFixAvailable: false,
@@ -452,7 +452,7 @@ export function detectBoxOverflow(box, where, brand) {
   // --- clamp axis --------------------------------------------------------
   if (lostLines > 0) {
     const maxLines = Math.floor(box.maxLines);
-    const severity = lostLines >= CLAMP_BLOCKING_LOST_LINES ? undefined : 2;
+    const severity = lostLines >= CLAMP_BLOCKING_LOST_LINES ? 1 : 2;
     const droppedText = full.lines.slice(maxLines).map((l) => l.text).join(' ').trim();
     const chars = fittingCharCount(box, style);
     findings.push(makeFinding({

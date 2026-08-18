@@ -50,13 +50,19 @@ test('a modified keypress belongs to the browser, not the deck', () => {
   assert.ok(resolveKey(ev('ArrowRight', { shiftKey: true })), 'shift alone is fine');
 });
 
-test('while typing, only the keys the jump list needs get through', () => {
+test('while typing, the runtime keeps only Escape', () => {
   const typing = { overlay: 'jump', typing: true };
   assert.equal(resolveKey(ev('m'), typing), null, 'typing "m" into the search box must not open the map');
   assert.equal(resolveKey(ev('/'), typing), null);
   assert.equal(resolveKey(ev('b'), typing), null);
   assert.equal(resolveKey(ev('Escape'), typing).command, 'escape');
-  assert.ok(resolveKey(ev('ArrowDown'), typing), 'arrows drive the result list');
+  // The arrows belong to the result list the field drives. Handing them to the
+  // deck would walk the presentation behind the overlay while the presenter is
+  // still typing — filed by L9 as a dispute against this file, and fixed here.
+  assert.equal(resolveKey(ev('ArrowDown'), typing), null, 'arrowing the jump results must not advance the deck');
+  assert.equal(resolveKey(ev('ArrowUp'), typing), null);
+  assert.equal(resolveKey(ev('ArrowRight'), typing), null);
+  assert.equal(resolveKey(ev('Enter'), typing), null, 'Enter is the list\'s, not the deck\'s');
 });
 
 test('a blank screen swallows navigation keys', () => {

@@ -83,35 +83,74 @@ test('a presenter-only build may disable the label, because no recipient opens i
   assert.deepEqual(findings.filter((f) => f.code === 'PROVENANCE_UNLABELED'), []);
 });
 
-test('an unlabelled illustrative rendition in the rendered document is caught', async () => {
+/**
+ * The document-level half of the law belongs to L10: `assertProvenance` runs
+ * inside `emit()`, renders each scene, and checks that the label is inside the
+ * rendition's own subtree and legible in the final stylesheet. What preflight
+ * owns is the *wiring* — that it hands L10 a renderer and the stylesheet, and
+ * surfaces what comes back without reporting the model-level defects twice.
+ * These tests assert the wiring; L10's own suite asserts its verdict.
+ */
+test('preflight hands L10 a scene renderer and the final stylesheet', async () => {
   const proof = copy(cleanProof());
   proof.renditions[0].provenance = 'illustrative';
-  const html = '<div class="pp-scene" data-pp-scene="sc_a"><article data-rd="rd_de">Markteinführung</article></div>';
-  const findings = await preflight(proof, { html, css: '' });
+  /** @type {any[]} */
+  const calls = [];
+  await preflight(proof, {
+    html: '<html></html>',
+    css: '.pp-provenance{font-size:12px}',
+    assertProvenance: (p, html, css, options) => { calls.push({ p, html, css, options }); return []; },
+  });
+  assert.equal(calls.length, 1, 'the document-level check runs exactly once');
+  assert.equal(calls[0].html, '<html></html>');
+  assert.equal(calls[0].css, '.pp-provenance{font-size:12px}');
+  assert.equal(typeof calls[0].options.renderScene, 'function');
+  assert.equal(calls[0].options.mode, proof.emitOptions.mode);
+  // The renderer must produce the tree the artifact will paint, label and all.
+  const tree = calls[0].options.renderScene(proof.spine[0]);
+  assert.ok(tree, 'the renderer must return a VNode tree');
+});
+
+test('the document-level check is not run when there is no document to check', async () => {
+  let called = false;
+  await preflight(cleanProof(), { assertProvenance: () => { called = true; return []; } });
+  assert.equal(called, false, 'a model-only sweep has no rendered document to assert against');
+});
+
+test("L10's document findings are surfaced, and its copy of the model checks is not", async () => {
+  const proof = copy(cleanProof());
+  proof.renditions[0].provenance = 'verified-by-user';   // preflight reports this from the model
+  const findings = await preflight(proof, {
+    html: '<html></html>',
+    css: '',
+    assertProvenance: () => ([
+      // L10's copy of the model check: preflight already made it, with a fix.
+      { id: 'x1', severity: 1, code: 'PROVENANCE_UNLABELED', message: 'promotion record missing', locus: { check: 'promotion-record', renditionId: 'rd_de' }, autoFixAvailable: false },
+      // A finding only the rendered document can produce.
+      { id: 'x2', severity: 1, code: 'PROVENANCE_UNLABELED', message: 'the label is not in the subtree', locus: { sceneId: 'sc_a', check: 'label-present' }, autoFixAvailable: false },
+    ]),
+  });
+  const provenance = findings.filter((f) => f.code === 'PROVENANCE_UNLABELED');
+  assert.equal(provenance.length, 2, 'one model finding and one document finding, not three');
+  assert.equal(provenance.filter((f) => f.detail && f.detail.source === 'rendered-document').length, 1);
+  assert.equal(provenance.filter((f) => f.autoFixAvailable).length, 1, 'the model finding keeps its auto-fix');
+  assert.ok(provenance.some((f) => f.message.includes('the label is not in the subtree')));
+});
+
+test('a document-level finding blocks emit like any other severity-1', async () => {
+  const proof = copy(cleanProof());
+  proof.renditions[0].provenance = 'illustrative';
+  const findings = await preflight(proof, {
+    html: '<html></html>',
+    css: '.pp-provenance{display:none}',
+    assertProvenance: () => ([
+      { id: 'y1', severity: 1, code: 'PROVENANCE_UNLABELED', message: 'the label is styled to invisibility', locus: { sceneId: 'sc_a', check: 'label-style' }, autoFixAvailable: false },
+    ]),
+  });
   const finding = findings.find((f) => f.code === 'PROVENANCE_UNLABELED');
-  assert.ok(finding, 'the label is missing from the rendered subtree');
+  assert.ok(finding);
   assert.equal(finding.severity, 1);
   assert.equal(finding.detail.source, 'rendered-document');
-});
-
-test('a label styled to invisibility is caught, not merely its absence', async () => {
-  const proof = copy(cleanProof());
-  proof.renditions[0].provenance = 'illustrative';
-  const html = '<div class="pp-scene" data-pp-scene="sc_a"><article data-rd="rd_de">x<span class="pp-provenance">Illustrative</span></article></div>';
-  for (const css of ['.pp-provenance{display:none}', '.pp-provenance{opacity:0}', '.pp-provenance{font-size:1px}', '.pp-provenance{visibility:hidden}']) {
-    const findings = await preflight(proof, { html, css });
-    const finding = findings.find((f) => f.code === 'PROVENANCE_UNLABELED');
-    assert.ok(finding, `a label hidden with "${css}" must still be caught`);
-    assert.equal(finding.severity, 1);
-  }
-});
-
-test('a properly labelled illustrative rendition passes', async () => {
-  const proof = copy(cleanProof());
-  proof.renditions[0].provenance = 'illustrative';
-  const html = `<div class="pp-scene" data-pp-scene="sc_a"><article data-rd="rd_de">x<span class="pp-provenance">Illustrative</span></article></div>`;
-  const findings = await preflight(proof, { html, css: CLEAN_DOCUMENT.css });
-  assert.deepEqual(findings.filter((f) => f.code === 'PROVENANCE_UNLABELED'), []);
 });
 
 test('the auto-fix demotes an unpromoted rendition rather than inventing a promotion', async () => {
@@ -145,5 +184,6 @@ test('the auto-fix for a disabled label turns it back on', async () => {
 
 test('a client-supplied rendition needs neither a label nor a promotion record', async () => {
   const findings = await preflight(cleanProof(), { html: CLEAN_DOCUMENT.html, css: CLEAN_DOCUMENT.css });
-  assert.deepEqual(findings.filter((f) => f.code === 'PROVENANCE_UNLABELED'), []);
+  assert.deepEqual(findings.filter((f) => f.code === 'PROVENANCE_UNLABELED'), [],
+    'nothing about client-supplied content needs a label, so no check may fire on it');
 });

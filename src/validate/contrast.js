@@ -148,7 +148,7 @@ export function checkContrast(brand, deps = {}) {
       : `Derive a compliant ${spec.fg} by walking its lightness in OKLCH against ${spec.bg}; auto-fix can do it.`;
     out.push(makeFinding({
       code: 'CONTRAST_FAIL',
-      severity: spec.severity === 2 ? 2 : undefined,
+      severity: spec.severity,
       key: `pair:${spec.fg}/${spec.bg}:${spec.kind}`,
       autoFixAvailable: spec.kind !== 'nontext',
       message: `${spec.what} measures ${ratioText(ratio)} — below the ${spec.minimum}:1 ${spec.kind === 'nontext' ? 'non-text' : spec.kind === 'large' ? 'large-text' : 'body-text'} minimum. ${fg.hex} on ${bg.hex}.${spec.extra ? ` ${spec.extra}` : ''} ${remedy}`,
