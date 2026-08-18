@@ -648,7 +648,10 @@ function pptxSlideBlocks(slide, rels, usedMedia) {
       const ordered = p.bullet === 'auto';
       if (listItems.length && ordered !== listOrdered) flushList();
       listOrdered = ordered;
-      listItems.push(p.level > 0 ? `${' '.repeat(p.level * 2)}${p.text}` : p.text);
+      // Sub-levels are flattened: the §4 `list` block has no nesting, and §18.3
+      // forbids modifying the prospect's own copy, so no indent marker is
+      // injected into the text either.
+      listItems.push(p.text);
     }
     flushList();
     if (shapeBlocks.length) parts.push({ sort, index: shape.index, blocks: shapeBlocks });

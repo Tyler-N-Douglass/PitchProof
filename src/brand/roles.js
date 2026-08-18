@@ -31,8 +31,10 @@
  *   derived  (1.5)  Fidelity. A palette built from the brand's own colours is
  *                   the entire point of the product (§1); a synthesised anchor
  *                   is a concession and is priced as one.
- *   dup      (1.5)  Distinctness. Two roles resolving to the same fill makes
- *                   the theme structurally invisible.
+ *   dup      (2.0)  Distinctness. Two roles resolving to the same fill makes
+ *                   the theme structurally invisible. Unlike the others this
+ *                   term is a sum of collision weights rather than a 0..1
+ *                   score, and it is uncapped on purpose.
  *   order    (1.2)  Surface lightness ordering: a page ground belongs at an
  *                   extreme, and the alternate surface steps in from it.
  *   chroma   (1.0)  Role-appropriate colourfulness — "accents want it, surfaces
@@ -95,11 +97,18 @@ export const CHROMA_BANDS = {
   accent: { min: 0.45 },
 };
 
+/**
+ * Cap on the chroma-excess term, in band widths. Past twice the allowed
+ * chroma a colour simply is not the kind of colour that role wants, and
+ * further excess carries no additional information for the search.
+ */
+export const CHROMA_EXCESS_CAP = 2;
+
 /** Weight of each cost term. See the module header for the priority argument. */
 export const ROLE_COST_WEIGHTS = {
   contrast: 3.0,
   derived: 1.5,
-  dup: 1.5,
+  dup: 2.0,
   order: 1.2,
   chroma: 1.0,
   hue: 0.8,
@@ -372,11 +381,15 @@ export function unaryCost(slot, ci, ctx) {
   if (slot === 'surface') orderTerm = (0.5 - Math.abs(cand.oklch[0] - 0.5)) / 0.5;
   else if (slot === 'surfaceAlt') orderTerm = 0.5 * (0.5 - Math.abs(cand.oklch[0] - 0.5)) / 0.5;
 
-  // 4. Chroma appropriateness, as a fraction of what the gamut offers here.
+  // 4. Chroma appropriateness, measured in band widths outside the band. A
+  //    surface allowed 0.15 of the available chroma that carries 0.45 is at
+  //    two band widths, not at "0.3 of the way to maximum" — measuring the
+  //    violation against the bound rather than against the full 0..1 range is
+  //    what makes "surfaces don't want chroma" (§7) actually bind.
   const band = CHROMA_BANDS[slot];
   let chromaTerm = 0;
   if (band.max !== undefined && cand.chromaFraction > band.max) {
-    chromaTerm = (cand.chromaFraction - band.max) / (1 - band.max);
+    chromaTerm = Math.min(CHROMA_EXCESS_CAP, (cand.chromaFraction - band.max) / band.max);
   } else if (band.min !== undefined && cand.chromaFraction < band.min) {
     chromaTerm = (band.min - cand.chromaFraction) / band.min;
   }
@@ -433,17 +446,16 @@ export function binaryCost(pick, ctx) {
     hueTerm = Math.max(0, 0.15 - d) / 0.15;
   }
 
-  // Duplication. Weighted by how damaging the collision is.
-  let dupSum = 0;
-  let dupMax = 0;
+  // Duplication. The sum of the collision weights, deliberately uncapped: each
+  // additional collision must cost more than the last, and a normalised term
+  // would let a palette buy its second collision for almost nothing.
+  let dupTerm = 0;
   for (let a = 0; a < BACKGROUND_SLOTS.length; a++) {
     for (let b = a + 1; b < BACKGROUND_SLOTS.length; b++) {
       const w = DUP_PAIR_WEIGHT[`${BACKGROUND_SLOTS[a]}|${BACKGROUND_SLOTS[b]}`] ?? DUP_PAIR_DEFAULT;
-      dupMax += w;
-      if (deltaEok(pool[pick[a]].lab, pool[pick[b]].lab) < DUPLICATE_DELTA_E) dupSum += w;
+      if (deltaEok(pool[pick[a]].lab, pool[pick[b]].lab) < DUPLICATE_DELTA_E) dupTerm += w;
     }
   }
-  const dupTerm = dupMax > 0 ? dupSum / dupMax : 0;
 
   const terms = { order: orderTerm, hue: hueTerm, dup: dupTerm };
   const total = ROLE_COST_WEIGHTS.order * orderTerm
@@ -459,12 +471,17 @@ export function binaryCost(pick, ctx) {
  */
 const DUP_PAIR_WEIGHT = {
   'surface|surfaceAlt': 1.0,
+  'surface|primary': 1.0,
   'primary|accent': 1.0,
-  'primary|secondary': 0.6,
-  'secondary|accent': 0.6,
-  'surface|primary': 0.5,
+  'surface|accent': 0.9,
+  'surface|secondary': 0.9,
+  'primary|secondary': 0.8,
+  'secondary|accent': 0.8,
+  'surfaceAlt|primary': 0.6,
+  'surfaceAlt|accent': 0.6,
+  'surfaceAlt|secondary': 0.5,
 };
-const DUP_PAIR_DEFAULT = 0.4;
+const DUP_PAIR_DEFAULT = 0.5;
 
 /**
  * Exhaustive depth-first search with branch-and-bound pruning over the

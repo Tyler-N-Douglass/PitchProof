@@ -554,8 +554,8 @@ export function deltaEok(a, b) {
  * @returns {number}
  */
 export function hueDistance(h1, h2) {
-  const d = Math.abs(((h1 - h2) % 360 + 540) % 360 - 180);
-  return 180 - d;
+  const d = Math.abs(h1 - h2) % 360;
+  return d > 180 ? 360 - d : d;
 }
 
 /**

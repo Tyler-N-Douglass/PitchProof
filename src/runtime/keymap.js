@@ -77,9 +77,7 @@ export function resolveKey(event, context = { overlay: null, typing: false }) {
   if (!event || typeof event.key !== 'string') return null;
   if (event.ctrlKey || event.metaKey || event.altKey) return null;
 
-  const binding = INDEX.get(event.key)
-    // A shifted '/' is '?' on most layouts, but not all; accept both spellings.
-    || (event.key === '?' ? INDEX.get('/') : undefined);
+  const binding = INDEX.get(event.key);
   if (!binding) return null;
 
   if (context.typing) {
