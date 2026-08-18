@@ -27,7 +27,7 @@
  */
 
 import {
-  layoutText, measureText, metricsFor, metricDelta, normalizeFamily,
+  layoutText, metricDelta, normalizeFamily,
   parseFamilyList, resolveFace, FALLBACK_CANDIDATES,
 } from '../core/text-metrics.js';
 import { makeFinding, sortFindings, px, pct } from './finding.js';
@@ -391,10 +391,13 @@ export function detectBoxOverflow(box, where, brand) {
     const ratio = widthExcess / containerW;
     const smaller = fittingFontSizePx(box, style);
     const chars = fittingCharCount(box, style);
-    const cause = full.unbreakable.length > 0
-      ? ` The run "${sample(full.unbreakable[0], 32)}" is wider than the container on its own and has no break opportunity inside it — allow \`overflow-wrap: break-word\` or hyphenate it.`
-      : nowrap
-        ? ' The box does not wrap, so the excess is clipped rather than pushed to a second line.'
+    // A no-wrap box is *always* "unbreakable" by construction, so the wrap
+    // remedy would be wrong advice there; the two causes are checked in the
+    // order that makes the suggestion true.
+    const cause = nowrap
+      ? ' The box does not wrap, so the excess is clipped rather than pushed to a second line.'
+      : full.unbreakable.length > 0
+        ? ` The run "${sample(full.unbreakable[0], 32)}" is wider than the container on its own and has no break opportunity inside it — allow \`overflow-wrap: break-word\` or hyphenate it.`
         : '';
     findings.push(makeFinding({
       code: 'TEXT_OVERFLOW',
@@ -516,15 +519,3 @@ export function faceResolutions(brand) {
     return { face, resolution: { ...base, ...resolution } };
   });
 }
-
-/**
- * Metrics for a family, re-exported so the studio's inspector and the tests can
- * report what the engine believes without reaching into core.
- * @param {string} family
- * @param {number} [weight]
- */
-export function metricsForFamily(family, weight = 400) {
-  return metricsFor(family, weight);
-}
-
-export { measureText };

@@ -1,0 +1,14 @@
+import { chromium } from 'playwright';
+import { pathToFileURL } from 'node:url';
+const browser = await chromium.launch();
+const page = await browser.newPage();
+page.on('pageerror', e => console.log('PAGEERROR:', e.message));
+page.on('console', m => console.log('CONSOLE', m.type(), m.text().slice(0,300)));
+const r = await page.goto(pathToFileURL('/home/user/PitchProof/dist/pitchproof-studio.html').href);
+console.log('status', r && r.status());
+await page.waitForTimeout(3000);
+console.log('title', await page.title());
+console.log('body length', (await page.content()).length);
+console.log('has root', await page.locator('#pp-studio-root').count());
+console.log('root html', (await page.evaluate(() => { const r=document.getElementById('pp-studio-root'); return r? r.innerHTML.slice(0,400): 'NO ROOT'; })));
+await browser.close();

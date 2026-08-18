@@ -182,6 +182,71 @@ test('the auto-fix for a disabled label turns it back on', async () => {
   assert.equal(proof.emitOptions.labelIllustrativeContent, false);
 });
 
+// ---------------------------------------------------------------------------
+// The same law, end to end against the real L10 and the real L8 layouts.
+// ---------------------------------------------------------------------------
+
+/** A document that carries the label the layouts render, as the emitter would write it. */
+const LABELLED_DOCUMENT = {
+  html: '<div id="pp-stage-root"><div class="pp-scene"><p class="pp-provenance">Illustrative example — not client-approved content</p></div></div>',
+  css: '.pp-provenance{font-size:12px;color:#24272E;background:#F2F4F8}',
+};
+
+test('a labelled illustrative rendition passes the real emit-side check', async () => {
+  const proof = copy(cleanProof());
+  proof.renditions[0].provenance = 'illustrative';
+  const findings = await preflight(proof, LABELLED_DOCUMENT);
+  assert.deepEqual(
+    findings.filter((f) => f.code === 'PROVENANCE_UNLABELED').map((f) => f.message),
+    [],
+    'the layouts do render the label, and the emitter finds it where it is',
+  );
+});
+
+test('the real emit-side check catches a label styled to invisibility', async () => {
+  const proof = copy(cleanProof());
+  proof.renditions[0].provenance = 'illustrative';
+  for (const css of [
+    '.pp-provenance{display:none}',
+    '.pp-provenance{visibility:hidden}',
+    '.pp-provenance{opacity:0}',
+    '.pp-provenance{font-size:8px;color:#24272E;background:#F2F4F8}',
+    '.pp-provenance{color:#F0F2F6;background:#F2F4F8}',
+  ]) {
+    const findings = await preflight(proof, { html: LABELLED_DOCUMENT.html, css });
+    const finding = findings.find((f) => f.code === 'PROVENANCE_UNLABELED');
+    assert.ok(finding, `a label hidden with "${css}" must be caught at emit`);
+    assert.equal(finding.severity, 1);
+    assert.equal(finding.detail.source, 'rendered-document');
+  }
+});
+
+test('the unearned verification is reported once, and its auto-fix clears the whole cascade', async () => {
+  const proof = copy(defectProof('PROVENANCE_UNLABELED'));
+  const findings = await preflight(proof, LABELLED_DOCUMENT);
+  const provenance = findings.filter((f) => f.code === 'PROVENANCE_UNLABELED');
+
+  // Exactly one finding about the missing promotion record — preflight's, with
+  // the fix attached. L10's copy of that check is dropped.
+  const claim = provenance.filter((f) => f.detail && f.detail.renditionId === 'rd_de' && !f.detail.source);
+  assert.equal(claim.length, 1, 'preflight and the emitter must not both report the model-level defect');
+  assert.equal(claim[0].autoFixAvailable, true, 'the surviving copy is the one that carries the fix');
+
+  // L10 additionally holds an unearned verification to the labelling rule, which
+  // is the safe reading: a claim nobody made must not render unlabelled either.
+  // Those are a different check and are surfaced, not folded away.
+  const labelling = provenance.filter((f) => f.detail && f.detail.source === 'rendered-document');
+  assert.ok(labelling.length > 0, 'the emitter also requires an unearned claim to be labelled');
+  assert.ok(labelling.every((f) => f.severity === 1));
+
+  // Demoting the rendition — the one honest fix — clears every one of them.
+  const fix = autoFixes(proof, findings).find((f) => f.finding.id === claim[0].id);
+  assert.ok(fix);
+  const fixed = fix.apply(proof);
+  const after = await preflight(fixed, LABELLED_DOCUMENT);
+  assert.deepEqual(after.filter((f) => f.code === 'PROVENANCE_UNLABELED').map((f) => f.message), []);
+});
+
 test('a client-supplied rendition needs neither a label nor a promotion record', async () => {
   const findings = await preflight(cleanProof(), { html: CLEAN_DOCUMENT.html, css: CLEAN_DOCUMENT.css });
   assert.deepEqual(findings.filter((f) => f.code === 'PROVENANCE_UNLABELED'), [],

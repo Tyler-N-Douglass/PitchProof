@@ -120,7 +120,7 @@ test('a page pasted into the studio becomes a specimen with its chrome stripped 
   assert.ok((specimen.stripped || []).length >= 1, 'and what was stripped is on the record');
 
   const before = specimen.blocks.length;
-  app.dispatch('specimen.restoreAll');
+  app.dispatch('specimen.restoreAll', app.proof.specimens[0].id);
   assert.ok(app.proof.specimens[0].blocks.length > before, '§8: every stripped block is restorable');
   app.stack.undo();
   assert.equal(app.proof.specimens[0].blocks.length, before, 'and the restore is undoable like anything else');
@@ -170,7 +170,11 @@ test('a pasted rendition is stamped illustrative and can only be promoted delibe
   app.dispatch('rendition.promote', rendition.id);
   const promoted = app.proof.renditions[0];
   assert.equal(promoted.provenance, 'verified-by-user');
-  assert.match(String(promoted.notes), /Alex Mercer/, 'the promotion records who');
+  const record = app.services.promotionRecord(promoted);
+  assert.ok(record, '§9: promotion writes a record');
+  assert.equal(record.by, 'Alex Mercer', 'the record names who promoted it');
+  assert.ok(record.at, 'and when');
+  assert.equal(record.signatureValid, true, 'and it verifies against itself');
 });
 
 test('the assembled proof is contract-valid', async () => {
@@ -246,8 +250,7 @@ test('the preview mounts the real runtime and offers the layouts as revealable e
   assert.equal(missingLayouts().length, 0, `unregistered layouts: ${missingLayouts().join(', ')}`);
   assert.equal(registeredLayouts().length, 8);
 
-  app.preview.rebuild(app.proof, 'presenter');
-  assert.ok(app.preview.runtime, 'the runtime booted without a document');
+  assert.ok(app.preview.model(app.proof), 'the runtime builds with no document at all');
   const { revealableElements } = await import('../../src/ui/panels/scenes.js');
   const elements = revealableElements(app, app.proof.spine[0]);
   assert.ok(elements.length > 0, 'the beat editor offers the elements the layout actually renders');

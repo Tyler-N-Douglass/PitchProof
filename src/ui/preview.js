@@ -70,6 +70,9 @@ export class Preview {
     this.themeCss = '';
     this.fingerprint = '';
     this.themeFingerprint = '';
+    /** @type {Runtime|null} a document-free runtime for the beat editor */
+    this.modelRuntime = null;
+    this.modelFingerprint = '';
     this.scale = 1;
     /** @type {string|null} set when the frame could not be used */
     this.degraded = null;
@@ -201,11 +204,36 @@ export class Preview {
   }
 
   /**
+   * A document-free runtime over the current proof, used by the beat editor to
+   * ask the *real* layouts which elements a scene renders. When the preview is
+   * mounted this is the mounted runtime, so the editor and the stage cannot
+   * disagree; when it is not — a headless test, a hidden preview — it is a
+   * throwaway rebuilt only when the deck's shape changes.
+   * @param {import('../core/contracts.d.ts').Proof} proof
+   * @returns {Runtime|null}
+   */
+  model(proof) {
+    if (this.runtime) return this.runtime;
+    if (!proof || !(proof.spine || []).length) return null;
+    this.services.ensureLayouts();
+    const fingerprint = deckFingerprint(proof);
+    if (!this.modelRuntime || this.modelFingerprint !== fingerprint) {
+      this.modelRuntime = new Runtime(proof, { mode: 'presenter', presenterAvailable: true });
+      this.modelFingerprint = fingerprint;
+    } else {
+      this.modelRuntime.proof = proof;
+      this.modelRuntime.deck.proof = proof;
+    }
+    return this.modelRuntime;
+  }
+
+  /**
    * Rebuild the runtime for a proof, preserving the position where it can.
    * @param {import('../core/contracts.d.ts').Proof} proof
    * @param {'presenter'|'review'} [mode]
    */
   rebuild(proof, mode) {
+    if (!this.stage || !this.frameDoc) return;
     const keep = this.runtime ? { sceneId: this.runtime.scene ? this.runtime.scene.id : null, beat: this.runtime.nav.beatIndex } : null;
     this.teardownRuntime();
     if (!(proof.spine || []).length) {
@@ -321,6 +349,8 @@ export class Preview {
 
   /** Drop the runtime and its host binding. */
   teardownRuntime() {
+    this.modelRuntime = null;
+    this.modelFingerprint = '';
     if (this.overlayCleanup) { try { this.overlayCleanup(); } catch { /* already gone */ } this.overlayCleanup = null; }
     if (this.hostBinding) { this.hostBinding.detach(); this.hostBinding = null; }
     if (this.runtime) { this.runtime.clear(); this.runtime = null; }

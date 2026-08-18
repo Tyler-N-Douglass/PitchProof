@@ -96,8 +96,14 @@ html, body {
 .st-body {
   display: grid;
   grid-template-columns: var(--st-rail-w) var(--st-work-w) minmax(320px, 1fr) var(--st-inspector-w);
+  /* `minmax(0, 1fr)` rather than the implicit `auto`: an auto row is sized by
+     its tallest child, so a long panel would push the whole studio past the
+     viewport and take the preview and the status bar with it. */
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
 }
+
+.st-rail, .st-work, .st-canvas, .st-inspector { min-height: 0; }
 
 .st-app--wide .st-body { grid-template-columns: var(--st-rail-w) var(--st-work-w-wide) minmax(280px, 1fr) var(--st-inspector-w); }
 .st-app--focus .st-body { grid-template-columns: var(--st-rail-w) 1fr var(--st-inspector-w); }

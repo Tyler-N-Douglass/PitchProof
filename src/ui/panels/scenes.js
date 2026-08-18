@@ -259,7 +259,7 @@ function renderBeats(app, scene) {
  * @returns {{id: string, label: string}[]}
  */
 export function revealableElements(app, scene) {
-  const runtime = app.preview.runtime;
+  const runtime = app.preview.model(app.proof);
   if (!runtime) return [];
   let tree;
   try { tree = runtime.renderScene(scene); } catch { return []; }
