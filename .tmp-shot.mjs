@@ -44,7 +44,7 @@ await page.screenshot({ path: '.tmp-shot-scenes.png' });
 
 await page.keyboard.press('Alt+Digit7');
 await page.waitForTimeout(150);
-await page.getByRole('button', { name: 'Run the sweep' }).click();
+await page.locator('[data-st-act="rehearse.sweep"]').first().click();
 await page.waitForTimeout(2500);
 await page.screenshot({ path: '.tmp-shot-rehearse.png' });
 
