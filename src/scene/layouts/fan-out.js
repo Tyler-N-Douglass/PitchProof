@@ -25,7 +25,7 @@ import { h } from '../../core/vdom.js';
 import { renderBlock, summarize } from '../blocks.js';
 import {
   sceneHead, panelHead, provenanceLabel, emptyState, waveGroup,
-  specimenMeta, specimenTitle, renditionLabel, renditionMeta,
+  specimenMeta, specimenTitle, renditionLabel,
 } from '../parts.js';
 
 /** Cards past this count reveal in waves rather than one at a time. */
@@ -110,11 +110,12 @@ function renderGrid(ctx, rends) {
         'data-pp-group': group,
         'data-pp-rendition': rendition.id,
       },
+      // The card carries the label, the content and — where §9 requires it —
+      // the provenance line. It deliberately does not carry the `producedBy`
+      // meta the other layouts show: a fan card is small, and the room's
+      // attention belongs on the client's own content in it.
       h('header', { class: 'pp-fan-card-head' },
-        h('p', { class: 'pp-fan-card-label', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' }, renditionLabel(rendition, index)),
-        renditionMeta(rendition)
-          ? h('p', { class: 'pp-fan-card-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, renditionMeta(rendition))
-          : null),
+        h('p', { class: 'pp-fan-card-label', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' }, renditionLabel(rendition, index))),
       h('div', { class: 'pp-fan-card-body' },
         title ? h('p', { class: 'pp-fan-card-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '2' }, title) : null,
         blurb ? h('p', { class: 'pp-fan-card-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2' }, blurb) : null,

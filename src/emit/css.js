@@ -197,8 +197,11 @@ export function parseDeclarations(body) {
       continue;
     }
     const end = semi < 0 ? masked.length : semi;
-    const chunk = src.slice(i, end);
-    const colon = masked.slice(i, end).indexOf(':');
+    // Read from the masked text, not the raw text: `/* display:none */ color:red`
+    // must parse as one declaration of `color`, not as a property whose name
+    // begins with a comment.
+    const chunk = masked.slice(i, end);
+    const colon = chunk.indexOf(':');
     if (colon > 0) {
       const prop = chunk.slice(0, colon).trim();
       let value = chunk.slice(colon + 1).trim();
@@ -692,13 +695,35 @@ export function backgroundColorOf(style) {
   if (direct) return direct;
   const shorthand = style.props.background;
   if (!shorthand) return null;
-  // Take the last colour-looking token; `background: url(...) #fff no-repeat`.
-  const tokens = shorthand.match(/#[0-9a-fA-F]{3,8}\b|[a-z-]+\([^)]*\)|\b[a-zA-Z]+\b/g) || [];
+
+  // Pull the balanced `name(...)` groups out first, so a `#fff` inside a
+  // `url(...)` fragment cannot be mistaken for the background colour, and so a
+  // keyword like `no-repeat` is never chopped into `no`.
+  /** @type {string[]} */
+  const functions = [];
+  let rest = '';
+  for (let i = 0; i < shorthand.length;) {
+    const m = /^([a-zA-Z-]+)\(/.exec(shorthand.slice(i));
+    if (!m) { rest += shorthand[i]; i++; continue; }
+    let depth = 0;
+    let j = i + m[0].length - 1;
+    for (; j < shorthand.length; j++) {
+      if (shorthand[j] === '(') depth++;
+      else if (shorthand[j] === ')') { depth--; if (depth === 0) { j++; break; } }
+    }
+    functions.push(shorthand.slice(i, j));
+    rest += ' ';
+    i = j;
+  }
+
+  const colourFunction = /^(rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color|color-mix)\(/i;
+  for (let i = functions.length - 1; i >= 0; i--) if (colourFunction.test(functions[i])) return functions[i];
+
+  const POSITIONAL = /^(no-repeat|repeat|repeat-x|repeat-y|space|round|center|top|bottom|left|right|cover|contain|auto|fixed|scroll|local|border-box|padding-box|content-box|none|inherit|initial|unset|revert)$/i;
+  const tokens = rest.match(/#[0-9a-fA-F]{3,8}|[a-zA-Z][a-zA-Z0-9-]*/g) || [];
   for (let i = tokens.length - 1; i >= 0; i--) {
-    const t = tokens[i];
-    if (/^(url|linear-gradient|radial-gradient|conic-gradient|repeating-linear-gradient|image-set)\(/i.test(t)) continue;
-    if (/^(no-repeat|repeat|repeat-x|repeat-y|center|top|bottom|left|right|cover|contain|fixed|scroll|local|border-box|padding-box|content-box|space|round|none)$/i.test(t)) continue;
-    return t;
+    if (POSITIONAL.test(tokens[i])) continue;
+    return tokens[i];
   }
   return null;
 }

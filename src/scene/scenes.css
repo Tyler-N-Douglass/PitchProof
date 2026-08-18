@@ -480,12 +480,23 @@
  * behaviour and one reader of it, so the measurement cannot describe CSS that
  * is not applied. */
 
+/* `-webkit-line-clamp` needs `display: -webkit-box`, and a grid or flex parent
+   blockifies that away — so every element carrying a multi-line clamp is a
+   child of a *block* container below, never of a grid or a flex row. */
 .pp-scene [data-pp-clamp] {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.pp-scene [data-pp-clamp="1"] { -webkit-line-clamp: 1; }
+/* A single-line clamp is the one case that needs no legacy box: nowrap plus an
+   ellipsis works in any container. `measureScene` reports the `nowrap` with it,
+   so the detector checks the width rather than the line count. */
+.pp-scene [data-pp-clamp="1"] {
+  display: block;
+  -webkit-line-clamp: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .pp-scene [data-pp-clamp="2"] { -webkit-line-clamp: 2; }
 .pp-scene [data-pp-clamp="3"] { -webkit-line-clamp: 3; }
 .pp-scene [data-pp-clamp="4"] { -webkit-line-clamp: 4; }
@@ -742,9 +753,7 @@
 .pp-fan-card-body {
   flex: 1 1 auto;
   min-height: 0;
-  display: grid;
-  gap: 4px;
-  align-content: start;
+  display: block;
   overflow: hidden;
   /* Content that runs past the card fades out rather than being sliced through
      the middle of a line. It is still reported to the overflow detector with
@@ -754,7 +763,7 @@
   -webkit-mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 22px), transparent);
 }
 .pp-fan-card-title { margin: 0; }
-.pp-fan-card-blurb { margin: 0; opacity: 0.86; }
+.pp-fan-card-blurb { margin: 4px 0 0; opacity: 0.86; }
 .pp-fan-card-empty { margin: 0; opacity: 0.7; }
 
 /* ------------------------------------------------------------- layout: stack */
@@ -830,15 +839,13 @@
 .pp-stack-content {
   flex: 1 1 auto;
   min-height: 0;
-  display: grid;
-  gap: 4px;
-  align-content: start;
+  display: block;
   overflow: hidden;
   mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 18px), transparent);
   -webkit-mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 18px), transparent);
 }
 .pp-stack-title { margin: 0; }
-.pp-stack-blurb { margin: 0; opacity: 0.86; }
+.pp-stack-blurb { margin: 4px 0 0; opacity: 0.86; }
 .pp-stack-empty { margin: 0; opacity: 0.7; }
 
 /* --------------------------------------------------------- layout: fullBleed */
@@ -880,7 +887,7 @@
   padding: var(--pp-sc-bleed-pad);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  justify-content: flex-end;
   background: var(--pp-surface);
   color: var(--pp-on-surface);
   border-top: 3px solid var(--pp-accent);
@@ -896,10 +903,14 @@
   background: transparent;
   border-right: 0;
 }
-.pp-bleed-kicker { margin: 0; color: var(--pp-accent); }
+/* Block, so the clamps on the headline and subhead survive (see the clamp
+   rules above). */
+.pp-bleed-overlay-inner { display: block; min-width: 0; }
+.pp-bleed-kicker { margin: 0 0 8px; color: var(--pp-accent); }
 .pp-bleed-headline { margin: 0; }
-.pp-bleed-sub { margin: 0; opacity: 0.78; }
-.pp-bleed-caption { margin: 0; opacity: 0.66; }
+.pp-bleed-sub { margin: 8px 0 0; opacity: 0.78; }
+.pp-bleed-caption { margin: 8px 0 0; opacity: 0.66; }
+.pp-bleed-overlay .pp-provenance { margin-top: 10px; }
 
 /* ---------------------------------------------------------- layout: sideNote */
 
@@ -921,11 +932,10 @@
   border-radius: var(--pp-radius);
   background: var(--pp-surface-alt);
   color: var(--pp-on-surface-alt);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: block;
   min-width: 0;
 }
+.pp-side-note > * + * { margin-top: 6px; }
 .pp-side-note-label { margin: 0; color: var(--pp-accent); }
 .pp-side-note-text { margin: 0; }
 
@@ -947,9 +957,9 @@
 .pp-quote-rule { width: 64px; height: 3px; background: var(--pp-accent); border-radius: 2px; }
 .pp-quote-body { margin: 0; }
 .pp-quote-line { margin: 0; }
-.pp-quote-figcaption { display: flex; flex-direction: column; gap: 2px; }
+.pp-quote-figcaption { display: block; }
 .pp-quote-attribution { margin: 0; }
-.pp-quote-source { margin: 0; opacity: 0.66; }
+.pp-quote-source { margin: 2px 0 0; opacity: 0.66; }
 
 /* -------------------------------------------------------- layout: systemMap */
 

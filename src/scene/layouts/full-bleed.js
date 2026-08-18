@@ -64,7 +64,8 @@ export function fullBleed(ctx) {
     'data-pp-group': 'head',
     'data-pp-rendition': pick.rendition ? pick.rendition.id : null,
   },
-  pick.source ? h('p', { class: 'pp-bleed-kicker', 'data-pp-tx': 'kicker' }, pick.source) : null,
+  h('div', { class: 'pp-bleed-overlay-inner' },
+    pick.source ? h('p', { class: 'pp-bleed-kicker', 'data-pp-tx': 'kicker' }, pick.source) : null,
   scene.headline
     ? h('h2', { class: 'pp-bleed-headline', 'data-pp-tx': 'displayXL', 'data-pp-clamp': '3' }, scene.headline)
     : null,
@@ -74,9 +75,9 @@ export function fullBleed(ctx) {
   pick.caption
     ? h('p', { class: 'pp-bleed-caption', 'data-pp-tx': 'caption', 'data-pp-clamp': '2' }, pick.caption)
     : null,
-  !scene.headline && !scene.subhead && !pick.caption && !pick.source
-    ? emptyState('This scene has no headline yet.')
-    : null,
+    !scene.headline && !scene.subhead && !pick.caption && !pick.source
+      ? emptyState('This scene has no headline yet.')
+      : null),
   provenanceLabel(pick.rendition, ctx)));
 }
 

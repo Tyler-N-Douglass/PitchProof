@@ -198,6 +198,10 @@ export function collectTextBoxes(node, env) {
         if (typeof attrs['data-pp-ow'] === 'string') box.overflowWrap = attrs['data-pp-ow'];
         if (attrs['data-pp-clamp'] !== undefined && attrs['data-pp-clamp'] !== null) {
           box.maxLines = Number(attrs['data-pp-clamp']);
+          // A one-line clamp is `white-space: nowrap` plus an ellipsis in the
+          // stylesheet rather than a `-webkit-box`, so the run does not wrap and
+          // the detector should be checking its width, not its line count.
+          if (box.maxLines === 1 && box.whiteSpace === undefined) box.whiteSpace = 'nowrap';
         }
         box.fontStack = resolved.fontStack;
         box.containerId = next.containerId;
