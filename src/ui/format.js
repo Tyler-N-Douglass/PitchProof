@@ -13,7 +13,7 @@
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
- * Byte counts the way a seller reads them: three significant figures, binary
+ * Byte counts the way a seller reads them: three significant figures, decimal
  * steps, never a bare number of bytes above a kilobyte.
  * @param {number} n
  * @returns {string}
@@ -22,10 +22,14 @@ export function formatBytes(n) {
   if (!Number.isFinite(n)) return '—';
   const neg = n < 0;
   let v = Math.abs(n);
-  if (v < 1024) return `${neg ? '-' : ''}${Math.round(v)} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
+  if (v < 1000) return `${neg ? '-' : ''}${Math.round(v)} B`;
+  // Decimal, not binary. §4 sets the size budget as `maxBytes: 25_000_000`, the
+  // emit panel takes it in MB, and browsers report storage quotas the same way.
+  // Showing 25,000,000 as "23.8 MB" next to a field the user typed 25 into is a
+  // small lie that costs trust for nothing.
+  const units = ['kB', 'MB', 'GB', 'TB'];
   let u = -1;
-  while (v >= 1024 && u < units.length - 1) { v /= 1024; u += 1; }
+  while (v >= 1000 && u < units.length - 1) { v /= 1000; u += 1; }
   const digits = v >= 100 ? 0 : v >= 10 ? 1 : 2;
   return `${neg ? '-' : ''}${v.toFixed(digits)} ${units[u]}`;
 }

@@ -27,6 +27,15 @@ import { unreviewedBrandGroups } from './model.js';
  * @property {object} [locus]     scene/branch/specimen ids, when a finding has one
  */
 
+/** How each §7 confidence group reads in a sentence. */
+export const BRAND_GROUP_PHRASE = {
+  colors: 'The colour roles',
+  faces: 'The type faces',
+  logos: 'The logo assets',
+  shape: 'The shape language',
+  imagery: 'The imagery treatment',
+};
+
 /**
  * The severity-1 findings in a list.
  * @param {any[]} findings
@@ -96,7 +105,7 @@ export function emitBlockers(app) {
   for (const entry of unreviewedBrandGroups(proof.brand)) {
     blockers.push({
       kind: 'BRAND_UNREVIEWED',
-      message: `The extracted ${entry.group} are ${Math.round(entry.confidence * 100)}% confident. §7 holds low-confidence brand fields for review before an emit can use them — check them and mark them reviewed.`,
+      message: `${BRAND_GROUP_PHRASE[entry.group] || entry.group} came out ${Math.round(entry.confidence * 100)}% confident. §7 holds a low-confidence brand field out of an emit until somebody has looked at it — check it against the source and mark it reviewed.`,
       where: 'brand',
     });
   }

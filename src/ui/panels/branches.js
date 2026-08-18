@@ -20,7 +20,7 @@ import {
   badge, button, empty, field, notice, pair, pairs, row, section, select, textarea, toolbar,
 } from '../components.js';
 import { humanize, plural, truncate } from '../format.js';
-import { findBranch, layoutChoices } from '../model.js';
+import { findBranch } from '../model.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
 
 /**
@@ -31,7 +31,10 @@ export function renderBranchesPanel(app) {
   const proof = app.proof;
   const branches = proof.branches || [];
   const selected = findBranch(proof, app.ui.selection.branchId) || branches[0] || null;
-  const deck = app.preview.runtime ? app.preview.runtime.deck : null;
+  // The deck comes from the document-free runtime, so branch coverage is
+  // computed whether or not the preview happens to be on screen.
+  const model = app.preview.model(app.proof);
+  const deck = model ? model.deck : null;
   const coverage = deck ? app.services.branchCoverage(deck) : { unreachable: [], noReturn: [] };
 
   return h('div', { class: 'st-panel' },

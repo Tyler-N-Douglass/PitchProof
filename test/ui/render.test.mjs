@@ -283,3 +283,39 @@ test('a full studio render patches into a document without throwing', async () =
   assert.ok(html.length > 2000, 'something substantial was built');
   assert.match(html, /st-app/);
 });
+
+test('a render triggered from inside a render does not nest', async () => {
+  const app = await makeApp();
+  const root = new FakeElement('div');
+  app.patcher = new Patcher(root, fakeDocument);
+  app.document = fakeDocument;
+
+  let passes = 0;
+  let reentries = 0;
+  const realSync = app.syncPreview.bind(app);
+  app.syncPreview = () => {
+    passes += 1;
+    // The real thing does this indirectly: painting the canvas moves the
+    // preview's runtime, the runtime announces the move, and the announcement
+    // asks for another render.
+    if (reentries < 50) { reentries += 1; app.render(); }
+    realSync();
+  };
+
+  app.render();
+  assert.ok(passes <= 3, `a re-entrant render must be coalesced, not nested (${passes} passes)`);
+  assert.equal(app.rendering, false, 'and the guard is released afterwards');
+  assert.equal(app.renderQueued, false);
+});
+
+test('the preview is not entered by the patcher even across many renders', async () => {
+  const app = await makeApp();
+  const root = new FakeElement('div');
+  const patcher = new Patcher(root, fakeDocument);
+  for (const section of SECTIONS) {
+    app.ui.section = section.id;
+    patcher.render(renderStudio(app));
+  }
+  const html = serialize(root);
+  assert.equal(html.split('data-st-preserve').length - 1, 1, 'exactly one preserved subtree: the preview');
+});

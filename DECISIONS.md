@@ -484,3 +484,41 @@ destroys anything the DOM was holding that the model does not describe —
 selection, scroll, focus, composition state. Selection is the one that mattered
 here; `focusOverlay` already handled focus, and scroll is derived per beat by
 D12.
+
+---
+
+## D23 — The build is a part, and it needs its own test
+
+**Unsettled by:** §17 lists ten golden tests, all of them about behaviour of the
+source. None is about the artifact the build produces.
+
+**Decision.** `test/integration/studio.test.mjs` opens the built
+`dist/pitchproof-studio.html` in a browser and asserts it parses, mounts,
+reaches no network, loads no font, keeps `--pp-*` out of its own stylesheet, and
+carries exactly one document. `test/integration/artifact.test.mjs` does the same
+for an emitted proof.
+
+**Why.** The studio was broken and 1608 tests were green. `scripts/build.mjs`
+filled its template markers with `String.replace` and a *string* replacement,
+which expands `$'`, `$&` and `` $` ``. Three bundled sources legitimately
+contain those sequences — character tables in `core/text-metrics.js` and
+`emit/scan-parse.js` hold a literal `'$'`, and `runtime/host.js` holds `'\$&'`
+in `cssEscape` — so each `$'` spliced the whole remainder of the document into
+the middle of a string literal. The file parsed with a syntax error,
+`PitchProofStudio` was never defined, and the studio rendered its own "bundle
+did not load" fallback. It also inflated the file from 2.8 MB to 4.4 MB, which
+nothing noticed either.
+
+Every lane tested its own source and the integration tests tested an emitted
+artifact. Nothing opened the primary deliverable. §1 calls the studio "a
+single-file, Netlify-deployable HTML application"; the test now asserts the file
+that would be deployed actually runs.
+
+Two smaller lessons came out of writing it, both worth keeping. Assertions about
+a bundle must be made against the **parsed document**, not against the file
+text: three of my first attempts flagged the studio's own source code, because
+the bundle legitimately contains `<html>`, `<style>` and `@font-face` inside
+JavaScript string literals — the emitter builds documents for a living. And an
+`iframe` is not a network reference: the live preview uses one with no `src` and
+no `srcdoc`, written into directly like the presenter window (D16), which is
+what keeps the artifact's `--pp-*` theme out of the studio's `--st-*` chrome.

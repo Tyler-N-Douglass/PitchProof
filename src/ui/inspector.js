@@ -145,7 +145,10 @@ function renderRendition(app, rendition) {
  */
 function renderBranch(app, branch) {
   if (!branch) return empty('Select a branch to see its coverage.');
-  const deck = app.preview.runtime ? app.preview.runtime.deck : null;
+  // The deck comes from the document-free runtime, so branch coverage is
+  // computed whether or not the preview happens to be on screen.
+  const model = app.preview.model(app.proof);
+  const deck = model ? model.deck : null;
   const coverage = deck ? app.services.branchCoverage(deck) : { unreachable: [], noReturn: [] };
   const anchors = (app.proof.spine || []).filter((s) => (s.branchAnchors || []).includes(branch.id));
 

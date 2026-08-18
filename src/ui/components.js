@@ -387,10 +387,12 @@ export function toolbar(...children) {
 }
 
 /**
- * A keyboard hint rendered as a `<kbd>` sequence.
- * @param {string[]} keys
+ * A keyboard hint rendered as a `<kbd>` sequence. Takes the output of
+ * `keys.keyLabel(binding)`, so a hint can never name a key the router does not
+ * answer to.
+ * @param {string[]} parts
  * @returns {import('../core/vdom.js').VNode}
  */
-export function keys(keys_) {
-  return h('span', { class: 'st-keys' }, keys_.map((k) => h('kbd', { class: 'st-kbd' }, k)));
+export function keyHint(parts) {
+  return h('span', { class: 'st-keys' }, parts.map((k) => h('kbd', { class: 'st-kbd' }, k)));
 }

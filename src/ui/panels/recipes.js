@@ -28,7 +28,7 @@ import {
 import { formatDateTime, formatPercent, humanize, plural, truncate } from '../format.js';
 import { blockSummary, findRendition, findSpecimen } from '../model.js';
 import { PROVENANCE_COPY } from '../constants.js';
-import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
+import { ACT_ATTR, KEY_ATTR } from '../render.js';
 
 /**
  * @param {any} app

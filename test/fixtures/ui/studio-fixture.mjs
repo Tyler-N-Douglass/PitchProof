@@ -15,6 +15,7 @@
 import { contentId, elementId } from '../../../src/core/ids.js';
 import { defaultEmitOptions } from '../../../src/core/contracts.js';
 import { ok, err } from '../../../src/core/result.js';
+import { registerAllLayouts, sceneTemplates } from '../../../src/scene/index.js';
 
 const AT = '2026-02-01T09:00:00.000Z';
 
@@ -350,8 +351,12 @@ export function fakeServices(options = {}) {
       });
     },
 
-    ensureLayouts: () => { record('ensureLayouts', []); },
-    sceneTemplates: () => [],
+    // The layout registry is L2's and global. A fake that left it empty would
+    // make the beat editor look as though no layout renders anything, so the
+    // fake registers the real eight — the panels under test then see what the
+    // artifact would.
+    ensureLayouts: () => { record('ensureLayouts', []); registerAllLayouts(); },
+    sceneTemplates: () => sceneTemplates(),
     buildScene: (args) => ok(fixtureScene(args.id || 'sc_fake', 1)),
 
     buildJumpIndex: () => ({ entries: [] }),

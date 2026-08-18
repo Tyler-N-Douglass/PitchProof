@@ -133,10 +133,20 @@ export function buildStudio(runtime) {
     '</script>',
   ].join('\n');
 
+  // Every replacement is a **function**, not a string. `String.replace` with a
+  // string replacement expands `$'`, `$&` and `` $` `` — and the bundled sources
+  // legitimately contain them: character tables in `core/text-metrics.js` and
+  // `emit/scan-parse.js` hold a literal `'$'`, and `runtime/host.js` holds
+  // `'\\$&'` in `cssEscape`. Each `$'` spliced the entire remainder of the
+  // document into the middle of a string literal, so the studio parsed with a
+  // syntax error, `PitchProofStudio` was never defined, and the built file
+  // showed its own "bundle did not load" fallback. Every test passed, because
+  // none of them opened the built studio in a browser. `test/integration/
+  // studio.test.mjs` does now.
   return shell
-    .replace('<!--PITCHPROOF_STYLES-->', `<style>\n${css}\n</style>`)
-    .replace('<!--PITCHPROOF_RUNTIME-->', embedded)
-    .replace('<!--PITCHPROOF_SCRIPT-->', `<script>\n${code}\n</script>`);
+    .replace('<!--PITCHPROOF_STYLES-->', () => `<style>\n${css}\n</style>`)
+    .replace('<!--PITCHPROOF_RUNTIME-->', () => embedded)
+    .replace('<!--PITCHPROOF_SCRIPT-->', () => `<script>\n${code}\n</script>`);
 }
 
 const DEFAULT_SHELL = `<!doctype html>

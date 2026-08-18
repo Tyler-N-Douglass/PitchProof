@@ -121,6 +121,9 @@ export class StudioApp extends Emitter {
     /** @type {any} */
     this.saveTimer = null;
     this.destroyed = false;
+    /** Guards against a render triggering another render inside itself. */
+    this.rendering = false;
+    this.renderQueued = false;
 
     this.preview = new Preview({
       document: this.document,
@@ -482,8 +485,14 @@ export class StudioApp extends Emitter {
     if (!query) return pool.slice(0, 40);
     const scored = [];
     for (const action of pool) {
-      const haystack = `${action.group} ${action.label}`.toLowerCase();
-      const score = fuzzyScore(haystack, query);
+      const label = action.label.toLowerCase();
+      // The label is what the user is thinking of; the group is context. Typing
+      // "brand" should reach "Extract brand from a URL" before it reaches every
+      // action that happens to live in the Brand group.
+      const context = `${action.group} ${label} ${action.keywords || ''}`;
+      const score = Math.max(fuzzyScore(label, query) * 2, fuzzyScore(context, query))
+        + (label.includes(query) ? 20 : 0)
+        + (action.keywords && String(action.keywords).includes(query) ? 8 : 0);
       if (score > 0) scored.push({ action, score });
     }
     scored.sort((a, b) => (b.score - a.score) || a.action.label.localeCompare(b.action.label));
@@ -526,11 +535,33 @@ export class StudioApp extends Emitter {
     return this;
   }
 
-  /** Render the whole studio and patch the difference into the document. */
+  /**
+   * Render the whole studio and patch the difference into the document.
+   *
+   * Re-entrant by nature and guarded against it: painting the canvas can move
+   * the preview's runtime, the runtime announces the move, and the announcement
+   * asks for another render. Left alone that nests renders until the stack
+   * gives out. So a render in flight records that another is wanted and the
+   * outer call drains it, with a hard cap — a render that keeps asking for
+   * another render is a bug, and burning the stack would hide it rather than
+   * show it.
+   */
   render() {
     if (this.destroyed || !this.patcher) return;
-    this.patcher.render(renderStudio(this));
-    this.syncPreview();
+    if (this.rendering) { this.renderQueued = true; return; }
+    this.rendering = true;
+    try {
+      let passes = 0;
+      do {
+        this.renderQueued = false;
+        this.patcher.render(renderStudio(this));
+        this.syncPreview();
+        passes += 1;
+      } while (this.renderQueued && passes < 3);
+    } finally {
+      this.rendering = false;
+      this.renderQueued = false;
+    }
   }
 
   /**

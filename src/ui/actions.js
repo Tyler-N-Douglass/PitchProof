@@ -148,15 +148,29 @@ export const ACTIONS = [
     id: 'app.section.prev', label: 'Previous section', group: 'Studio', keys: ['Alt+['],
     run: (app) => stepSection(app, -1),
   },
-  ...['project', 'brand', 'specimens', 'recipes', 'scenes', 'branches', 'rehearse', 'emit'].map((id, i) => ({
+  // The section jumps carry keywords so the palette answers what somebody is
+  // actually looking for. Typing "proxy" under time pressure should land in
+  // Settings, not return nothing because the field itself is a control.
+  ...[
+    ['project', 'name seed prospect save open duplicate delete export import json storage recompress'],
+    ['brand', 'colour color contrast palette role fallback face font metric logo shape imagery confidence review override'],
+    ['specimens', 'capture page url paste saved har mhtml pdf docx chrome stripped restore raw blocks locale sitemap'],
+    ['recipes', 'rendition paste align provenance illustrative verified promote adapter locale channel budget'],
+    ['scenes', 'spine layout headline subhead beat reveal presenter note pacing anchor'],
+    ['branches', 'objection alias jump return anchor coverage unreachable'],
+    ['rehearse', 'sweep preflight finding severity auto-fix dry run'],
+    ['emit', 'file budget degradation preflight artifact download size quality mode'],
+  ].map(([id, keywords], i) => ({
     id: `app.section.${id}`,
     label: `Go to ${id.charAt(0).toUpperCase()}${id.slice(1)}`,
     group: 'Studio',
+    keywords,
     keys: [`Alt+${i + 1}`],
     run: (app) => { app.setUi({ section: id }); },
   })),
   {
     id: 'app.section.settings', label: 'Go to Settings', group: 'Studio', keys: ['Alt+9'],
+    keywords: 'proxy cors adapter endpoint key operator name lanes wired laws',
     run: (app) => { app.setUi({ section: 'settings' }); },
   },
   {
@@ -1010,7 +1024,8 @@ export const ACTIONS = [
     run: (app, arg) => {
       const { id, index } = idIndex(arg);
       app.select({ sceneId: id, beatIndex: index });
-      if (app.preview.runtime) app.preview.runtime.go({ type: 'goToBeat', sceneId: id, beatIndex: index });
+      const runtime = app.preview.model(app.proof);
+      if (runtime) runtime.go({ type: 'goToBeat', sceneId: id, beatIndex: index });
     },
   },
   {
@@ -1198,9 +1213,8 @@ export const ACTIONS = [
       if (locus.sceneId) {
         app.select({ sceneId: locus.sceneId });
         app.setUi({ section: 'scenes' });
-        if (app.preview.runtime && app.preview.runtime.deck.sceneById.has(locus.sceneId)) {
-          app.preview.runtime.go({ type: 'goToScene', sceneId: locus.sceneId });
-        }
+        const runtime = app.preview.model(app.proof);
+        if (runtime && runtime.deck.sceneById.has(locus.sceneId)) runtime.go({ type: 'goToScene', sceneId: locus.sceneId });
       } else if (locus.branchId) {
         app.select({ branchId: locus.branchId });
         app.setUi({ section: 'branches' });
@@ -1261,9 +1275,8 @@ export const ACTIONS = [
         dryRun: { active: true, index: 0, positions, findings: result.value.findings || [] },
         layout: 'split',
       });
-      if (positions[0] && positions[0].sceneId && app.preview.runtime) {
-        app.preview.runtime.go({ type: 'goToScene', sceneId: positions[0].sceneId });
-      }
+      const runtime = app.preview.model(app.proof);
+      if (positions[0] && positions[0].sceneId && runtime) runtime.go({ type: 'goToScene', sceneId: positions[0].sceneId });
       app.notify('ok', `Dry run over ${positions.length} positions. The counter tracks what would still be wrong when you walk in.`);
     },
   },
@@ -1275,8 +1288,9 @@ export const ACTIONS = [
       const next = Math.max(0, Math.min(dry.positions.length - 1, dry.index + (Number(arg) || 1)));
       app.setUi({ dryRun: { ...dry, index: next } });
       const pos = dry.positions[next];
-      if (pos && pos.sceneId && app.preview.runtime && app.preview.runtime.deck.sceneById.has(pos.sceneId)) {
-        app.preview.runtime.go({ type: 'goToBeat', sceneId: pos.sceneId, beatIndex: pos.beatIndex || 0 });
+      const runtime = app.preview.model(app.proof);
+      if (pos && pos.sceneId && runtime && runtime.deck.sceneById.has(pos.sceneId)) {
+        runtime.go({ type: 'goToBeat', sceneId: pos.sceneId, beatIndex: pos.beatIndex || 0 });
         app.select({ sceneId: pos.sceneId, beatIndex: pos.beatIndex || 0 });
       }
     },

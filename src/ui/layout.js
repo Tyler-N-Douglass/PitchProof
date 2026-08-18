@@ -21,7 +21,7 @@
  */
 
 import { h, cx } from '../core/vdom.js';
-import { badge, button, meter } from './components.js';
+import { badge, button, keyHint, meter } from './components.js';
 import { PREVIEW_BREAKPOINTS, SECTIONS, WIDE_SECTIONS } from './constants.js';
 import { formatBytes, formatDateTime, plural, truncate } from './format.js';
 import { keyLabel, MOD_NOTE, bindingGroups } from './keys.js';
@@ -322,7 +322,7 @@ export function renderPalette(app) {
           },
           h('span', { class: 'st-palette-group' }, action.group),
           h('span', { class: 'st-palette-label' }, action.label),
-          action.keys ? h('span', { class: 'st-palette-keys' }, keyLabel(action.keys[0]).map((k) => h('kbd', { class: 'st-kbd' }, k))) : null)))
+          action.keys ? h('span', { class: 'st-palette-keys' }, keyHint(keyLabel(action.keys[0]))) : null)))
         : h('li', { class: 'st-palette-empty' }, 'Nothing matches that.')),
       h('p', { class: 'st-palette-foot' }, 'Enter runs · ↑ ↓ moves · Esc closes')));
 }
@@ -346,7 +346,7 @@ export function renderKeyboard(app) {
       h('div', { class: 'st-keysheet-groups' }, groups.map((g) => h('section', { class: 'st-keysheet-group', [KEY_ATTR]: g.group },
         h('h3', null, g.group),
         h('dl', { class: 'st-keysheet-list' }, g.bindings.map((b) => [
-          h('dt', null, keyLabel(b.keys[0]).map((k) => h('kbd', { class: 'st-kbd' }, k))),
+          h('dt', null, keyHint(keyLabel(b.keys[0]))),
           h('dd', null, b.label),
         ]))))),
       h('p', { class: 'st-keysheet-foot' },

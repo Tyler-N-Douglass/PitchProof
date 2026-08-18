@@ -281,3 +281,32 @@ test('the palette runs the highlighted command on Enter', async () => {
   assert.equal(app.ui.paletteOpen, false, 'Enter closes the palette');
   assert.ok(chosen, 'the palette had something highlighted');
 });
+
+test('the palette answers what a seller would actually type', async () => {
+  const app = await makeFullApp();
+  const cases = {
+    proxy: 'app.section.settings',
+    contrast: 'app.section.brand',
+    stripped: 'app.section.specimens',
+    objection: 'branch.create',
+    budget: 'emit.budget',
+    dry: 'rehearse.dryRun',
+    sweep: 'rehearse.sweep',
+    undo: 'app.undo',
+  };
+  for (const [query, expected] of Object.entries(cases)) {
+    app.setUi({ paletteQuery: query, paletteIndex: 0 });
+    const top = app.paletteMatches()[0];
+    assert.ok(top, `"${query}" found nothing — the palette is the route of last resort`);
+    assert.equal(top.id, expected, `"${query}" should reach ${expected}, reached ${top.id}`);
+  }
+});
+
+test('a field-level action that the palette cannot run is still reachable by its section', async () => {
+  const app = await makeFullApp();
+  // `settings.setProxy` is a control, not a command. Typing what it does must
+  // still land somewhere useful rather than nowhere at all (§20.10).
+  app.setUi({ paletteQuery: 'cors' });
+  const top = app.paletteMatches()[0];
+  assert.ok(top && top.id === 'app.section.settings');
+});
