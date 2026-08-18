@@ -328,6 +328,16 @@ export function fakeServices(options = {}) {
       provenance: 'verified-by-user',
       notes: `${rendition.notes ? `${rendition.notes}\n` : ''}promoted by ${by} at ${clock()}`,
     }),
+    promotionRecord: (rendition) => {
+      const match = String((rendition && rendition.notes) || '').match(/promoted by (.+?) at (\S+)/);
+      return match ? { by: match[1], at: match[2], from: 'illustrative', signatureValid: true } : null;
+    },
+    visibleNotes: (rendition) => String((rendition && rendition.notes) || '').split('\n').filter((l) => !/^promoted by /.test(l)).join('\n'),
+    composeNotes: (rendition, prose) => {
+      const records = String((rendition && rendition.notes) || '').split('\n').filter((l) => /^promoted by /.test(l)).join('\n');
+      const joined = [String(prose || '').trim(), records].filter(Boolean).join('\n');
+      return joined || null;
+    },
     channelBudget: (label) => (label === 'SMS' ? { maxChars: 160, maxWords: 30 } : null),
     enforceBudget: (blocks) => ({ blocks, overBy: 0 }),
     async runAdapter(recipe, specimen) {

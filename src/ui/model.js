@@ -739,7 +739,8 @@ export function setRenditionLabel(doc, id, label) {
 
 /** @param {Doc} doc @param {string} id @param {string} notes @returns {Doc} */
 export function setRenditionNotes(doc, id, notes) {
-  return withProof(doc, (p) => updateRendition(p, id, (r) => ({ ...r, notes: notes ? String(notes) : null })));
+  const value = notes === null || notes === undefined || notes === '' ? null : String(notes);
+  return withProof(doc, (p) => updateRendition(p, id, (r) => (r.notes === value ? r : { ...r, notes: value })));
 }
 
 /**

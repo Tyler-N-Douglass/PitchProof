@@ -25,7 +25,7 @@ import { h, cx } from '../../core/vdom.js';
 import {
   badge, button, checkbox, empty, field, notice, pair, pairs, row, section, select, textarea, toolbar,
 } from '../components.js';
-import { formatPercent, humanize, plural, truncate } from '../format.js';
+import { formatDateTime, formatPercent, humanize, plural, truncate } from '../format.js';
 import { blockSummary, findRendition, findSpecimen } from '../model.js';
 import { PROVENANCE_COPY } from '../constants.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
@@ -234,6 +234,7 @@ function renderRenditions(app, proof) {
 function renderRenditionDetail(app, rendition) {
   const copy = PROVENANCE_COPY[rendition.provenance] || PROVENANCE_COPY.illustrative;
   const promoted = rendition.provenance === 'verified-by-user';
+  const record = app.services.promotionRecord(rendition);
   const budget = app.services.channelBudget(rendition.label);
   const chars = (rendition.blocks || []).map(blockSummary).join(' ').length;
 
@@ -250,9 +251,17 @@ function renderRenditionDetail(app, rendition) {
         h('span', { class: 'st-field-hint' }, copy.describe))),
     textarea({
       label: 'Notes', act: 'rendition.setNotes', arg: rendition.id, rows: 3,
-      value: rendition.notes || '', key: `rd-notes-${rendition.id}`,
-      hint: 'Where this came from, in a sentence. Promotion records append here.',
+      value: app.services.visibleNotes(rendition), key: `rd-notes-${rendition.id}`,
+      hint: 'Where this came from, in a sentence. The promotion record is stored separately and editing this cannot destroy it.',
     }),
+    record
+      ? pairs(
+        pair('Promoted by', record.by || '—'),
+        pair('Promoted at', formatDateTime(record.at)),
+        pair('Promoted from', humanize(record.from || '')),
+        pair('Record', record.signatureValid ? badge('verifies against itself', 'ok') : badge('does not verify', 'bad')),
+      )
+      : null,
     budget
       ? pairs(
         pair('Channel budget', h('span', { class: 'st-mono' }, `${budget.maxChars} chars · ${budget.maxWords} words`)),
@@ -270,7 +279,9 @@ function renderRenditionDetail(app, rendition) {
       hint: 'Only tick this for content they published or supplied. It suppresses the illustrative label.',
     }),
     promoted
-      ? notice('ok', 'Promoted to verified-by-user. The promotion is recorded in the notes above with who and when.')
+      ? notice('ok', record
+        ? `Promoted to verified-by-user by ${record.by} on ${formatDateTime(record.at)}. The record travels with the project and the emitter checks it.`
+        : 'This rendition claims verified-by-user with no promotion record behind it. The emitter treats that as a forgery and refuses.')
       : notice('warn', h('div', null,
         h('p', null, 'Promotion to verified-by-user is a deliberate act. It says you have checked this against what the client would actually publish, and it is recorded against your name.'),
         h('p', null, 'The tool will never do it for you, and there is no setting that makes it the default (§9).')),

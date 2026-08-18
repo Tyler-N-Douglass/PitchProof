@@ -401,6 +401,53 @@ export function makeServices(env) {
     },
 
     /**
+     * The promotion record standing against a rendition, decoded. L7 stores it
+     * as a signed token inside `notes` so it survives an export and cannot be
+     * hand-forged; the studio has to decode it to show a person who promoted
+     * what, and when (§9).
+     * @param {any} rendition
+     * @returns {{by: string, at: string, from: string, signatureValid: boolean}|null}
+     */
+    promotionRecord(rendition) {
+      if (!recipeLane) return null;
+      try { return recipeLane.readPromotionRecord(rendition); } catch { return null; }
+    },
+
+    /**
+     * A rendition's notes with the promotion tokens taken out, so the notes
+     * field shows prose rather than machinery — and so editing the notes cannot
+     * destroy the record.
+     * @param {any} rendition
+     * @returns {string}
+     */
+    visibleNotes(rendition) {
+      const notes = rendition ? rendition.notes : null;
+      if (!recipeLane) return notes || '';
+      try { return recipeLane.stripPromotionRecords(notes) || ''; } catch { return notes || ''; }
+    },
+
+    /**
+     * Rewrite a rendition's prose notes while preserving every promotion record
+     * attached to it.
+     * @param {any} rendition
+     * @param {string} prose
+     * @returns {string|null}
+     */
+    composeNotes(rendition, prose) {
+      const text = String(prose || '').trim();
+      if (!recipeLane) return text || null;
+      let records = '';
+      try {
+        records = String(rendition.notes || '')
+          .split('\n')
+          .filter((line) => /\[\[pp-promotion:/.test(line))
+          .join('\n');
+      } catch { records = ''; }
+      const joined = [text, records].filter(Boolean).join('\n');
+      return joined || null;
+    },
+
+    /**
      * @param {string} label
      * @returns {{maxChars: number, maxWords: number}|null}
      */

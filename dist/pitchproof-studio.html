@@ -6069,7 +6069,8 @@ function setRenditionLabel(doc, id, label) {
 
 /** @param {Doc} doc @param {string} id @param {string} notes @returns {Doc} */
 function setRenditionNotes(doc, id, notes) {
-  return withProof(doc, (p) => updateRendition(p, id, (r) => ({ ...r, notes: notes ? String(notes) : null })));
+  const value = notes === null || notes === undefined || notes === '' ? null : String(notes);
+  return withProof(doc, (p) => updateRendition(p, id, (r) => (r.notes === value ? r : { ...r, notes: value })));
 }
 
 /**
@@ -51288,6 +51289,53 @@ function makeServices(env) {
     },
 
     /**
+     * The promotion record standing against a rendition, decoded. L7 stores it
+     * as a signed token inside `notes` so it survives an export and cannot be
+     * hand-forged; the studio has to decode it to show a person who promoted
+     * what, and when (§9).
+     * @param {any} rendition
+     * @returns {{by: string, at: string, from: string, signatureValid: boolean}|null}
+     */
+    promotionRecord(rendition) {
+      if (!recipeLane) return null;
+      try { return recipeLane.readPromotionRecord(rendition); } catch { return null; }
+    },
+
+    /**
+     * A rendition's notes with the promotion tokens taken out, so the notes
+     * field shows prose rather than machinery — and so editing the notes cannot
+     * destroy the record.
+     * @param {any} rendition
+     * @returns {string}
+     */
+    visibleNotes(rendition) {
+      const notes = rendition ? rendition.notes : null;
+      if (!recipeLane) return notes || '';
+      try { return recipeLane.stripPromotionRecords(notes) || ''; } catch { return notes || ''; }
+    },
+
+    /**
+     * Rewrite a rendition's prose notes while preserving every promotion record
+     * attached to it.
+     * @param {any} rendition
+     * @param {string} prose
+     * @returns {string|null}
+     */
+    composeNotes(rendition, prose) {
+      const text = String(prose || '').trim();
+      if (!recipeLane) return text || null;
+      let records = '';
+      try {
+        records = String(rendition.notes || '')
+          .split('\n')
+          .filter((line) => /\[\[pp-promotion:/.test(line))
+          .join('\n');
+      } catch { records = ''; }
+      const joined = [text, records].filter(Boolean).join('\n');
+      return joined || null;
+    },
+
+    /**
      * @param {string} label
      * @returns {{maxChars: number, maxWords: number}|null}
      */
@@ -53304,9 +53352,16 @@ const ACTIONS = [
   {
     id: 'rendition.setNotes', label: 'Note a rendition', group: 'Recipes', palette: false, control: true,
     mutates: true, sample: (app) => ({ arg: (app.proof.renditions[0] || {}).id || 'rd_none', value: 'From their own CMS.' }),
-    run: (app, arg, ctx) => app.mutate('Note rendition', (doc) => M.setRenditionNotes(doc, String(arg), value(ctx)), {
-      coalesceKey: `rendition.setNotes:${arg}`, scope: 'recipes',
-    }),
+    run: (app, arg, ctx) => {
+      const rendition = M.findRendition(app.proof, String(arg));
+      if (!rendition) return undefined;
+      // §9: the promotion record lives inside `notes` and is signed. Editing the
+      // prose must not destroy it, so the two are composed rather than replaced.
+      const notes = app.services.composeNotes(rendition, value(ctx));
+      return app.mutate('Note rendition', (doc) => M.setRenditionNotes(doc, String(arg), notes), {
+        coalesceKey: `rendition.setNotes:${arg}`, scope: 'recipes',
+      });
+    },
   },
   {
     id: 'rendition.clientSupplied', label: 'Mark a rendition client-supplied', group: 'Recipes', palette: false, control: true,
@@ -55549,7 +55604,7 @@ const { h, cx } = __require("core/vdom.js");
 const { badge, button, checkbox, empty, field, notice, pair, pairs, row, section, select, textarea, toolbar } = __require("ui/components.js");
 
 
-const { formatPercent, humanize, plural, truncate } = __require("ui/format.js");
+const { formatDateTime, formatPercent, humanize, plural, truncate } = __require("ui/format.js");
 const { blockSummary, findRendition, findSpecimen } = __require("ui/model.js");
 const { PROVENANCE_COPY } = __require("ui/constants.js");
 const { ACT_ATTR, ARG_ATTR, KEY_ATTR } = __require("ui/render.js");
@@ -55758,6 +55813,7 @@ function renderRenditions(app, proof) {
 function renderRenditionDetail(app, rendition) {
   const copy = PROVENANCE_COPY[rendition.provenance] || PROVENANCE_COPY.illustrative;
   const promoted = rendition.provenance === 'verified-by-user';
+  const record = app.services.promotionRecord(rendition);
   const budget = app.services.channelBudget(rendition.label);
   const chars = (rendition.blocks || []).map(blockSummary).join(' ').length;
 
@@ -55774,9 +55830,17 @@ function renderRenditionDetail(app, rendition) {
         h('span', { class: 'st-field-hint' }, copy.describe))),
     textarea({
       label: 'Notes', act: 'rendition.setNotes', arg: rendition.id, rows: 3,
-      value: rendition.notes || '', key: `rd-notes-${rendition.id}`,
-      hint: 'Where this came from, in a sentence. Promotion records append here.',
+      value: app.services.visibleNotes(rendition), key: `rd-notes-${rendition.id}`,
+      hint: 'Where this came from, in a sentence. The promotion record is stored separately and editing this cannot destroy it.',
     }),
+    record
+      ? pairs(
+        pair('Promoted by', record.by || '—'),
+        pair('Promoted at', formatDateTime(record.at)),
+        pair('Promoted from', humanize(record.from || '')),
+        pair('Record', record.signatureValid ? badge('verifies against itself', 'ok') : badge('does not verify', 'bad')),
+      )
+      : null,
     budget
       ? pairs(
         pair('Channel budget', h('span', { class: 'st-mono' }, `${budget.maxChars} chars · ${budget.maxWords} words`)),
@@ -55794,7 +55858,9 @@ function renderRenditionDetail(app, rendition) {
       hint: 'Only tick this for content they published or supplied. It suppresses the illustrative label.',
     }),
     promoted
-      ? notice('ok', 'Promoted to verified-by-user. The promotion is recorded in the notes above with who and when.')
+      ? notice('ok', record
+        ? `Promoted to verified-by-user by ${record.by} on ${formatDateTime(record.at)}. The record travels with the project and the emitter checks it.`
+        : 'This rendition claims verified-by-user with no promotion record behind it. The emitter treats that as a forgery and refuses.')
       : notice('warn', h('div', null,
         h('p', null, 'Promotion to verified-by-user is a deliberate act. It says you have checked this against what the client would actually publish, and it is recorded against your name.'),
         h('p', null, 'The tool will never do it for you, and there is no setting that makes it the default (§9).')),

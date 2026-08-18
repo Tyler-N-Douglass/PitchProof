@@ -818,9 +818,16 @@ export const ACTIONS = [
   {
     id: 'rendition.setNotes', label: 'Note a rendition', group: 'Recipes', palette: false, control: true,
     mutates: true, sample: (app) => ({ arg: (app.proof.renditions[0] || {}).id || 'rd_none', value: 'From their own CMS.' }),
-    run: (app, arg, ctx) => app.mutate('Note rendition', (doc) => M.setRenditionNotes(doc, String(arg), value(ctx)), {
-      coalesceKey: `rendition.setNotes:${arg}`, scope: 'recipes',
-    }),
+    run: (app, arg, ctx) => {
+      const rendition = M.findRendition(app.proof, String(arg));
+      if (!rendition) return undefined;
+      // §9: the promotion record lives inside `notes` and is signed. Editing the
+      // prose must not destroy it, so the two are composed rather than replaced.
+      const notes = app.services.composeNotes(rendition, value(ctx));
+      return app.mutate('Note rendition', (doc) => M.setRenditionNotes(doc, String(arg), notes), {
+        coalesceKey: `rendition.setNotes:${arg}`, scope: 'recipes',
+      });
+    },
   },
   {
     id: 'rendition.clientSupplied', label: 'Mark a rendition client-supplied', group: 'Recipes', palette: false, control: true,
