@@ -34,7 +34,12 @@ export function sha256Bytes(data) {
   ]);
   const bitLenHi = Math.floor(data.length / 0x20000000);
   const bitLenLo = (data.length << 3) >>> 0;
-  const padded = new Uint8Array((((data.length + 9) >> 6) + 1) << 6);
+  // Smallest multiple of 64 that fits the message, the 0x80 terminator and the
+  // 8-byte length. `(len + 9 + 63) >> 6 << 6` is the correct rounding; rounding
+  // with `((len + 9) >> 6) + 1` over-allocates a whole block whenever len + 9 is
+  // already a multiple of 64 (len congruent to 55 mod 64), which silently
+  // produces a wrong digest for exactly those lengths.
+  const padded = new Uint8Array(((data.length + 9 + 63) >> 6) << 6);
   padded.set(data);
   padded[data.length] = 0x80;
   const dv = new DataView(padded.buffer);
@@ -80,17 +85,21 @@ export function sha256Hex(str) {
 }
 
 /**
- * FNV-1a 32-bit over a string. Fast, non-cryptographic, used for bucketing and
- * short display digests — never for identity that must not collide.
+ * FNV-1a 32-bit over the UTF-8 bytes of a string, so it matches the published
+ * FNV reference vectors. Fast, non-cryptographic, used for bucketing and short
+ * display digests — never for identity that must not collide.
+ *
+ * (`fnv1a64` in `prng.js` deliberately hashes UTF-16 code units instead: it
+ * seeds named PRNG substreams, and changing how it hashes would change every
+ * generated id in every existing project.)
  * @param {string} s
  * @returns {number} unsigned 32-bit
  */
 export function fnv1a32(s) {
+  const bytes = utf8Encode(s);
   let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i) & 0xff;
-    h = Math.imul(h, 0x01000193) >>> 0;
-    h ^= (s.charCodeAt(i) >> 8) & 0xff;
+  for (let i = 0; i < bytes.length; i++) {
+    h ^= bytes[i];
     h = Math.imul(h, 0x01000193) >>> 0;
   }
   return h >>> 0;

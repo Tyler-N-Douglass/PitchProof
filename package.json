@@ -6,13 +6,15 @@
   "description": "Compile a prospect's own content and brand into a self-contained, offline, branchable proof artifact.",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test --test-concurrency=4 test/",
+    "test": "node --test --test-concurrency=4 \"test/**/*.test.mjs\"",
     "verify:offline": "node scripts/verify-offline.mjs",
     "verify:determinism": "node scripts/lint-determinism.mjs",
-    "verify": "node scripts/lint-determinism.mjs && node --test --test-concurrency=4 test/ && node scripts/build.mjs --verify-repeat && node scripts/verify-offline.mjs"
+    "verify": "node scripts/lint-determinism.mjs && npm test && node scripts/build.mjs --verify-repeat && node scripts/verify-offline.mjs"
   },
   "devDependencies": {
     "playwright": "^1.56.1"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  }
 }
