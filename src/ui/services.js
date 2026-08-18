@@ -290,6 +290,72 @@ export function makeServices(env) {
       } catch (e) { return err(`Specimen capture failed: ${message(e)}`, e); }
     },
 
+    /**
+     * §8's per-specimen raw-HTML opt-in. L6 refuses an opt-in that does not
+     * record who and when, which is why the caller passes a name.
+     * @param {any} specimen
+     * @param {boolean} allowed
+     * @param {string} by
+     * @returns {any}
+     */
+    setRawOptIn(specimen, allowed, by) {
+      if (!specimenLane) return laneErr('specimen');
+      try { return ok(specimenLane.setRawHtmlOptIn(specimen, { allowed, by, at: clock() })); }
+      catch (e) { return err(`Could not change the raw-HTML opt-in: ${message(e)}`, e); }
+    },
+
+    /**
+     * Put one stripped block back (§8). The lane matches the entry and returns a
+     * new specimen; the studio commits it through the command stack, so a
+     * restore is as undoable as any other edit.
+     * @param {any} specimen
+     * @param {any} entry
+     * @returns {any}
+     */
+    restoreStripped(specimen, entry) {
+      if (!specimenLane) return laneErr('specimen');
+      try { return ok(specimenLane.restoreBlock(specimen, entry)); }
+      catch (e) { return err(`Could not restore that block: ${message(e)}`, e); }
+    },
+
+    /**
+     * @param {any} specimen
+     * @returns {any}
+     */
+    restoreAllStripped(specimen) {
+      if (!specimenLane) return laneErr('specimen');
+      try { return ok(specimenLane.restoreAllBlocks(specimen)); }
+      catch (e) { return err(`Could not restore those blocks: ${message(e)}`, e); }
+    },
+
+    /**
+     * Record a content edit on a specimen. §18.3 requires the artifact to say
+     * when a specimen was edited, so this never silently changes blocks: L6
+     * refuses an edit that does not say what changed.
+     * @param {any} specimen
+     * @param {any[]} blocks
+     * @param {string} note
+     * @returns {any}
+     */
+    editSpecimenBlocks(specimen, blocks, note) {
+      if (!specimenLane) {
+        return ok({ ...specimen, blocks, edited: true, editNotes: [...(specimen.editNotes || []), note] });
+      }
+      try { return ok(specimenLane.markEdited(specimen, { blocks, note, at: clock() })); }
+      catch (e) { return err(`Could not record that edit: ${message(e)}`, e); }
+    },
+
+    /**
+     * The raw-HTML fallback blocks, empty unless the specimen was opted in.
+     * @param {any} specimen
+     * @returns {{blocks: any[], allowed: boolean, reason: string}}
+     */
+    rawFallback(specimen) {
+      if (!specimenLane) return { blocks: [], allowed: false, reason: 'the specimen lane is not wired into this build' };
+      try { return specimenLane.rawFallbackBlocks(specimen); }
+      catch { return { blocks: [], allowed: false, reason: 'raw HTML could not be read' }; }
+    },
+
     // -- recipes ------------------------------------------------------------
 
     /** @returns {any[]} the eight §9 seed recipes, or an empty library */

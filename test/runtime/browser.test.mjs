@@ -217,3 +217,78 @@ test('reduced motion is honoured in the browser', async (t) => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('presenter view opens a real second window and stays in step with the deck', async (t) => {
+  const chromium = await loadChromium();
+  if (!chromium) return t.skip('playwright is not linked in node_modules');
+
+  const dir = mkdtempSync(join(tmpdir(), 'pp-browser-pv-'));
+  const file = join(dir, 'smoke.html');
+  writeFileSync(file, buildDocument(makeProof({ emitOptions: { mode: 'presenter' } })));
+
+  const browser = await chromium.launch();
+  try {
+    const context = await browser.newContext();
+    /** @type {string[]} */
+    const attempted = [];
+    await context.route('**/*', (route) => {
+      const url = route.request().url();
+      if (url.startsWith('file://') || url === 'about:blank') { route.continue(); return; }
+      attempted.push(url);
+      route.abort();
+    });
+    const page = await context.newPage();
+    await page.goto(pathToFileURL(file).href, { waitUntil: 'load' });
+    await page.waitForFunction(() => Boolean(window.__pp));
+
+    // `p` opens it. §2: presenter view is toggled explicitly, never assumed.
+    const [presenter] = await Promise.all([
+      context.waitForEvent('page'),
+      page.keyboard.press('p'),
+    ]);
+    await presenter.waitForSelector('.ppv-root');
+
+    assert.equal(await page.evaluate(() => window.__pp.runtime.presenterOpen), true);
+
+    // It shows the current beat, the note, what is next, and the timer at zero.
+    const text = await presenter.textContent('.ppv-root');
+    assert.ok(text.includes('Headline for sc_spine_0'), text.slice(0, 200));
+    assert.ok(text.includes('Presenter note'));
+    assert.ok(text.includes('Up next'));
+    assert.equal((await presenter.textContent('.ppv-timer-value')).trim(), '00:00');
+
+    // Driving the deck from the main window updates the second screen.
+    await page.keyboard.press('ArrowDown');
+    await presenter.waitForFunction(() => document.body.textContent.includes('Scene 2 / 5'));
+
+    // And driving it from the presenter window moves the main one — the
+    // presenter's hands may be on either keyboard.
+    await presenter.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => window.__pp.runtime.nav.sceneIndex), 2);
+
+    // The timer is manual: it reads zero until the presenter starts it, and
+    // §12 forbids an automatic countdown.
+    await presenter.click('[data-ppv-action="timer-toggle"]');
+    assert.equal(await presenter.textContent('.ppv-timer-toggle'), 'Pause');
+    await presenter.click('[data-ppv-action="timer-reset"]');
+    assert.equal((await presenter.textContent('.ppv-timer-value')).trim(), '00:00');
+
+    // A branch offered here can be jumped from the second screen.
+    await page.evaluate(() => window.__pp.runtime.run('goToScene', 'sc_spine_1'));
+    await presenter.waitForFunction(() => document.body.textContent.includes('approvals process'));
+    await presenter.click('[data-ppv-jump="bn_approvals"]');
+    assert.equal(await page.evaluate(() => window.__pp.runtime.nav.sequenceId), 'bn_approvals');
+    await presenter.waitForFunction(() => document.body.textContent.includes('Off spine'));
+
+    // Closing it releases everything and leaves the deck where it was.
+    const sceneBefore = await page.evaluate(() => window.__pp.runtime.nav.sceneIndex);
+    await page.keyboard.press('p');
+    assert.equal(await page.evaluate(() => window.__pp.runtime.presenterOpen), false);
+    assert.equal(await page.evaluate(() => window.__pp.runtime.nav.sceneIndex), sceneBefore);
+
+    assert.deepEqual(attempted, [], `presenter view attempted network: ${attempted.join(', ')}`);
+  } finally {
+    await browser.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

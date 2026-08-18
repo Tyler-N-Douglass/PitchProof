@@ -240,6 +240,13 @@ export const SEMANTIC_CHROMA_FRACTION = 0.8;
 export const SEMANTIC_MIN_CHROMA_FRACTION = CHROMA_BANDS.accent.min;
 
 /**
+ * How strongly colourfulness counts against a border candidate. Set above 1 so
+ * it outweighs the whole contrast term's 0..1 range: given a neutral and a
+ * vivid candidate that both meet 3:1, the neutral always wins.
+ */
+export const BORDER_CHROMA_WEIGHT = 1.5;
+
+/**
  * Tint carried by the synthesised neutral anchors: half of the surface chroma
  * ceiling, so an anchor is recognisably the brand's neutral rather than a
  * generic grey, while staying well inside the band a surface is allowed.
@@ -737,8 +744,11 @@ function resolveBorder(surfaceHex, ctx, rng, assigned = []) {
       // or accent turns every card outline into a brand statement, so a
       // collision with an already-assigned role is priced.
       const collides = taken.some((lab) => deltaEok(lab, c.lab) < DUPLICATE_DELTA_E) ? 0.6 : 0;
+      // Chroma is weighted above the contrast term here, unlike everywhere
+      // else: a border is a boundary, not a signal, and a saturated hairline
+      // around every card competes with the content it is supposed to frame.
       return (r - CONTRAST_AA_NONTEXT) / (MAX_CONTRAST - CONTRAST_AA_NONTEXT)
-        + 0.5 * c.chromaFraction
+        + BORDER_CHROMA_WEIGHT * c.chromaFraction
         + collides
         + (c.source === 'derived' ? 0.3 : 0);
     }, rng);

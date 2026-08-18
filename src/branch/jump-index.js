@@ -81,9 +81,19 @@ export const DEFAULT_LIMIT = 8;
  * @typedef {object} JumpIndex
  * @property {JumpEntry[]} entries
  * @property {Map<string, JumpEntry>} byBranchId
+ * @property {Map<string, number[]>} postings
+ *   The candidate index: token prefixes (`p:`), character trigrams (`g:`) and
+ *   acronym prefixes (`a:`) to the entries that contain them. A query scores
+ *   the handful of branches that could possibly match instead of all of them,
+ *   which is the difference between a search that feels instant and one a
+ *   presenter notices.
  * @property {number} termCount
+ * @property {number} postingCount
  * @property {string} deckFingerprint
  */
+
+/** How many leading characters of a token are indexed as prefixes. */
+export const PREFIX_DEPTH = 5;
 
 /**
  * Build the jump index over every branch in a deck.
@@ -144,12 +154,92 @@ export function buildJumpIndex(deck) {
     });
   });
 
+  const postings = buildPostings(entries);
+  let postingCount = 0;
+  for (const list of postings.values()) postingCount += list.length;
+
   return {
     entries,
     byBranchId: new Map(entries.map((e) => [e.branchId, e])),
+    postings,
     termCount: entries.reduce((n, e) => n + e.terms.length, 0),
+    postingCount,
     deckFingerprint: deck.fingerprint,
   };
+}
+
+/**
+ * The candidate index. Every key an entry could be found by, mapped to the
+ * entries that carry it, built once so a keystroke never scans the deck.
+ * @param {JumpEntry[]} entries
+ * @returns {Map<string, number[]>}
+ */
+function buildPostings(entries) {
+  /** @type {Map<string, number[]>} */
+  const postings = new Map();
+  entries.forEach((entry, i) => {
+    /** @type {Set<string>} */
+    const keys = new Set();
+    for (const term of entry.terms) {
+      for (const token of term.tokens) {
+        const depth = Math.min(PREFIX_DEPTH, token.text.length);
+        for (let n = 1; n <= depth; n++) keys.add(`p:${token.text.slice(0, n)}`);
+      }
+      for (const gram of term.grams) keys.add(`g:${gram}`);
+      for (const form of [term.acronym.strong, term.acronym.all]) {
+        const depth = Math.min(PREFIX_DEPTH, form.length);
+        for (let n = 2; n <= depth; n++) keys.add(`a:${form.slice(0, n)}`);
+      }
+    }
+    for (const key of keys) {
+      const list = postings.get(key);
+      if (list) list.push(i);
+      else postings.set(key, [i]);
+    }
+  });
+  return postings;
+}
+
+/**
+ * The entries a query could possibly match, in index order.
+ *
+ * Anything reachable by a solid strategy — exact, prefix, word prefix, acronym,
+ * every-word — is reachable through a token-prefix or acronym posting. Anything
+ * reachable by substring or bounded edit distance shares a character trigram
+ * with the query by construction. What this filter does drop is a *subsequence*
+ * hit with no trigram in common with the query — the loosest signal the scorer
+ * has, and the one whose absence a presenter reads as "it didn't match" rather
+ * than "it matched the wrong thing".
+ *
+ * @param {JumpIndex} index
+ * @param {string} q          folded query
+ * @param {import('./text.js').Token[]} qTokens
+ * @param {string} qSqueezed
+ * @param {Set<string>} qGrams
+ * @returns {number[]}
+ */
+function candidateEntries(index, q, qTokens, qSqueezed, qGrams) {
+  const seen = new Uint8Array(index.entries.length);
+  /** @type {number[]} */
+  const out = [];
+  const take = (key) => {
+    const list = index.postings.get(key);
+    if (!list) return;
+    for (const i of list) {
+      if (seen[i]) continue;
+      seen[i] = 1;
+      out.push(i);
+    }
+  };
+
+  for (const token of qTokens) take(`p:${token.text.slice(0, PREFIX_DEPTH)}`);
+  if (qSqueezed.length >= 2) take(`a:${qSqueezed.slice(0, PREFIX_DEPTH)}`);
+  for (const gram of qGrams) take(`g:${gram}`);
+  // A one- or two-character query has no trigram of its own; the prefix
+  // postings above are the whole candidate set, which is exactly right — at
+  // that length anything looser is noise.
+  out.sort((a, b) => a - b);
+  return out;
 }
 
 /**
@@ -205,7 +295,8 @@ export function searchJump(index, query, options = {}) {
 
   /** @type {JumpMatch[]} */
   const hits = [];
-  for (const entry of index.entries) {
+  for (const candidate of candidateEntries(index, q, qTokens, qSqueezed, qGrams)) {
+    const entry = index.entries[candidate];
     let best = null;
     for (const term of entry.terms) {
       const scored = scoreTerm(term, { q, qTokens, qSqueezed, qGrams, budget });
