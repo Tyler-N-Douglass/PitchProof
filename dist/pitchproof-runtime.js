@@ -588,13 +588,19 @@ const { contentHash } = __require("core/hash.js");
  * @property {number} beatIndex
  * @property {ReturnFrame[]} stack
  * @property {string[]} visited     scene ids shown so far, in order, deduplicated
- * @property {{from: {sequenceId: string, sceneIndex: number, beatIndex: number}, frame: ReturnFrame}|null} [exitedFrom]
+ * @property {{from: {sequenceId: string, sceneIndex: number, beatIndex: number}, stack: ReturnFrame[]}|null} [exitedFrom]
  *   Set only by the automatic exit that fires when the presenter advances past
  *   the last beat of a branch. It makes that one transition reversible: pressing
  *   back immediately afterwards re-enters the branch where it was left, instead
  *   of walking into the previous spine scene. It is cleared by every other
  *   transition, and it is deliberately absent from `stateHash` — it changes what
  *   the back key does, not what is on screen.
+ *
+ *   It records the **whole** stack the exit unwound, not the top frame. A
+ *   `returnPolicy: 'anchor'` exit pops one frame, but `'nextSpineScene'` unwinds
+ *   all of them; restoring only the top frame would leave the stack floored on a
+ *   branch instead of the spine, and the next return would throw one action
+ *   later — the presenter presses back, then `r`, and the deck stops responding.
  */
 
 /**
@@ -649,6 +655,14 @@ function checkInvariants(deck, state, action) {
   }
   for (const frame of state.stack) {
     if (!deck.sequences.has(frame.sequenceId)) fail(`stack frame names unknown sequence ${frame.sequenceId}`);
+  }
+  // The floor is always the spine: a frame is pushed only by a jump, recording
+  // where the jump came from, and the first jump can only be made from the
+  // spine. `unwindToNextSpineScene` computes from `stack[0]` on exactly this
+  // basis, so it is checked here rather than assumed — a state whose floor is a
+  // branch passes every other check and throws one action later.
+  if (state.stack.length > 0 && state.stack[0].sequenceId !== SPINE) {
+    fail(`the return stack is floored on ${state.stack[0].sequenceId}, not the spine`);
   }
   return state;
 }
@@ -744,7 +758,7 @@ function navigate(deck, state, action) {
       if (state.stack.length > 0) {
         const exitedFrom = {
           from: { sequenceId: state.sequenceId, sceneIndex: state.sceneIndex, beatIndex: state.beatIndex },
-          frame: state.stack[state.stack.length - 1],
+          stack: state.stack,
         };
         const returned = navigate(deck, state, { type: 'return' });
         return { ...returned, exitedFrom };
@@ -868,8 +882,8 @@ function navigate(deck, state, action) {
  * @returns {NavState}
  */
 function reenterExited(deck, state, action) {
-  const { from, frame } = state.exitedFrom;
-  return checkInvariants(deck, at(deck, { ...state, stack: state.stack.concat(frame) }, {
+  const { from, stack } = state.exitedFrom;
+  return checkInvariants(deck, at(deck, { ...state, stack }, {
     sequenceId: from.sequenceId,
     sceneIndex: from.sceneIndex,
     beatIndex: from.beatIndex,

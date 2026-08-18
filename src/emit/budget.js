@@ -376,55 +376,62 @@ export function budgetAssets(proof, maxBytes, options = {}) {
 
   if (total > budget) {
     // Greedy: always spend the least important asset that still has a step.
+    // A pass "advances" whenever any asset still had a ladder step to try,
+    // even when that step produced nothing — the first step is a lossless
+    // re-encode, and an image that was already encoded well gives back no
+    // bytes for it. Stopping there would leave the budget unmet with the whole
+    // ladder untouched.
     const order = assets.slice().sort((a, b) => b.rank - a.rank);
     // -1, so the first step attempted is ladder index 0: a lossless re-encode.
-    // A PNG written by another encoder often gives back real bytes for nothing,
-    // and spending pixels before trying that would be gratuitous.
     /** @type {Map<string, number>} */
     const stepIndex = new Map(assets.map((a) => [a.assetId, -1]));
     /** @type {Set<string>} */
     const exhausted = new Set();
 
-    let progressed = true;
-    while (total > budget && progressed) {
-      progressed = false;
+    let advanced = true;
+    while (total > budget && advanced) {
+      advanced = false;
       for (const asset of order) {
         if (total <= budget) break;
         if (exhausted.has(asset.assetId)) continue;
         const next = /** @type {number} */ (stepIndex.get(asset.assetId)) + 1;
         if (next >= SCALE_LADDER.length) { exhausted.add(asset.assetId); continue; }
 
+        stepIndex.set(asset.assetId, next);
+        advanced = true;
+        if (next === SCALE_LADDER.length - 1) exhausted.add(asset.assetId);
+
         const scale = SCALE_LADDER[next];
         const current = replacements.get(asset.assetId);
         const currentBytes = current ? current.bytes : asset.bytes;
-        // The prediction: emitted bytes scale with pixel count, and step 0 is a
-        // lossless re-encode whose gain we do not pretend to know in advance.
         const baseBytes = /** @type {number} */ (originalBytes.get(asset.assetId));
+        // The prediction: emitted bytes scale with pixel count. Step 0 is a
+        // lossless re-encode, whose gain we do not pretend to know in advance.
         const predicted = next === 0 ? Math.round(baseBytes * 0.97) : Math.round(baseBytes * scale * scale);
 
-        const produced = degradeAsset({ ...asset, dataUri: asset.dataUri, bytes: baseBytes }, scale, { quality, resample: options.resample });
-        stepIndex.set(asset.assetId, next);
-        if (!produced) {
-          if (next === SCALE_LADDER.length - 1) exhausted.add(asset.assetId);
-          continue;
-        }
+        const produced = degradeAsset({ ...asset, bytes: baseBytes }, scale, { quality, resample: options.resample });
+        if (!produced) continue;
         if (produced.bytes >= currentBytes) continue;
 
         total -= currentBytes - produced.bytes;
         replacements.set(asset.assetId, produced);
         progress.set(asset.assetId, { steps: next, how: produced.how, predicted });
-        progressed = true;
       }
     }
 
-    for (const asset of assets) {
-      if (!replacements.has(asset.assetId)) {
+    // Only an asset that was tried to exhaustion and still could not give
+    // anything back is "undegradable", and only when the budget was actually
+    // missed — otherwise the list would name assets the allocator simply never
+    // needed to touch.
+    if (total > budget) {
+      for (const asset of assets) {
+        if (replacements.has(asset.assetId)) continue;
         const parsed = parseDataUri(asset.dataUri);
         const mime = parsed ? parsed.mime : 'unknown';
         undegradable.push({
           assetId: asset.assetId,
           bytes: asset.bytes,
-          reason: `${mime} cannot be re-encoded by the in-repo codec; supply a host resampler (deps.resample) or capture it smaller`,
+          reason: `${mime} cannot be re-encoded any smaller by the in-repo codec; supply a host resampler (deps.resample) or capture it smaller`,
         });
       }
     }

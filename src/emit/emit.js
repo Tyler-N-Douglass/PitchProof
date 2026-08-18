@@ -41,7 +41,7 @@ import { encodePayload, splitMedia } from './model.js';
 import { ppRehydrateMedia } from './artifact-runtime.js';
 import { inlineRuntime } from './document.js';
 import { compileFallbackTheme, compileFontFaces } from './theme.js';
-import { scanForNetworkReferences } from './scan.js';
+import { scanForNetworkReferences, scanModelAssets } from './scan.js';
 import { assertProvenance, allScenesOf } from './provenance.js';
 import { budgetAssets, collectAssets, sizeBudgetFinding } from './budget.js';
 
@@ -137,6 +137,10 @@ export async function emit(proof, options, deps) {
   const findings = [];
 
   findings.push(...scanForNetworkReferences(html, { where: 'artifact document' }));
+
+  // An asset the model names but never inlines would vanish from the artifact
+  // without ever reaching the document, so the document scan cannot see it.
+  findings.push(...scanModelAssets(reconstructed));
 
   // Scenes past the first are not in the document — they are rendered at
   // presentation time from the model payload. Scanning only the file would

@@ -24,7 +24,7 @@
 export { emit, buildDocument, layoutsMissingFor, staleCaptureFindings, STALE_CAPTURE_DAYS } from './emit.js';
 
 export {
-  scanForNetworkReferences, scanCss, scanJs, scanAbsoluteUrls, scanNestedDataUri,
+  scanForNetworkReferences, scanModelAssets, scanCss, scanJs, scanAbsoluteUrls, scanNestedDataUri,
   classifyUrl, isW3cNamespace, parseSrcset, networkFinding,
   W3C_NAMESPACES, URL_ALLOWLIST, URL_ATTRS, SRCSET_ATTRS, JS_NETWORK_TOKENS,
 } from './scan.js';

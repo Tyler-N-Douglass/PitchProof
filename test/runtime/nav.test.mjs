@@ -323,3 +323,49 @@ test('the exit marker is cleared by any other transition', () => {
     assert.equal(navigate(deck, exited, action).exitedFrom, null, action.type);
   }
 });
+
+test('a nextSpineScene exit from a nested branch is reversible, and the stack floor stays the spine', () => {
+  // Found by L9's return-stack property test: `exitedFrom` used to record only
+  // the top frame, which is right for `anchor` (one pop) and wrong for
+  // `nextSpineScene` (which unwinds everything). Stepping back then restored a
+  // stack floored on a branch, and the next return threw — the presenter
+  // presses back, then `r`, and the deck stops responding. §22.4 exactly.
+  const nested = makeProof();
+  nested.branches = [
+    branch('bn_outer', 'Outer objection', [scene('sc_o0', 1, { branchAnchors: ['bn_inner'] })], 'anchor'),
+    branch('bn_inner', 'Inner objection', [scene('sc_i0', 1)], 'nextSpineScene'),
+  ];
+  nested.spine[1].branchAnchors = ['bn_outer'];
+  const d = buildDeck(nested);
+
+  let s = navigate(d, initialState(d), { type: 'goToScene', sceneId: 'sc_spine_1' });
+  s = navigate(d, s, { type: 'jump', branchId: 'bn_outer' });
+  s = navigate(d, s, { type: 'jump', branchId: 'bn_inner' });
+  assert.equal(s.stack.length, 2);
+  const insideInner = stateHash(d, s);
+
+  s = navigate(d, s, next);                       // off the end of the inner branch
+  assert.equal(s.sequenceId, SPINE);
+  assert.deepEqual(s.stack, []);
+  assert.ok(s.exitedFrom, 'the automatic exit is recorded');
+
+  s = navigate(d, s, prev);                       // and is reversible
+  assert.equal(stateHash(d, s), insideInner, 'back must restore the exact prior state');
+  assert.equal(s.stack.length, 2, 'the whole unwound stack comes back, not just the top frame');
+  assert.equal(s.stack[0].sequenceId, SPINE, 'the floor is the spine');
+
+  s = navigate(d, s, { type: 'returnToSpine' });   // and does not throw afterwards
+  assert.equal(s.sequenceId, SPINE);
+  assert.deepEqual(s.stack, []);
+});
+
+test('a stack floored on a branch is rejected as the impossible state it is', () => {
+  const bad = {
+    ...initialState(deck),
+    sequenceId: 'bn_legal',
+    stack: [
+      { sequenceId: 'bn_approvals', sceneIndex: 0, beatIndex: 0, returnPolicy: 'anchor', branchId: 'bn_legal' },
+    ],
+  };
+  assert.throws(() => checkInvariants(deck, bad, 'test'), /floored on bn_approvals, not the spine/);
+});

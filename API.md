@@ -290,7 +290,9 @@ allPositions(deck): {sequenceId, sceneIndex, beatIndex, sceneId}[]
 ```ts
 type NavState = { sequenceId: string; sceneIndex: number; beatIndex: number;
                   stack: ReturnFrame[]; visited: string[];
-                  exitedFrom: {from: {sequenceId, sceneIndex, beatIndex}, frame: ReturnFrame} | null };
+                  // `stack` here is the WHOLE stack the automatic exit unwound,
+                  // not its top frame: `nextSpineScene` unwinds all of them.
+                  exitedFrom: {from: {sequenceId, sceneIndex, beatIndex}, stack: ReturnFrame[]} | null };
 type ReturnFrame = { sequenceId; sceneIndex; beatIndex; returnPolicy: 'anchor'|'nextSpineScene'; branchId };
 type NavAction =
   | {type:'nextBeat'} | {type:'prevBeat'} | {type:'nextScene'} | {type:'prevScene'}
@@ -300,8 +302,8 @@ type NavAction =
 ```
 
 Invariants, checked on every transition: stack depth never negative; the stack
-is empty **iff** the active sequence is the spine; the position always names a
-real scene and a real beat.
+is empty **iff** the active sequence is the spine; the stack floor is always the
+spine; the position always names a real scene and a real beat.
 
 ### Beats — `src/runtime/beats.js`
 

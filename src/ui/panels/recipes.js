@@ -1,0 +1,282 @@
+/**
+ * The Recipes panel (§9).
+ *
+ * §9 is explicit that the manual paste path "must be excellent, not a fallback:
+ * a side-by-side paste surface with block-level alignment to the source
+ * specimen". That surface is the centre of this panel, not an alternative
+ * hidden behind an adapter:
+ *
+ *   - the source specimen's blocks on the left, the pasted rendition's parsed
+ *     blocks on the right, aligned row by row, with the alignment score and
+ *     every unmatched block called out — because an unmatched block is either a
+ *     deliberate structural change worth seeing or a paste that went wrong;
+ *   - the channel budget for the chosen label enforced and *visible*, so a
+ *     "SMS" rendition that is 400 characters long says so before it reaches a
+ *     scene;
+ *   - provenance on every rendition, with promotion to `verified-by-user` as a
+ *     deliberate, recorded act rather than a toggle. §9 forbids defaulting to
+ *     it, §18 forbids implying it, and the emitter enforces both — this panel
+ *     makes the state impossible to miss on the way there.
+ *
+ * @module ui/panels/recipes
+ */
+
+import { h, cx } from '../../core/vdom.js';
+import {
+  badge, button, checkbox, empty, field, notice, pair, pairs, row, section, select, textarea, toolbar,
+} from '../components.js';
+import { formatPercent, humanize, plural, truncate } from '../format.js';
+import { blockSummary, findRendition, findSpecimen } from '../model.js';
+import { PROVENANCE_COPY } from '../constants.js';
+import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
+
+/**
+ * @param {any} app
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+export function renderRecipesPanel(app) {
+  const proof = app.proof;
+  const recipes = proof.recipes || [];
+  const specimens = proof.specimens || [];
+  const specimen = findSpecimen(proof, app.ui.selection.specimenId) || specimens[0] || null;
+  const recipe = recipes.find((r) => r.id === app.ui.selection.recipeId) || recipes[0] || null;
+
+  return h('div', { class: 'st-panel' },
+    renderLibrary(app, recipes, recipe),
+    renderPasteSurface(app, specimen, recipe),
+    renderRenditions(app, proof));
+}
+
+/**
+ * @param {any} app
+ * @param {any[]} recipes
+ * @param {any} selected
+ */
+function renderLibrary(app, recipes, selected) {
+  return section({
+    title: 'Recipe library',
+    subtitle: 'The eight from §9. A recipe is the point you are making, not a button that generates anything.',
+    actions: toolbar(button({ act: 'recipe.loadSeed', variant: recipes.length ? 'ghost' : 'primary' },
+      recipes.length ? 'Reload the seed library' : 'Load the eight seed recipes')),
+  },
+  recipes.length
+    ? h('div', { class: 'st-rows' }, recipes.map((r) => row({
+      act: 'recipe.select', arg: r.id, key: r.id, selected: !!selected && r.id === selected.id,
+      title: h('span', null, r.name, h('code', { class: 'st-mono st-dim' }, ` ${r.id}`)),
+      meta: h('span', null, r.intent),
+      trailing: button({ act: 'recipe.remove', arg: r.id, variant: 'quiet', title: `Remove ${r.name}` }, '×'),
+    })))
+    : empty('No recipes yet.', button({ act: 'recipe.loadSeed', variant: 'primary' }, 'Load the eight seed recipes')),
+  selected
+    ? pairs(
+      pair('Intent', selected.intent),
+      pair('Takes', h('span', { class: 'st-mono' }, (selected.inputKinds || []).join(', ') || 'any specimen')),
+      pair('Produces', h('span', { class: 'st-mono' }, (selected.outputLabels || []).join(' · ') || '—')),
+    )
+    : null);
+}
+
+/**
+ * The side-by-side surface §9 calls the default way renditions get made.
+ * @param {any} app
+ * @param {any} specimen
+ * @param {any} recipe
+ */
+function renderPasteSurface(app, specimen, recipe) {
+  const paste = String(app.draft('rendition.paste', ''));
+  const label = String(app.draft('rendition.label', ''));
+  const parsed = paste.trim() ? app.services.parsePasted(paste) : [];
+  const sourceBlocks = specimen ? specimen.blocks || [] : [];
+  const alignment = parsed.length ? app.services.alignBlocks(sourceBlocks, parsed) : { pairs: [], score: 0 };
+  const budget = label ? app.services.channelBudget(label) : null;
+  const budgeted = budget ? app.services.enforceBudget(parsed, budget) : null;
+
+  return section({
+    title: 'Paste a rendition',
+    subtitle: 'Their page on the left, your output on the right, aligned block by block. This is the default path (§9).',
+    actions: toolbar(
+      button({
+        act: 'rendition.create', variant: 'primary',
+        disabled: !specimen || !recipe || !paste.trim(),
+        title: !specimen ? 'Pick a specimen first' : !recipe ? 'Pick a recipe first' : 'Create the rendition',
+      }, 'Create rendition'),
+      button({
+        act: 'rendition.runAdapter', variant: 'ghost',
+        disabled: !app.ui.settings.adapterEndpoint,
+        title: app.ui.settings.adapterEndpoint ? 'Call the configured adapter' : 'No adapter is configured (Settings)',
+      }, 'Use the adapter'),
+    ),
+  },
+  h('div', { class: 'st-grid-2' },
+    select({
+      label: 'Source specimen', act: 'specimen.select',
+      value: specimen ? specimen.id : '',
+      options: (app.proof.specimens || []).map((s) => ({ value: s.id, label: truncate(s.title, 40) })),
+      disabled: !(app.proof.specimens || []).length,
+      key: 'paste-specimen',
+      hint: specimen ? `${plural(sourceBlocks.length, 'block')} on the left.` : 'Capture a specimen first.',
+    }),
+    select({
+      label: 'Recipe', act: 'recipe.select',
+      value: recipe ? recipe.id : '',
+      options: (app.proof.recipes || []).map((r) => ({ value: r.id, label: r.name })),
+      disabled: !(app.proof.recipes || []).length,
+      key: 'paste-recipe',
+      hint: recipe ? recipe.intent : 'Load the recipe library first.',
+    })),
+
+  field({
+    label: 'Rendition label', act: 'rendition.labelDraft', value: label,
+    placeholder: (recipe && (recipe.outputLabels || [])[0]) || 'de-DE',
+    key: 'paste-label',
+    hint: budget
+      ? `“${label}” is a channel with a budget: ${budget.maxChars} characters, ${budget.maxWords} words.`
+      : (recipe && (recipe.outputLabels || []).length
+        ? `Expected labels for this recipe: ${(recipe.outputLabels || []).join(', ')}.`
+        : 'What this variant is — a locale, a channel, a breakpoint, a review state.'),
+  }),
+
+  h('div', { class: 'st-align' },
+    h('div', { class: 'st-align-head' },
+      h('span', null, specimen ? `Source · ${truncate(specimen.title, 30)}` : 'Source'),
+      h('span', null, 'Rendition'),
+      h('span', { class: 'st-align-score' }, parsed.length
+        ? h('span', null, 'Alignment ', h('strong', { class: cx('st-mono', alignment.score < 0.5 && 'st-warn') }, formatPercent(alignment.score)))
+        : 'Nothing pasted yet')),
+    h('div', { class: 'st-align-body' },
+      h('div', { class: 'st-align-col' },
+        sourceBlocks.length
+          ? h('ol', { class: 'st-align-list' }, sourceBlocks.map((b, i) => h('li', {
+            class: cx('st-align-cell', isPaired(alignment, i, 0) ? null : 'st-align-cell--unmatched'),
+            [KEY_ATTR]: `src-${i}`,
+          },
+          badge(b.type, 'dim'),
+          h('span', { class: 'st-align-text' }, truncate(blockSummary(b), 160)))))
+          : h('p', { class: 'st-align-empty' }, 'Pick a specimen to see its blocks here.')),
+      h('div', { class: 'st-align-col' },
+        h('textarea', {
+          class: 'st-input st-textarea st-align-paste',
+          rows: '14',
+          placeholder: 'Paste the rendition here.\n\nBlank lines separate blocks. A leading # makes a heading, a leading - makes a list, a leading > makes a quote.',
+          value: paste,
+          'aria-label': 'Rendition paste',
+          [ACT_ATTR]: 'rendition.pasteDraft',
+          [KEY_ATTR]: 'paste-body',
+        }),
+        parsed.length
+          ? h('ol', { class: 'st-align-list' }, parsed.map((b, i) => h('li', {
+            class: cx('st-align-cell', isPaired(alignment, i, 1) ? null : 'st-align-cell--unmatched'),
+            [KEY_ATTR]: `out-${i}`,
+          },
+          badge(b.type, 'dim'),
+          h('span', { class: 'st-align-text' }, truncate(blockSummary(b), 160)))))
+          : null))),
+
+  parsed.length && alignment.score < 0.5
+    ? notice('warn', `Only ${formatPercent(alignment.score)} of the blocks line up. That is fine when the rendition deliberately restructures the page — and a sign the paste lost its shape when it does not.`)
+    : null,
+
+  budgeted && budgeted.overBy > 0
+    ? notice('bad', `This rendition is ${budgeted.overBy} over the ${label} budget. A channel variant that does not fit its channel is not a proof of anything — trim it before creating it.`)
+    : null,
+
+  notice('info', 'A rendition created here is stamped illustrative. It carries a visible label in the artifact until you mark it client-supplied or promote it, and the emitter enforces that rather than this panel (§9, §22.6).'),
+
+  app.services.has('recipe') ? null : notice('warn', 'The recipe lane is not wired into this build. Pasting still parses and aligns using the studio’s own fallback, but renditions cannot be created until it lands.'));
+}
+
+/**
+ * @param {{pairs: [number|null, number|null][]}} alignment
+ * @param {number} index
+ * @param {0|1} side
+ * @returns {boolean}
+ */
+function isPaired(alignment, index, side) {
+  return (alignment.pairs || []).some((p) => p[side] === index && p[0] !== null && p[1] !== null);
+}
+
+/**
+ * @param {any} app
+ * @param {any} proof
+ */
+function renderRenditions(app, proof) {
+  const renditions = proof.renditions || [];
+  const selected = findRendition(proof, app.ui.selection.renditionId) || renditions[0] || null;
+  const illustrative = renditions.filter((r) => r.provenance === 'illustrative').length;
+
+  return section({
+    title: `Renditions · ${renditions.length}`,
+    subtitle: illustrative
+      ? `${plural(illustrative, 'rendition')} will carry a visible illustrative label in the artifact.`
+      : 'Every rendition here is either the client’s own or verified by you.',
+  },
+  renditions.length
+    ? h('div', { class: 'st-rows' }, renditions.map((r) => {
+      const copy = PROVENANCE_COPY[r.provenance] || PROVENANCE_COPY.illustrative;
+      const source = findSpecimen(proof, r.specimenId);
+      return row({
+        act: 'rendition.select', arg: r.id, key: r.id, selected: !!selected && r.id === selected.id,
+        title: h('span', null, r.label || '(unnamed)', badge(copy.label, copy.tone, copy.describe)),
+        meta: h('span', null,
+          `${plural((r.blocks || []).length, 'block')} · from ${source ? truncate(source.title, 26) : 'a removed specimen'} · ${humanize(r.producedBy)}`),
+        trailing: button({ act: 'rendition.remove', arg: r.id, variant: 'quiet', title: `Remove ${r.label}` }, '×'),
+      });
+    }))
+    : empty('No renditions yet. Paste one above — the “after” side is what makes a before/after scene mean anything.'),
+
+  selected ? renderRenditionDetail(app, selected) : null);
+}
+
+/**
+ * @param {any} app
+ * @param {any} rendition
+ */
+function renderRenditionDetail(app, rendition) {
+  const copy = PROVENANCE_COPY[rendition.provenance] || PROVENANCE_COPY.illustrative;
+  const promoted = rendition.provenance === 'verified-by-user';
+  const budget = app.services.channelBudget(rendition.label);
+  const chars = (rendition.blocks || []).map(blockSummary).join(' ').length;
+
+  return h('div', { class: 'st-subsection' },
+    h('h4', { class: 'st-subsection-title' }, `Provenance · ${rendition.label}`),
+    h('div', { class: 'st-grid-2' },
+      field({
+        label: 'Label', act: 'rendition.setLabel', arg: rendition.id, value: rendition.label,
+        key: `rd-label-${rendition.id}`,
+      }),
+      h('div', { class: 'st-field' },
+        h('span', { class: 'st-field-label' }, 'Current provenance'),
+        h('div', null, badge(copy.label, copy.tone)),
+        h('span', { class: 'st-field-hint' }, copy.describe))),
+    textarea({
+      label: 'Notes', act: 'rendition.setNotes', arg: rendition.id, rows: 3,
+      value: rendition.notes || '', key: `rd-notes-${rendition.id}`,
+      hint: 'Where this came from, in a sentence. Promotion records append here.',
+    }),
+    budget
+      ? pairs(
+        pair('Channel budget', h('span', { class: 'st-mono' }, `${budget.maxChars} chars · ${budget.maxWords} words`)),
+        pair('This rendition', h('span', {
+          class: cx('st-mono', chars > budget.maxChars && 'st-bad'),
+        }, `${chars} chars`)),
+      )
+      : null,
+    checkbox({
+      label: 'This is the client’s own material',
+      act: 'rendition.clientSupplied',
+      arg: rendition.id,
+      checked: rendition.provenance === 'client-supplied',
+      disabled: promoted,
+      hint: 'Only tick this for content they published or supplied. It suppresses the illustrative label.',
+    }),
+    promoted
+      ? notice('ok', 'Promoted to verified-by-user. The promotion is recorded in the notes above with who and when.')
+      : notice('warn', h('div', null,
+        h('p', null, 'Promotion to verified-by-user is a deliberate act. It says you have checked this against what the client would actually publish, and it is recorded against your name.'),
+        h('p', null, 'The tool will never do it for you, and there is no setting that makes it the default (§9).')),
+      button({
+        act: 'rendition.promote', arg: rendition.id, variant: 'primary',
+        disabled: !app.ui.settings.operator,
+        title: app.ui.settings.operator ? 'Record the promotion' : 'Put your name in Settings first',
+      }, 'I have verified this')));
+}

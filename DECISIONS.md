@@ -338,3 +338,34 @@ yet. The §4 contracts settle what a `Specimen` is, but not what to call to get
 one. Without a declared function surface each lane invents its own, and
 integration becomes a rewrite. Declaring it up front costs one document and
 makes the fan-out actually parallel.
+
+---
+
+## D18 — The reversible branch exit records the whole unwound stack, not the top frame
+
+**Unsettled by:** D15 made the automatic exit at the end of a branch reversible
+by recording `exitedFrom`. It did not say what to record, and recording the top
+return frame is the obvious reading.
+
+**Decision.** `exitedFrom.stack` holds the entire return stack as it stood
+inside the branch, and stepping back restores it wholesale. `checkInvariants`
+additionally asserts that `stack[0].sequenceId` is the spine.
+
+**Why.** The obvious reading is wrong, and wrong in the way §22.4 warns about.
+`returnPolicy: 'anchor'` pops one frame, so a single-frame record round-trips.
+`'nextSpineScene'` unwinds the whole stack, so restoring one frame leaves the
+stack floored on a branch. That state passes every other invariant and throws
+one action later: the presenter presses back, then `r`, and the deck stops
+responding in front of the client. `unwindToNextSpineScene` already computed
+from `stack[0]` on the assumption that the floor is the spine, so the assumption
+was load-bearing and unchecked — it is now checked.
+
+Found by L9's return-stack property test, which reached the state in 342 of 1000
+mixed walks and 7 of 200 anchored-only walks. Five keystrokes reproduce it:
+`goToScene → jump A → jump B → space → back → r`. The fix changes no contract
+and no rendered state — `exitedFrom` is excluded from `stateHash` — and is
+pinned by `test/runtime/nav.test.mjs`.
+
+This is the argument for property testing a navigation machine rather than
+enumerating its cases: the defect needed a `nextSpineScene` branch entered from
+inside another branch, which no unit test I wrote thought to construct.

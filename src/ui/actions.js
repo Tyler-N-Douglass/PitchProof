@@ -620,7 +620,11 @@ export const ACTIONS = [
   },
   {
     id: 'specimen.select', label: 'Select a specimen', group: 'Specimens', palette: false, control: true,
-    run: (app, arg) => { app.select({ specimenId: String(arg) }); app.setUi({ section: 'specimens' }); },
+    run: (app, arg, ctx) => {
+      const id = String(value(ctx) || arg || '');
+      if (!id) return;
+      app.select({ specimenId: id });
+    },
   },
   {
     id: 'specimen.remove', label: 'Remove a specimen', group: 'Specimens', palette: false, control: true,
@@ -751,7 +755,10 @@ export const ACTIONS = [
   },
   {
     id: 'recipe.select', label: 'Select a recipe', group: 'Recipes', palette: false, control: true,
-    run: (app, arg) => { app.select({ recipeId: String(arg) }); },
+    run: (app, arg, ctx) => {
+      const id = String(value(ctx) || arg || '');
+      if (id) app.select({ recipeId: id });
+    },
   },
   {
     id: 'recipe.remove', label: 'Remove a recipe', group: 'Recipes', palette: false, control: true,

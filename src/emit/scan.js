@@ -535,3 +535,96 @@ function truncate(s, n = 96) {
 function describe(s) {
   return `"${truncate(s)}"`;
 }
+
+/**
+ * Scan the **model's** assets, not just the rendered document.
+ *
+ * A `MediaRef.dataUri` holding `https://cdn.example/hero.png` never reaches the
+ * artifact: a layout that only renders `data:` sources skips it, and the
+ * document scan then finds nothing to report. That is the right outcome for the
+ * network law and the wrong outcome for the seller, who walks into the room
+ * with a hero image that is simply gone. §13 says degradation is never silent
+ * and §20 axis 9 scores exactly that honesty, so a model asset that is not
+ * inlined is reported here, at severity 1, whether or not any layout tried to
+ * render it.
+ *
+ * §4 settles which finding it is: `MediaRef.dataUri` is documented "always
+ * inlined by emit time", so a URL in that field is not a missing asset, it is
+ * an instruction to fetch — `NETWORK_REFERENCE`, the same as if it had reached
+ * the document.
+ *
+ * Two things this deliberately does not flag, because neither is an instruction
+ * to fetch anything:
+ *
+ *   - `Specimen.sourceUrl`, `BrandSystem.sourceUrl` and a `cta` block's `href`.
+ *     Those record where the prospect's own content came from. They are data
+ *     about a capture, they render as text or as nothing, and no user agent
+ *     resolves them. The document scan still catches a layout that turns one
+ *     into a live `<a href>`.
+ *   - A `raw` content block that was never opted in. §8 requires a per-specimen
+ *     opt-in before raw HTML is presented at all, so an un-opted block is not
+ *     part of the artifact; if it is opted in and rendered, the per-scene
+ *     document scan sees it.
+ *
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @returns {import('../core/contracts.d.ts').Finding[]}
+ */
+export function scanModelAssets(proof) {
+  /** @type {import('../core/contracts.d.ts').Finding[]} */
+  const out = [];
+  if (!proof || typeof proof !== 'object') return out;
+
+  /**
+   * @param {string} value
+   * @param {string} what
+   * @param {Record<string, unknown>} locus
+   */
+  const checkInlined = (value, what, locus) => {
+    const uri = String(value == null ? '' : value).trim();
+    if (uri === '') {
+      out.push(networkFinding({
+        message: `${what} carries no inlined data. §4 requires every asset to be inlined by emit time; an empty reference renders as nothing and the presenter finds out in the room.`,
+        locus,
+      }));
+      return;
+    }
+    if (uri.toLowerCase().startsWith('data:')) {
+      for (const message of scanNestedDataUri(uri)) {
+        out.push(networkFinding({ message: `${what}: ${message}`, locus }));
+      }
+      return;
+    }
+    const verdict = classifyUrl(uri);
+    out.push(networkFinding({
+      message: `${what} is ${describe(uri)} rather than an inlined data: URI (${verdict.ok ? 'not a data: URI' : verdict.reason}). `
+        + '§4 says an asset is "always inlined by emit time", so this is a fetch the artifact would have to perform — '
+        + 'and because it cannot, the asset would silently not appear at all.',
+      locus,
+    }));
+  };
+
+  for (const logo of (proof.brand && proof.brand.logos) || []) {
+    const data = String(logo.data == null ? '' : logo.data).trim();
+    const locus = { assetId: logo.id };
+    if (data.startsWith('<')) {
+      // §4: a logo is "inline SVG markup or data URI". Markup gets the full
+      // document scan, so a sanitised-away <image href="https://…"> is reported
+      // rather than quietly removed.
+      for (const finding of scanForNetworkReferences(data, { where: `logo ${logo.id}`, locus })) out.push(finding);
+      continue;
+    }
+    checkInlined(data, `Logo "${logo.variant}" (${logo.id})`, locus);
+  }
+
+  for (const specimen of proof.specimens || []) {
+    for (const ref of specimen.media || []) {
+      checkInlined(ref.dataUri, `Media "${ref.alt || ref.id}" on specimen ${specimen.id}`, { assetId: ref.id, specimenId: specimen.id });
+    }
+  }
+  for (const rendition of proof.renditions || []) {
+    for (const ref of rendition.media || []) {
+      checkInlined(ref.dataUri, `Media "${ref.alt || ref.id}" on rendition ${rendition.id}`, { assetId: ref.id, specimenId: rendition.specimenId });
+    }
+  }
+  return out;
+}

@@ -79,6 +79,33 @@ export function briefSpecimen() {
   };
 }
 
+/**
+ * A specimen with **no digits anywhere**. It exists because a source with no
+ * numerals is the case that exposes a template quietly relying on the source to
+ * legitimise a number it generated itself — which is exactly how the §18.2 guard
+ * caught an SMS budget report naming its own encoding.
+ * @returns {import('../../../src/core/contracts.d.ts').Specimen}
+ */
+export function digitFreeSpecimen() {
+  return {
+    id: contentId('specimen', { fixture: 'digit-free' }),
+    kind: 'article',
+    title: 'Designing fouling margin you will actually use',
+    sourceUrl: 'https://example.invalid/fouling-margin',
+    capturedAt: CLOCK,
+    blocks: [
+      { type: 'heading', level: 1, text: 'Designing fouling margin you will actually use' },
+      { type: 'paragraph', text: 'The fouling factor is the most over-specified number on a heat exchanger datasheet.' },
+      { type: 'paragraph', text: 'Margin bought at the design stage is margin you pay for in pumping power for the life of the unit.' },
+      { type: 'cta', label: 'Have an existing unit assessed', href: '/service/assessment/' },
+    ],
+    media: [],
+    meta: { lang: 'en-GB' },
+    wordCount: 40,
+    locale: 'en-GB',
+  };
+}
+
 /** The pasted-output fixtures used by the alignment and paste tests. */
 export const PASTED = {
   markdown: [

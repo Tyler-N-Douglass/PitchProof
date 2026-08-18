@@ -28,7 +28,7 @@ import { claimSet } from '../../src/recipe/templates/governed-iteration.js';
 import { cellsFor, TIERS, combinationVocabulary } from '../../src/recipe/templates/volume-view.js';
 import { validateRendition, SPECIMEN_KINDS, BREAKPOINTS } from '../../src/core/contracts.js';
 import { stableStringify } from '../../src/core/hash.js';
-import { retailSpecimen, briefSpecimen } from '../fixtures/recipe/specimens.mjs';
+import { retailSpecimen, briefSpecimen, digitFreeSpecimen } from '../fixtures/recipe/specimens.mjs';
 
 const OPTIONS = { brief: 'Announce the unified planning board to existing customers. Book a walkthrough with the account team.' };
 
@@ -89,6 +89,23 @@ test('recipes run on a minimal specimen without inventing content to fill the ga
   // The fragment has no cta, no media and no legal line: the labelled slots say so.
   const text = JSON.stringify(renditions);
   assert.match(text, /no source content; supply before use/);
+});
+
+test('every recipe runs on a source that contains no digits at all', () => {
+  // Regression, found in integration: a source with no numerals leaves a
+  // template's own measurement chrome with nothing in the source bag to lean on.
+  // The SMS budget report names its encoding — `UCS-2` — and the guard read the
+  // `2` as a fabricated numeral. A digit in a *name* is not a claim; see
+  // `docs/decisions/L7-recipes.md` D-L7-5.
+  const specimen = digitFreeSpecimen();
+  const { renditions, failures } = renderAll(specimen, OPTIONS);
+  assert.deepEqual(failures, []);
+  assert.ok(renditions.length >= 25);
+
+  const sms = renderRecipe('channel-variants', specimen, { channels: ['sms'] });
+  assert.ok(sms.ok, sms.ok ? '' : sms.error);
+  const report = sms.value[0].blocks[sms.value[0].blocks.length - 1];
+  assert.match(report.rows[1][1], /\((GSM-7|UCS-2)\)$/);
 });
 
 test('recipeAccepts and recipesFor gate on specimen kind', () => {

@@ -141,6 +141,11 @@ const PAGE_GROUND_RE = /(^|[\s,>+~])(html|body|:root)\b/;
  * @property {[number, number, number]} lab OKLab
  * @property {number} area painted area in CSS px² (or pixels, for image sources)
  * @property {number} weight normalised weight; set by `normalizeSampleWeights`
+ * @property {number} observations how many raw observations this sample stands
+ *   for — one per declaration for style sources, the pixel count of the bin for
+ *   image sources. Area drives ranking; this drives the sample-size half of
+ *   confidence, and after histogram binning the two are no longer the same
+ *   number.
  * @property {'computed'|'css'|'image'|'logo'} origin
  * @property {string} prop the property or pseudo-property the colour came from
  * @property {boolean} estimated true when the footprint was assumed, not measured
@@ -154,7 +159,7 @@ const PAGE_GROUND_RE = /(^|[\s,>+~])(html|body|:root)\b/;
  * @param {boolean} estimated
  * @returns {ColorSample}
  */
-function makeSample(rgb, area, origin, prop, estimated) {
+function makeSample(rgb, area, origin, prop, estimated, observations = 1) {
   const lab = rgbToOklab(rgb);
   return {
     rgb: /** @type {[number, number, number]} */ ([rgb[0], rgb[1], rgb[2]]),
@@ -162,6 +167,7 @@ function makeSample(rgb, area, origin, prop, estimated) {
     lab,
     area,
     weight: 0,
+    observations,
     origin,
     prop,
     estimated,
@@ -401,7 +407,7 @@ export function collectFromPixels(pixels, options = {}) {
   const scale = Number.isFinite(options.area) && options.area > 0
     ? options.area / decoded.length : 1;
   const shift = 8 - PIXEL_BIN_BITS;
-  /** @type {Map<number, {r: number, g: number, b: number, w: number}>} */
+  /** @type {Map<number, {r: number, g: number, b: number, w: number, n: number}>} */
   const bins = new Map();
   for (const p of decoded) {
     if (!Number.isFinite(p.rgb[0]) || !Number.isFinite(p.rgb[1]) || !Number.isFinite(p.rgb[2])) continue;
@@ -414,7 +420,8 @@ export function collectFromPixels(pixels, options = {}) {
       | ((Math.min(255, Math.max(0, Math.round(rgb[1]))) >> shift) << PIXEL_BIN_BITS)
       | (Math.min(255, Math.max(0, Math.round(rgb[2]))) >> shift);
     let bin = bins.get(key);
-    if (!bin) { bin = { r: 0, g: 0, b: 0, w: 0 }; bins.set(key, bin); }
+    if (!bin) { bin = { r: 0, g: 0, b: 0, w: 0, n: 0 }; bins.set(key, bin); }
+    bin.n += 1;
     bin.r += rgb[0] * w;
     bin.g += rgb[1] * w;
     bin.b += rgb[2] * w;
@@ -429,7 +436,7 @@ export function collectFromPixels(pixels, options = {}) {
     out.push(makeSample(
       [bin.r / bin.w, bin.g / bin.w, bin.b / bin.w],
       bin.w * scale,
-      origin, 'pixel', false,
+      origin, 'pixel', false, bin.n,
     ));
   }
   return out;
@@ -520,7 +527,10 @@ export const SILHOUETTE_MAX_POINTS = 700;
  * @property {[number, number, number]} oklch centroid in OKLCH, gamut-clamped
  * @property {string} hex centroid as `#rrggbb`
  * @property {number} weight share of total sample weight, 0..1
- * @property {number} count member sample count
+ * @property {number} count raw observations behind this cluster (pixels for
+ *   image sources, declarations for style sources) — the sample size confidence
+ *   is computed from
+ * @property {number} members how many collected samples fell into it
  * @property {number} spread weighted RMS OKLab distance from the centroid
  * @property {Record<string, number>} sourceWeights weight contributed per origin
  */
@@ -702,7 +712,8 @@ export function kmeansOklab(samples, options) {
 function summarise(pts, assignment, centers) {
   const k = centers.length;
   const weight = new Float64Array(k);
-  const count = new Int32Array(k);
+  const count = new Float64Array(k);
+  const members = new Int32Array(k);
   const sq = new Float64Array(k);
   /** @type {Record<string, number>[]} */
   const bySource = Array.from({ length: k }, () => ({}));
@@ -711,7 +722,8 @@ function summarise(pts, assignment, centers) {
     const c = assignment[i];
     const w = pts[i].weight;
     weight[c] += w;
-    count[c] += 1;
+    count[c] += Number.isFinite(pts[i].observations) && pts[i].observations > 0 ? pts[i].observations : 1;
+    members[c] += 1;
     sq[c] += w * deltaEok(pts[i].lab, centers[c]) ** 2;
     bySource[c][pts[i].origin] = (bySource[c][pts[i].origin] || 0) + w;
     total += w;
@@ -728,6 +740,7 @@ function summarise(pts, assignment, centers) {
       hex: rgbToHex(oklabToRgb(oklchToOklab(lch))),
       weight: total > 0 ? weight[c] / total : 0,
       count: count[c],
+      members: members[c],
       spread: weight[c] > 0 ? Math.sqrt(sq[c] / weight[c]) : 0,
       sourceWeights: bySource[c],
     });

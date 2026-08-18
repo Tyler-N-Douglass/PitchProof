@@ -153,3 +153,103 @@ test('malformed markup fails closed rather than throwing', () => {
   assert.ok(findings.length > 0, 'hostile markup must still be scanned, not skipped');
   for (const f of findings) assert.equal(f.severity, 1);
 });
+
+// ---------------------------------------------------------------------------
+// Model assets — an asset that never reaches the document (integration finding)
+// ---------------------------------------------------------------------------
+
+import { scanModelAssets } from '../../src/emit/scan.js';
+import { emit } from '../../src/emit/index.js';
+import { emitProof } from '../fixtures/emit/proofs.mjs';
+import { registerTestLayouts } from '../fixtures/emit/layouts.mjs';
+import { runtimeBundle, FIXED_CLOCK } from '../fixtures/emit/runtime-bundle.mjs';
+
+const bundle = runtimeBundle();
+
+test('the fixture proof has no model-asset findings', () => {
+  assert.deepEqual(scanModelAssets(emitProof({ imageEdge: 16 })), []);
+});
+
+test('a MediaRef pointing at the network is reported, not silently dropped', async () => {
+  const base = emitProof({ imageEdge: 16 });
+  const proof = {
+    ...base,
+    specimens: base.specimens.map((s, i) => (i === 0
+      ? { ...s, media: s.media.map((m, j) => (j === 0 ? { ...m, dataUri: 'https://cdn.example/hero.png' } : m)) }
+      : s)),
+  };
+
+  const findings = scanModelAssets(proof);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 1);
+  assert.equal(findings[0].code, 'NETWORK_REFERENCE');
+  assert.equal(findings[0].locus.assetId, proof.specimens[0].media[0].id);
+  assert.match(findings[0].message, /rather than an inlined data: URI/);
+  assert.match(findings[0].message, /silently not appear/);
+
+  registerTestLayouts();
+  const result = await emit(proof, {}, { runtimeJs: bundle.js, runtimeCss: bundle.css, clock: FIXED_CLOCK });
+  assert.equal(result.ok, false, 'an asset that would vanish must refuse the emit, not pass silently');
+  assert.ok(result.detail.findings.some((f) => f.code === 'NETWORK_REFERENCE' && f.locus.assetId));
+});
+
+test('an empty MediaRef is reported too', () => {
+  const base = emitProof({ imageEdge: 16 });
+  const proof = {
+    ...base,
+    renditions: base.renditions.map((r) => (r.media.length ? { ...r, media: r.media.map((m) => ({ ...m, dataUri: '' })) } : r)),
+  };
+  const findings = scanModelAssets(proof);
+  assert.ok(findings.length > 0);
+  assert.match(findings[0].message, /carries no inlined data/);
+  assert.equal(findings[0].severity, 1);
+});
+
+test('a logo whose inline SVG fetches an image is reported against the logo', () => {
+  const base = emitProof({ imageEdge: 16 });
+  const proof = {
+    ...base,
+    brand: {
+      ...base.brand,
+      logos: [{ ...base.brand.logos[0], data: '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://evil.example/x.png"/></svg>' }],
+    },
+  };
+  const findings = scanModelAssets(proof);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 1);
+  assert.equal(findings[0].locus.assetId, base.brand.logos[0].id);
+  assert.match(findings[0].message, /image\[href\]/);
+});
+
+test('a logo that is inline SVG with no network reference is left alone', () => {
+  const base = emitProof({ imageEdge: 16 });
+  const proof = {
+    ...base,
+    brand: { ...base.brand, logos: [{ ...base.brand.logos[0], data: '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>' }] },
+  };
+  assert.deepEqual(scanModelAssets(proof), []);
+});
+
+test('sourceUrl and a cta href are data about a capture, not instructions to fetch', () => {
+  const proof = emitProof({ imageEdge: 16 });
+  assert.ok(proof.specimens[0].sourceUrl.startsWith('https://'), 'the fixture must actually carry a source URL');
+  assert.ok(proof.specimens[0].blocks.some((b) => b.type === 'cta' && b.href.startsWith('https://')));
+  assert.deepEqual(scanModelAssets(proof), []);
+});
+
+test('a layout that renders a cta as a live link is caught by the document scan', async () => {
+  registerTestLayouts({ ctaHref: 'https://northwind.example/contact' });
+  const result = await emit(emitProof({ imageEdge: 16 }), {}, { runtimeJs: bundle.js, runtimeCss: bundle.css, clock: FIXED_CLOCK });
+  assert.equal(result.ok, false, 'a live outbound link in a scene must refuse the emit');
+  const hits = result.detail.findings.filter((f) => f.code === 'NETWORK_REFERENCE' && /a\[href\]/.test(f.message));
+  assert.ok(hits.length > 0, 'the cta anchor was not caught');
+  for (const hit of hits) assert.equal(hit.severity, 1);
+  assert.ok(
+    hits.some((f) => f.locus.sceneId),
+    'at least one finding must name the scene the link is in — the document scan sees the first paint, the per-scene scan sees the rest',
+  );
+  assert.ok(
+    hits.some((f) => f.locus.where === 'artifact document'),
+    'the link is in the pre-rendered first paint, so the document scan must see it too',
+  );
+});
