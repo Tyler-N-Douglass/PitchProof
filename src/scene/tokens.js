@@ -78,7 +78,9 @@ export const GEOM = {
     'index-num-w': 32,
     'index-gap': 12,
     'index-row-gap': 10,
-    'map-legend-h': 56,
+    'map-legend-h': 96,
+    'map-legend-cols': 1,
+    'map-canvas-min-h': 180,
   },
   md: {
     'head-h': 104,
@@ -109,7 +111,9 @@ export const GEOM = {
     'index-num-w': 44,
     'index-gap': 14,
     'index-row-gap': 12,
-    'map-legend-h': 64,
+    'map-legend-h': 88,
+    'map-legend-cols': 3,
+    'map-canvas-min-h': 240,
   },
   lg: {
     'head-h': 120,
@@ -140,12 +144,14 @@ export const GEOM = {
     'index-num-w': 52,
     'index-gap': 16,
     'index-row-gap': 14,
-    'map-legend-h': 72,
+    'map-legend-h': 88,
+    'map-legend-cols': 4,
+    'map-canvas-min-h': 280,
   },
 };
 
 /** Tokens whose value is a bare number in CSS rather than a length. */
-export const UNITLESS_TOKENS = new Set(['fan-cols']);
+export const UNITLESS_TOKENS = new Set(['fan-cols', 'map-legend-cols']);
 
 /**
  * The type scale.

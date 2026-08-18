@@ -129,6 +129,29 @@ the three selector regexes.
 
 ---
 
+## L5-D5a — A page's declared generic outranks a name guess for an unknown family
+
+**Unsettled by:** §7 says to select "a metric-compatible fallback stack" without
+saying how the category of a family this build has no metrics for is decided.
+
+**Decision.** For a family `core/text-metrics.js` has no published metrics for,
+the CSS generic the page's own stacks end in decides the fallback category:
+`font-family: "Canela", Georgia, serif` makes Canela a serif. The family's
+assumed metrics become `CATEGORY_PROXY[category]`'s — `Arial`, `Times New Roman`
+or `Courier New`, the same representatives `metricsFor` already borrows for an
+unknown family — and the stack is built from that category's available families.
+A family this build *does* have metrics for ignores a contradicting generic. The
+face records `categorySource: 'metrics' | 'declared-generic' | 'name'` and
+`assumedFamily` so the studio can show which happened.
+
+**Why.** The designer wrote the generic; it is a statement, not an inference.
+Without the rule an unknown display serif falls back to Arial in the artifact,
+which is exactly the §22.2 failure — a substitution that changes how the page
+looks and measures — arrived at while a better answer was sitting in the
+stylesheet.
+
+---
+
 ## L5-D6 — `metricDelta` is reported at the weight a reader measures
 
 **Unsettled by:** §4 gives `TypeFace.metricDelta` one value; a family has metrics

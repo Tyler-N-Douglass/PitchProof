@@ -13,7 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
 
-import { parseDataUri } from '../../src/core/bytes.js';
+import { base64Decode, parseDataUri } from '../../src/core/bytes.js';
 import { IdMinter } from '../../src/core/ids.js';
 import { Pcg32 } from '../../src/core/prng.js';
 import { imageInfo, jpegSize, svgSize, webpSize } from '../../src/specimen/imageinfo.js';
@@ -57,6 +57,25 @@ function oraclePng(spec) {
   parts.push(chunk('IDAT', zlib.deflateSync(raw)));
   parts.push(chunk('IEND', Buffer.alloc(0)));
   return new Uint8Array(Buffer.concat(parts));
+}
+
+/**
+ * A flat-ish gradient: cheap to compress, and enough structure to prove a
+ * resample did the right thing.
+ * @param {number} w @param {number} h
+ */
+function gradientPixels(w, h) {
+  const rgba = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      rgba[o] = (x * 255 / Math.max(1, w - 1)) | 0;
+      rgba[o + 1] = (y * 255 / Math.max(1, h - 1)) | 0;
+      rgba[o + 2] = 128;
+      rgba[o + 3] = 255;
+    }
+  }
+  return rgba;
 }
 
 /** Deterministic pixels — §5 forbids `Math.random()` even in a test fixture. */
@@ -297,25 +316,26 @@ test('resampling is deterministic and lands on the requested size', () => {
 // ---------------------------------------------------------------- capture
 
 test('§8 a PNG over 2400px is downscaled to a max edge of 2400, with accurate intrinsic and bytes', () => {
-  const w = 3000;
-  const h = 1500;
-  const png = encodePng(samplePixels(w, h), w, h);
+  const w = 2600;
+  const h = 1300;
+  const png = encodePng(gradientPixels(w, h), w, h);
   const [ref] = captureMedia([{ name: 'hero.png', bytes: png, mime: 'image/png' }], { imageQuality: 0.85 });
 
   assert.deepEqual(ref.intrinsic, { w: 2400, h: 1200 });
+  assert.equal(Math.round((2400 / 2600) * 1300), 1200, 'the aspect ratio is preserved by construction');
   assert.equal(ref.resized, true);
-  assert.deepEqual(ref.originalIntrinsic, { w: 3000, h: 1500 });
+  assert.deepEqual(ref.originalIntrinsic, { w: 2600, h: 1300 });
   assert.equal(ref.needsDownscale, false);
 
   const parsed = parseDataUri(ref.dataUri);
   assert.equal(parsed.mime, 'image/png');
-  assert.equal(ref.bytes, parsed.bytes.length, 'bytes is the real byte count of what was inlined');
-  const decoded = decodePng(parsed.bytes);
+  assert.equal(ref.bytes, parsed.bytes, 'bytes is the real byte count of what was inlined');
+  const decoded = decodePng(base64Decode(parsed.body));
   assert.deepEqual([decoded.width, decoded.height], [2400, 1200], 'intrinsic describes the inlined image');
 });
 
 test('capture is deterministic across runs', () => {
-  const png = encodePng(samplePixels(600, 400), 600, 400);
+  const png = encodePng(samplePixels(200, 150), 200, 150);
   const asset = { name: 'a.png', bytes: png, mime: 'image/png' };
   const one = captureMedia([asset], { imageQuality: 0.75, idMinter: new IdMinter('seed', 'specimen/media') });
   const two = captureMedia([asset], { imageQuality: 0.75, idMinter: new IdMinter('seed', 'specimen/media') });
@@ -343,7 +363,7 @@ test('imageQuality is a real lever on PNG: lower tiers quantise the palette and 
   assert.ok(low.notes.some((n) => n.startsWith('palette:')), 'the degradation is reported');
 
   // And the quantised image still decodes at the right size.
-  const decoded = decodePng(parseDataUri(low.dataUri).bytes);
+  const decoded = decodePng(base64Decode(parseDataUri(low.dataUri).body));
   assert.deepEqual([decoded.width, decoded.height], [240, 160]);
 });
 
@@ -373,7 +393,8 @@ test('§8 a JPEG is passed through unchanged and reported as not resized, so L10
   assert.equal(ref.needsDownscale, true, 'the emitter is told this asset is still over budget');
   assert.equal(ref.resizeSkipped, 'jpeg-no-encoder');
   assert.equal(ref.bytes, jpeg.length, 'the bytes are the original bytes');
-  assert.deepEqual(Array.from(parseDataUri(ref.dataUri).bytes), Array.from(jpeg));
+  assert.deepEqual(Array.from(base64Decode(parseDataUri(ref.dataUri).body)), Array.from(jpeg));
+  assert.equal(parseDataUri(ref.dataUri).mime, 'image/jpeg');
   assert.equal(ref.quality, null, 'no quality is claimed for an image that was not recompressed');
 });
 

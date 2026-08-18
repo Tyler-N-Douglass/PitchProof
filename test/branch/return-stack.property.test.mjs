@@ -20,22 +20,21 @@
  * plus `randomWalkTrace(deck, {seed, steps})` reproduces it exactly.
  *
  * ---------------------------------------------------------------------------
- * THIS TEST FOUND A DEFECT IN THE FROZEN REDUCER. See
- * `docs/disputes/L9-branches.md` §1 for the report and the patch.
+ * This test found a defect in the frozen reducer, and it is fixed.
  *
- * `src/runtime/nav.js` records `exitedFrom.frame` — a single frame — when the
- * presenter advances off the end of a branch, and `reenterExited` pushes that
- * one frame back. Under `returnPolicy: 'nextSpineScene'` the exit unwinds the
- * *whole* stack, so stepping back afterwards restores a stack missing every
- * frame below the top one, whose floor is then a branch instead of the spine.
- * The next `prevScene` or `return` throws `NavInvariantError` and the presenter
- * is stranded — the exact §22.4 failure.
+ * `src/runtime/nav.js` recorded `exitedFrom.frame` — a single frame — when the
+ * presenter advanced off the end of a branch, and pushed that one frame back on
+ * the way in. Under `returnPolicy: 'nextSpineScene'` the exit unwinds the
+ * *whole* stack, so stepping back restored a stack missing every frame below
+ * the top one, floored on a branch instead of the spine; the next `return`,
+ * `prevScene` or `r` then threw `NavInvariantError` and stranded the presenter.
+ * 342 of these 1000 walks reached it.
  *
- * 342 of these 1000 walks reach it. Until L2 lands the two-line fix, the walks
- * are fenced at that transition by `haltOn` so the other 99.9% of the state
- * space is still asserted at full strength: nothing is relaxed, the fence is
- * counted and printed, and `the known L2 defect is still exactly as reported`
- * below pins the shape so the fence cannot outlive the bug.
+ * Fixed in `ec1dd38`: `exitedFrom.stack` carries the whole stack and
+ * `reenterExited` restores it wholesale, and `checkInvariants` now tests the
+ * floor rather than assuming it. The walks below run unfenced, and the five
+ * keystrokes that produced the defect are kept as a regression case at the foot
+ * of this file. See `docs/disputes/L9-branches.md` §1.
  * ---------------------------------------------------------------------------
  */
 
@@ -54,38 +53,6 @@ import { contentId } from '../../src/core/ids.js';
 const WALKS = 1000;
 const STEPS = 200;
 const ANCHORED_WALKS = 200;
-
-/**
- * The signature of the known L2 defect: a return stack whose bottom frame is
- * not on the spine. Only `reenterExited` after a `nextSpineScene` unwind can
- * produce it — every other path pushes frames from the spine upward.
- * @param {import('../../src/runtime/nav.js').NavState} state
- * @returns {boolean}
- */
-function stackFloorOffSpine(state) {
-  return state.stack.length > 0 && state.stack[0].sequenceId !== SPINE;
-}
-
-/**
- * Assert that a fenced walk stopped for the documented reason and nothing else.
- * @param {{step: number, state: object, action: object, previous: object}} halted
- * @param {string} seed
- */
-function assertFenceIsTheKnownDefect(halted, seed) {
-  const { previous, action, state } = halted;
-  assert.ok(
-    action.type === 'prevBeat' || action.type === 'prevScene',
-    `${seed}: the fence caught a ${action.type}, which is not the documented defect`,
-  );
-  assert.ok(previous.exitedFrom, `${seed}: the fence caught a state that did not follow an automatic branch exit`);
-  assert.equal(
-    previous.exitedFrom.frame.returnPolicy,
-    'nextSpineScene',
-    `${seed}: the fence caught an 'anchor' exit — that is a NEW defect, not the documented one`,
-  );
-  assert.equal(previous.stack.length, 0, `${seed}: the documented defect only follows a full unwind`);
-  assert.equal(state.stack.length, 1, `${seed}: the documented defect restores exactly one frame`);
-}
 
 /**
  * Check one produced state against every invariant the machine promises.
@@ -123,7 +90,6 @@ test('1000 seeded walks × 200 steps never strand the presenter', () => {
   let jumpActions = 0;
   let returnActions = 0;
   let terminalChecked = 0;
-  let fenced = 0;
 
   for (let w = 0; w < WALKS; w++) {
     const seed = `property/walk/${w}`;
@@ -134,11 +100,7 @@ test('1000 seeded walks × 200 steps never strand the presenter', () => {
 
     // No try/catch: a `NavInvariantError` escaping here fails the test, which
     // is the §17.8 assertion that the reducer never throws during a legal walk.
-    const trace = randomWalkTrace(deck, { seed, steps: STEPS, haltOn: stackFloorOffSpine });
-    if (trace.halted) {
-      assertFenceIsTheKnownDefect(trace.halted, seed);
-      fenced++;
-    }
+    const trace = randomWalkTrace(deck, { seed, steps: STEPS });
 
     let jumpsSoFar = 0;
     for (let i = 0; i < trace.states.length; i++) {
@@ -184,7 +146,6 @@ test('1000 seeded walks × 200 steps never strand the presenter', () => {
   }
 
   assert.ok(maxDepth >= 3, `the corpus never nested deeply enough to be a test (max depth ${maxDepth})`);
-  assert.ok(fenced < WALKS / 2, `the known L2 defect now swallows ${fenced} of ${WALKS} walks — the corpus is no longer testing the reducer`);
   assert.ok(decksWithNesting.size > WALKS / 4, 'too few generated decks contained a branch anchored inside a branch');
   assert.ok(jumpActions > 1000, 'the walks barely jumped');
   assert.ok(returnActions > 1000, 'the walks barely returned');
@@ -202,7 +163,6 @@ test('1000 seeded walks × 200 steps never strand the presenter', () => {
     `    max stack depth:       ${maxDepth} (seed ${deepestSeed})`,
     `    branch visits:         ${branchesVisited.size.toLocaleString('en-US')} distinct deck/branch pairs`,
     `    terminal states:       ${terminalChecked} — all on the last beat of the spine, stack empty`,
-    `    fenced at known defect: ${fenced} (docs/disputes/L9-branches.md §1 — nav.js exitedFrom)`,
     '',
   ].join('\n'));
 });
@@ -219,8 +179,7 @@ test('an anchored-only walk never nests deeper than the deck was authored to nes
     const depths = nestingDepths(deck);
     const available = Math.max(0, ...depths.values());
 
-    const trace = randomWalkTrace(deck, { seed, steps: STEPS, anchoredOnly: true, haltOn: stackFloorOffSpine });
-    if (trace.halted) assertFenceIsTheKnownDefect(trace.halted, seed);
+    const trace = randomWalkTrace(deck, { seed, steps: STEPS, anchoredOnly: true });
     for (let i = 0; i < trace.states.length; i++) {
       const state = trace.states[i];
       assertSound(deck, state, `seed ${seed} step ${i}`);
@@ -311,22 +270,18 @@ test('a jump followed by a return restores the exact prior state, at every depth
 });
 
 /**
- * The minimal deterministic reproduction of the defect the walks found, pinned.
+ * The five keystrokes that used to strand the presenter, kept as a regression.
  *
- * Three spine scenes; `bnA` (policy `anchor`) hangs off spine scene 1 and
- * offers `bnB` (policy `nextSpineScene`). Jump, jump, one press of space, one
- * press of back — five keystrokes a presenter makes without thinking — and the
- * return stack's floor is a branch. From there `r`, the key a presenter reaches
- * for to get back to the pitch, throws.
+ * Three spine scenes; `bnA` (policy `anchor`) hangs off spine scene 1 and offers
+ * `bnB` (policy `nextSpineScene`). Jump, jump, one press of space, one press of
+ * back — five keystrokes a presenter makes without thinking — and until
+ * `ec1dd38` the return stack's floor was a branch, from which `r` threw.
  *
- * This test asserts the **broken** behaviour on purpose, so the fence in the
- * property test above cannot outlive the bug: when L2 lands the fix in
- * `docs/disputes/L9-branches.md` §1, this test fails, and whoever sees it must
- * (a) delete this test, (b) delete `stackFloorOffSpine`/`haltOn` from the walks
- * above, and (c) replace them with the assertions written in the comment at the
- * end of this test — which are the assertions this case *should* satisfy.
+ * The nesting and the two different return policies are the whole point: the
+ * automatic exit has to put back exactly what it took, whether the policy popped
+ * one frame or unwound all of them.
  */
-test('KNOWN L2 DEFECT — the nextSpineScene auto-exit loses the lower return stack', () => {
+test('the nextSpineScene auto-exit restores the whole return stack (regression, ec1dd38)', () => {
   const spine = [scene('sc_pin_0', 1), scene('sc_pin_1', 1), scene('sc_pin_2', 1)];
   const inner = scene('sc_pin_a0', 1, { branchAnchors: ['bn_pin_b'] });
   const outer = branch('bn_pin_a', 'The outer objection', [inner], 'anchor', []);
@@ -335,8 +290,8 @@ test('KNOWN L2 DEFECT — the nextSpineScene auto-exit loses the lower return st
 
   const deck = buildDeck({
     schemaVersion: 1,
-    id: contentId('proof', 'pinned-defect'),
-    prospectName: 'Pinned',
+    id: contentId('proof', 'nested-exit-regression'),
+    prospectName: 'Regression',
     createdAt: '2026-02-01T09:00:00.000Z',
     brand: brand(),
     specimens: [],
@@ -354,44 +309,51 @@ test('KNOWN L2 DEFECT — the nextSpineScene auto-exit loses the lower return st
   assert.deepEqual(state.stack.map((f) => f.sequenceId), [SPINE, 'bn_pin_a'], 'the nested jump stacks two frames');
 
   // Space past the last beat of the nested branch: `nextSpineScene` unwinds the
-  // whole stack, which is correct.
+  // whole stack and moves the pitch on.
   state = navigate(deck, state, { type: 'nextBeat' });
   assert.equal(state.sequenceId, SPINE);
+  assert.equal(state.sceneIndex, 2, 'the scene after the spine anchor the detour started from');
   assert.deepEqual(state.stack, []);
   assert.ok(state.exitedFrom, 'the exit is marked reversible (D15)');
-  assert.equal(state.exitedFrom.frame.returnPolicy, 'nextSpineScene');
 
-  // Back. D15 says this re-enters the branch where it was left. It does — but
-  // it restores only the top frame of the two that were popped.
+  // Back: D15 re-enters the branch where it was left, with everything that was
+  // popped put back.
   state = navigate(deck, state, { type: 'prevBeat' });
-  assert.equal(state.sequenceId, 'bn_pin_b', 'back re-enters the branch (D15, correct)');
-  assert.deepEqual(
-    state.stack.map((f) => f.sequenceId),
-    ['bn_pin_a'],
-    'DEFECT: the restored stack is missing the spine frame beneath it',
-  );
-  assert.notEqual(state.stack[0].sequenceId, SPINE, 'DEFECT: the stack floor is a branch');
+  assert.equal(state.sequenceId, 'bn_pin_b');
+  assert.deepEqual(state.stack.map((f) => f.sequenceId), [SPINE, 'bn_pin_a'],
+    'the whole stack comes back, not just its top frame');
+  assert.deepEqual(orphanReasons(deck, state), [], 'and the state is sound, floor included');
 
-  // And now the presenter is one keystroke from stranded: `r` throws.
-  assert.throws(
-    () => navigate(deck, state, { type: 'returnToSpine' }),
-    NavInvariantError,
-    'DEFECT: return-to-spine throws from the corrupted stack',
-  );
-  assert.throws(
-    () => navigate(deck, state, { type: 'prevScene' }),
-    NavInvariantError,
-    'DEFECT: stepping back again throws from the corrupted stack',
-  );
+  // And the key a presenter reaches for when the detour is over works.
+  const home = navigate(deck, state, { type: 'returnToSpine' });
+  assert.equal(home.sequenceId, SPINE);
+  assert.equal(home.sceneIndex, 1, 'back where the first jump was made');
+  assert.deepEqual(home.stack, []);
 
-  /*
-   * The assertions this case should satisfy once nav.js records the whole
-   * stack in `exitedFrom` (see docs/disputes/L9-branches.md §1):
-   *
-   *   assert.deepEqual(state.stack.map((f) => f.sequenceId), [SPINE, 'bn_pin_a']);
-   *   const home = navigate(deck, state, { type: 'returnToSpine' });
-   *   assert.equal(home.sequenceId, SPINE);
-   *   assert.equal(home.sceneIndex, 1);
-   *   assert.deepEqual(home.stack, []);
-   */
+  // One level up rather than all the way: `return` pops exactly one frame.
+  const oneUp = navigate(deck, state, { type: 'return' });
+  assert.equal(oneUp.sequenceId, SPINE, 'nextSpineScene unwinds the detour rather than popping one level');
+  assert.equal(oneUp.sceneIndex, 2);
+  assert.deepEqual(oneUp.stack, []);
+});
+
+/**
+ * `haltOn` is what let the property test fence the defect above while it was
+ * outstanding, and it is what rehearsal uses to stop at the first anomaly
+ * instead of walking on through the wreckage. It stays tested so it stays
+ * working the next time something needs fencing.
+ */
+test('a walk can be stopped at the first state a caller rejects', () => {
+  const { proof } = generateBranchyProof('property/halt');
+  const deck = buildDeck(proof);
+  const full = randomWalkTrace(deck, { seed: 'property/halt', steps: 200 });
+  const offSpineAt = full.states.findIndex((s) => s.sequenceId !== SPINE);
+  assert.ok(offSpineAt > 0, 'the corpus walk never left the spine');
+
+  const halted = randomWalkTrace(deck, { seed: 'property/halt', steps: 200, haltOn: (s) => s.sequenceId !== SPINE });
+  assert.ok(halted.halted, 'the walk did not stop');
+  assert.equal(halted.halted.step, offSpineAt, 'it stopped at exactly the transition the predicate names');
+  assert.equal(halted.states.length, offSpineAt, 'the rejected state is reported, not appended');
+  for (const state of halted.states) assert.equal(state.sequenceId, SPINE);
+  assert.deepEqual(halted.states, full.states.slice(0, offSpineAt), 'halting changes nothing about the walk itself');
 });

@@ -869,8 +869,9 @@ export const ACTIONS = [
   {
     id: 'scene.add', label: 'Add a scene', group: 'Scenes', palette: false, control: true,
     mutates: true, sample: () => ({ arg: 'splitBeforeAfter' }),
-    run: (app, arg) => {
-      const layout = SCENE_LAYOUTS.includes(/** @type {any} */ (arg)) ? String(arg) : 'splitBeforeAfter';
+    run: (app, arg, ctx) => {
+      const chosen = String(value(ctx) || arg || '');
+      const layout = SCENE_LAYOUTS.includes(/** @type {any} */ (chosen)) ? chosen : 'splitBeforeAfter';
       const id = mint(app, 'scene', { layout, n: (app.proof.spine || []).length });
       const specimen = currentSpecimen(app);
       const scene = M.newScene({ id, layout: /** @type {any} */ (layout), headline: null });

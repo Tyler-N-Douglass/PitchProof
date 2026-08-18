@@ -125,15 +125,40 @@ export function fanColumns(bp, n) {
 }
 
 /**
- * The scale the `systemMap` SVG is drawn at: `preserveAspectRatio="xMidYMid
- * meet"` on a 960×540 viewBox inside the body box is exactly `min(w/960,
- * h/540)`, so this is not an approximation of the CSS, it is the CSS.
- * @param {'sm'|'md'|'lg'} bp
+ * The height the `systemMap` legend takes: one row of chips per
+ * `--pp-sc-map-legend-cols`, at `--pp-sc-map-legend-h` each.
+ * @param {'sm'|'md'|'lg'} bpIn
+ * @param {number} [n]   how many chips the legend holds
  * @returns {number}
  */
-export function mapScale(bp) {
+export function mapLegendHeight(bpIn, n = 1) {
+  const bp = breakpointId(bpIn);
+  const cols = Math.max(1, geom(bp, 'map-legend-cols'));
+  const rows = Math.max(1, Math.ceil(Math.max(1, n) / cols));
+  return rows * geom(bp, 'map-legend-h') + (rows - 1) * geom(bp, 'fan-gap');
+}
+
+/**
+ * The scale the `systemMap` SVG is drawn at: `preserveAspectRatio="xMidYMid
+ * meet"` on a 960x540 viewBox inside the canvas box is exactly `min(w/960,
+ * h/540)`, so this is not an approximation of the CSS, it is the CSS.
+ *
+ * The canvas is what the body box has left once the legend has taken its rows,
+ * floored at `--pp-sc-map-canvas-min-h` — the same floor `.pp-map-canvas`
+ * declares. At the small breakpoint a five-output map plus its legend is taller
+ * than the frame; the scene scrolls, and the floor is what keeps the drawing
+ * legible rather than squeezing it to nothing.
+ * @param {'sm'|'md'|'lg'} bpIn
+ * @param {number} [n]   the legend's chip count
+ * @returns {number}
+ */
+export function mapScale(bpIn, n = 1) {
+  const bp = breakpointId(bpIn);
   const s = stageBox(bp);
-  const canvasHeight = Math.max(0, s.bodyHeightPx - geom(breakpointId(bp), 'map-legend-h') - geom(breakpointId(bp), 'row-gap'));
+  const canvasHeight = Math.max(
+    geom(bp, 'map-canvas-min-h'),
+    s.bodyHeightPx - mapLegendHeight(bp, n) - geom(bp, 'row-gap'),
+  );
   return Math.min(s.bodyWidthPx / MAP_DESIGN.width, canvasHeight / MAP_DESIGN.height);
 }
 
@@ -294,16 +319,19 @@ export function boxGeometry(slot, bpIn, params = {}) {
 
     // -------------------------------------------------------------- systemMap
     case 'mapCanvas': {
-      const scale = mapScale(bp);
+      const scale = mapScale(bp, n);
       return { widthPx: MAP_DESIGN.width * scale, heightPx: MAP_DESIGN.height * scale };
     }
     case 'mapLegend': {
-      const gap = geom(bp, 'fan-gap');
-      const cols = Math.max(1, Math.min(n, bp === 'sm' ? 1 : bp === 'md' ? 3 : 4));
-      return inset(trackWidth(s.contentWidthPx, cols, gap), geom(bp, 'map-legend-h'), geom(bp, 'card-pad'));
+      const cols = Math.max(1, geom(bp, 'map-legend-cols'));
+      return inset(
+        trackWidth(s.contentWidthPx, cols, geom(bp, 'fan-gap')),
+        geom(bp, 'map-legend-h'),
+        geom(bp, 'card-pad'),
+      );
     }
     case 'mapText': {
-      const scale = mapScale(bp);
+      const scale = mapScale(bp, n);
       return {
         widthPx: (params.unitWidth || MAP_DESIGN.width) * scale,
         heightPx: (params.unitHeight || MAP_DESIGN.height) * scale,

@@ -17,6 +17,8 @@ import {
   parseGoogleFontsHref, parseFontShorthand, parseFontWeight, parseFontSize,
   parseFamilyDeclaration, isWebfontHost, hostOf, srcUrls, representativeWeight,
   isFallbackOnly, normalizeStylesheets, walkDoc, docText, inlineSelector,
+  declaredCategory, resolveWithDeclaredCategory, collectTypeEvidence as evidenceOf,
+  CATEGORY_PROXY,
 } from '../../src/brand/type.js';
 
 const fixturePath = (name) => fileURLToPath(new URL(`../fixtures/brand/faces/${name}`, import.meta.url));
@@ -91,6 +93,41 @@ test('large sizes alone imply display, copy sizes alone imply body', () => {
   assert.equal(big[0].role, 'display');
   const small = detectFaces(null, '.note { font-family: Foo; font-size: 15px; }', { available: AVAILABLE });
   assert.equal(small[0].role, 'body');
+});
+
+// ------------------------------------------------------- declared category
+
+test("the page's own generic decides an unknown family's fallback category", () => {
+  // `font-family: "Canela", Georgia, serif` is the designer saying Canela is a
+  // serif. Nothing in the name says so, and falling back to Arial would put a
+  // sans where a serif was drawn — the §22.2 defect, avoided rather than measured.
+  const css = 'h1 { font-family: "Canela", Georgia, serif; font-size: 56px }';
+  const [face] = detectFaces(null, css, { available: AVAILABLE });
+  assert.equal(face.category, 'serif');
+  assert.equal(face.categorySource, 'declared-generic');
+  assert.equal(face.assumedFamily, CATEGORY_PROXY.serif);
+  assert.equal(face.resolved, 'Times New Roman');
+  assert.ok(face.fallbackStack.includes('Times New Roman'), face.fallbackStack.join(', '));
+  assert.equal(face.fallbackStack[0], 'Canela');
+  assert.equal(face.fallbackStack[face.fallbackStack.length - 1], 'serif');
+});
+
+test('a family with published metrics ignores a contradicting generic', () => {
+  // Georgia is a serif and this build has its metrics; a stack that ends in
+  // `sans-serif` does not change that.
+  const [face] = detectFaces(null, 'body { font-family: Georgia, sans-serif; font-size: 16px }', { available: AVAILABLE });
+  assert.equal(face.category, 'serif');
+  assert.equal(face.categorySource, 'metrics');
+});
+
+test('declaredCategory reads the generics and abstains when there are none', () => {
+  const withSerif = evidenceOf(null, '.a { font-family: Foo, serif }').index.get('foo');
+  assert.equal(declaredCategory(withSerif), 'serif');
+  const withMono = evidenceOf(null, '.a { font-family: Foo, ui-monospace, monospace }').index.get('foo');
+  assert.equal(declaredCategory(withMono), 'mono');
+  const bare = evidenceOf(null, '.a { font-family: Foo }').index.get('foo');
+  assert.equal(declaredCategory(bare), null);
+  assert.equal(resolveWithDeclaredCategory('Foo', bare, AVAILABLE, 400).categorySource, 'name');
 });
 
 // ------------------------------------------------------------- google fonts

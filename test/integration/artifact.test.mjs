@@ -35,8 +35,12 @@ async function loadChromium() {
 
 /** Bundle the runtime and collect the artifact stylesheet, as the build does. */
 function runtimeDeps() {
+  // The composition root, not the bare runtime: `src/runtime/**` registers no
+  // layouts and no branch overlays by design, so a bundle built from it paints
+  // the emitter's static first beat and then falls back to "Layout not
+  // registered" on the presenter's first keypress.
   const runtimeJs = bundle({
-    entry: join(ROOT, 'src/runtime/index.js'),
+    entry: join(ROOT, 'src/artifact.js'),
     root: join(ROOT, 'src'),
     global: 'PitchProofRuntime',
   }).code;
@@ -147,6 +151,21 @@ test('§13/§17.7: the emitted artifact opens from file:// with the network bloc
       return { sequence: el.getAttribute('data-pp-sequence'), beat: el.getAttribute('data-pp-beat') };
     });
     assert.equal(state.sequence, 'spine', 'a full walk must never strand the presenter off the spine');
+
+    // The layouts survive re-rendering. This is the seam defect that every
+    // lane's own suite was green through: the artifact painted correctly on
+    // open, because the emitter pre-renders the opening beat, and the first
+    // keypress replaced the client's own content with "Layout not registered".
+    assert.equal(await page.locator('.pp-layout--placeholder').count(), 0,
+      'the artifact fell back to the unregistered-layout placeholder after navigating');
+
+    // §11: the jump index, the branch map and the contents index all open.
+    for (const [key, label] of [['/', 'jump index'], ['m', 'branch map'], ['c', 'contents index']]) {
+      await page.keyboard.press(key);
+      assert.equal(await page.locator('.pp-overlay-layer').count(), 1, `${label} did not open on "${key}"`);
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('.pp-overlay-layer').count(), 0, `${label} did not close on Escape`);
+    }
 
     // Blank screen and the help overlay both work from the keyboard.
     await page.keyboard.press('b');

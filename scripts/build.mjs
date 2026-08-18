@@ -30,8 +30,15 @@ export const ROOT = resolve(HERE, '..');
 export const SRC = join(ROOT, 'src');
 export const DIST = join(ROOT, 'dist');
 
-/** Modules bundled into the artifact runtime, and into the studio. */
-const RUNTIME_ENTRY = join(SRC, 'runtime', 'index.js');
+/**
+ * The artifact entry is the composition root (`src/artifact.js`), not the bare
+ * runtime. The runtime is deliberately layout- and branch-agnostic; something
+ * has to put the three together, and if the bundle is built from
+ * `src/runtime/index.js` an emitted artifact paints its opening beat from the
+ * emitter's static HTML and then falls back to "Layout not registered" on the
+ * presenter's first keypress.
+ */
+const RUNTIME_ENTRY = join(SRC, 'artifact.js');
 const STUDIO_ENTRY = join(SRC, 'ui', 'index.js');
 
 const BANNER = [

@@ -369,3 +369,33 @@ pinned by `test/runtime/nav.test.mjs`.
 This is the argument for property testing a navigation machine rather than
 enumerating its cases: the defect needed a `nextSpineScene` branch entered from
 inside another branch, which no unit test I wrote thought to construct.
+
+---
+
+## D19 — The artifact is bundled from a composition root, not from the runtime
+
+**Unsettled by:** §19 gives L2 the runtime, L8 the layouts and L9 the branches,
+and §5 says the runtime bundle is inlined into every artifact. Nothing says who
+puts the three together.
+
+**Decision.** `src/artifact.js` is the composition root and is the entry
+`scripts/build.mjs` bundles into `dist/pitchproof-runtime.js`. It re-exports the
+runtime's whole surface, calls `registerAllLayouts()` at module evaluation, and
+its `boot` wires `registerBranchOverlays` and `installBranchInputBridge` onto
+the runtime it creates. It belongs to no lane. The exported global stays
+`PitchProofRuntime` and `boot` keeps its signature, so the emitter needed no
+change.
+
+**Why.** The layering is right and the gap it leaves is invisible to every lane.
+`src/runtime/**` must not import `src/scene/**` or `src/branch/**` — both depend
+on the runtime, so the runtime cannot depend on them — which means a bundle
+built from `src/runtime/index.js` contains no layouts and no overlays. The
+emitted artifact still *looked* correct, because the emitter pre-renders the
+opening beat as static HTML for the cold-boot budget. The presenter's first
+keypress made the runtime re-render, find no layout registered, and replace the
+client's own content with "Layout not registered"; `/`, `m` and `c` opened
+nothing. Every lane's suite was green, and the end-to-end artifact test passed
+too, because it only asserted that the opening scene was non-blank.
+
+The seam is now asserted directly: the integration test navigates and then
+requires zero placeholders and all three overlays to open and close.

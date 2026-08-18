@@ -75,6 +75,9 @@ export function systemMap(ctx) {
   const outputs = outputBoxes(outputCount);
 
   const arrowId = ctx.el('map/arrow');
+  // The legend's chip count decides how much height is left for the drawing,
+  // so it travels with every element whose size scales with the drawing.
+  const legendCount = Math.max(1, shown.length);
   const source = { x: MAP.sourceX, y: 210, w: MAP.nodeW, h: 120 };
   const transform = { x: MAP.transformX, y: 210, w: MAP.nodeW, h: 120 };
 
@@ -90,6 +93,8 @@ export function systemMap(ctx) {
       h('div', { class: 'pp-map-canvas' },
         h('svg', {
           class: 'pp-map-svg',
+          'data-pp-box': 'mapCanvas',
+          'data-pp-n': String(legendCount),
           viewBox: `0 0 ${MAP_DESIGN.width} ${MAP_DESIGN.height}`,
           preserveAspectRatio: 'xMidYMid meet',
           role: 'img',
@@ -127,11 +132,11 @@ export function systemMap(ctx) {
 
         node(ctx, {
           box: source, path: 'map/source', group: 'map/source', tone: 'source',
-          title: sourceLabel, meta: sourceMeta, index: null,
+          title: sourceLabel, meta: sourceMeta, index: null, legendCount,
         }),
         node(ctx, {
           box: transform, path: 'map/transform', group: 'map/transform', tone: 'transform',
-          title: transformLabel, meta: transformMeta, index: null,
+          title: transformLabel, meta: transformMeta, index: null, legendCount,
         }),
         shown.map((rendition, i) => node(ctx, {
           box: outputs[i],
@@ -141,6 +146,7 @@ export function systemMap(ctx) {
           title: renditionLabel(rendition, i),
           meta: renditionMeta(rendition),
           index: i + 1,
+          legendCount,
         })),
         overflow > 0
           ? node(ctx, {
@@ -151,14 +157,15 @@ export function systemMap(ctx) {
             title: `${overflow} more ${overflow === 1 ? 'rendition' : 'renditions'}`,
             meta: 'in this scene',
             index: null,
+            legendCount,
           })
           : null)),
 
-      h('ul', { class: 'pp-map-legend', 'data-pp-n': String(Math.max(1, shown.length)) },
+      h('ul', { class: 'pp-map-legend', 'data-pp-n': String(legendCount) },
         shown.map((rendition, i) => h('li', {
           class: 'pp-map-chip',
           'data-pp-box': 'mapLegend',
-          'data-pp-n': String(Math.max(1, shown.length)),
+          'data-pp-n': String(legendCount),
           'data-pp-el': ctx.el(`map/legend/${i}`),
           'data-pp-group': 'map/outputs',
           'data-pp-rendition': rendition.id,
@@ -224,6 +231,7 @@ function node(ctx, spec) {
       h('tspan', {
         'data-pp-tx': 'mapNodeMeta',
         'data-pp-box': 'mapText',
+        'data-pp-n': String(spec.legendCount || 1),
         'data-pp-unit-w': String(innerW),
         'data-pp-unit-h': String(MAP.lineStep.meta),
         'data-pp-ws': 'nowrap',
@@ -235,6 +243,7 @@ function node(ctx, spec) {
       dy: i === 0 ? '0' : String(MAP.lineStep.title),
       'data-pp-tx': 'mapNodeTitle',
       'data-pp-box': 'mapText',
+      'data-pp-n': String(spec.legendCount || 1),
       'data-pp-unit-w': String(innerW),
       'data-pp-unit-h': String(MAP.lineStep.title),
       'data-pp-ws': 'nowrap',
@@ -250,6 +259,7 @@ function node(ctx, spec) {
       dy: i === 0 ? '0' : String(MAP.lineStep.meta),
       'data-pp-tx': 'mapNodeMeta',
       'data-pp-box': 'mapText',
+      'data-pp-n': String(spec.legendCount || 1),
       'data-pp-unit-w': String(innerW),
       'data-pp-unit-h': String(MAP.lineStep.meta),
       'data-pp-ws': 'nowrap',

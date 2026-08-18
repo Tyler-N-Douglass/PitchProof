@@ -87,9 +87,13 @@ export function splitMedia(proof) {
     }
     if (Array.isArray(value)) return value.map(walk);
     if (value && typeof value === 'object') {
+      // Sorted, not insertion order. The walk order decides which media gets
+      // `@m0`, so an object whose keys were built in a different order would
+      // otherwise produce a different — but equivalent — payload, and §17.6
+      // asserts byte-identity, not equivalence.
       /** @type {Record<string, unknown>} */
       const out = {};
-      for (const key of Object.keys(value)) out[key] = walk(value[key]);
+      for (const key of Object.keys(value).sort()) out[key] = walk(value[key]);
       return out;
     }
     return value;

@@ -3908,7 +3908,6700 @@ __exports["PRESENTER_WINDOW_NAME"] = __require("runtime/presenter.js").PRESENTER
 __exports["boot"] = boot;
 __exports["RUNTIME_VERSION"] = RUNTIME_VERSION;
 };
-var __entry = __require("runtime/index.js");
+__modules["scene/align.js"] = function (__exports, __require) {
+/**
+ * Row alignment between a specimen and its renditions.
+ *
+ * `splitBeforeAfter` is the workhorse of the whole product, and what makes it
+ * persuasive is not that two panels sit next to each other — it is that the
+ * client's own H1 sits on the same line as its rendition's H1, so the eye
+ * compares like with like without being told to. That is the job here: turn
+ * two (or more) block lists into an ordered set of *rows*, each row holding at
+ * most one block per column.
+ *
+ * The method is a longest-common-subsequence over block *signatures* (type plus
+ * heading level), which anchors the structural landmarks — headings, tables,
+ * media — and then zips the runs between anchors positionally so a paragraph
+ * lines up with the paragraph that replaced it. Nothing is dropped: a block
+ * with no counterpart gets a row with an empty cell opposite it.
+ *
+ * This is not L7's `alignBlocks`. That one aligns for *authoring* — it scores a
+ * pasted rendition against its source so the studio can show the user how well
+ * their paste matched. This one aligns for *rendering*, produces rows rather
+ * than pairs, handles more than two columns, and must be deterministic and
+ * dependency-free because it runs inside the artifact. See
+ * docs/decisions/L8-scenes.md.
+ *
+ * @module scene/align
+ */
+
+/**
+ * @typedef {object} AlignedRow
+ * @property {(number|null)[]} cells   one entry per column: the block index, or null
+ * @property {string} key              a stable, structural key for the row
+ */
+
+/**
+ * The signature two blocks must share to be considered the same landmark.
+ * @param {import('../core/contracts.d.ts').ContentBlock} block
+ * @returns {string}
+ */
+function signatureOf(block) {
+  if (!block || typeof block !== 'object') return 'none';
+  switch (block.type) {
+    case 'heading': return `heading:${Math.min(6, Math.max(1, Number(block.level) || 1))}`;
+    case 'list': return `list:${block.ordered ? 'ol' : 'ul'}`;
+    case 'table': return `table:${block.header ? 'h' : 'p'}`;
+    default: return String(block.type);
+  }
+}
+
+/**
+ * Longest common subsequence over two signature lists, as index pairs.
+ * @param {string[]} a
+ * @param {string[]} b
+ * @returns {[number, number][]}
+ */
+function lcsPairs(a, b) {
+  const n = a.length;
+  const m = b.length;
+  // dp[i][j] = LCS length of a[i..] and b[j..]
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  /** @type {[number, number][]} */
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push([i, j]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+    else j++;
+  }
+  return out;
+}
+
+/**
+ * Align two block lists into rows.
+ * @param {import('../core/contracts.d.ts').ContentBlock[]} left
+ * @param {import('../core/contracts.d.ts').ContentBlock[]} right
+ * @returns {[number|null, number|null][]}
+ */
+function alignPair(left, right) {
+  const a = (left || []).map(signatureOf);
+  const b = (right || []).map(signatureOf);
+  const anchors = lcsPairs(a, b);
+
+  /** @type {[number|null, number|null][]} */
+  const rows = [];
+  let i = 0;
+  let j = 0;
+  const flushGap = (untilA, untilB) => {
+    // Zip the unmatched runs positionally: the second paragraph of a rewrite
+    // belongs opposite the second paragraph of the original far more often
+    // than it belongs three rows down.
+    while (i < untilA || j < untilB) {
+      const l = i < untilA ? i++ : null;
+      const r = j < untilB ? j++ : null;
+      rows.push([l, r]);
+    }
+  };
+  for (const [ai, bj] of anchors) {
+    flushGap(ai, bj);
+    rows.push([ai, bj]);
+    i = ai + 1;
+    j = bj + 1;
+  }
+  flushGap(a.length, b.length);
+  return rows;
+}
+
+/**
+ * Align a source block list against any number of rendition block lists.
+ *
+ * Every rendition is aligned against the source, and the per-rendition rows are
+ * merged onto the source's row order, so all columns share one row sequence.
+ *
+ * @param {import('../core/contracts.d.ts').ContentBlock[]} source
+ * @param {import('../core/contracts.d.ts').ContentBlock[][]} columns
+ * @returns {AlignedRow[]}
+ */
+function alignColumns(source, columns) {
+  const src = Array.isArray(source) ? source : [];
+  const cols = Array.isArray(columns) ? columns : [];
+
+  // Row skeleton: one row per source block, plus rows for the extras each
+  // column contributes where the source has nothing.
+  /** @type {{source: number|null, cells: (number|null)[]}[]} */
+  const rows = src.map((_, index) => ({ source: index, cells: cols.map(() => null) }));
+
+  cols.forEach((colBlocks, colIndex) => {
+    const pairs = alignPair(src, colBlocks || []);
+    /** @type {{after: number, index: number}[]} */
+    const extras = [];
+    let lastSourceRow = -1;
+    for (const [s, r] of pairs) {
+      if (s !== null) lastSourceRow = s;
+      if (r === null) continue;
+      if (s !== null) rows[s].cells[colIndex] = r;
+      else extras.push({ after: lastSourceRow, index: r });
+    }
+    // Extras land immediately after the source row they follow, in order, in
+    // their own rows — never merged into a row that already holds a pairing.
+    for (let k = extras.length - 1; k >= 0; k--) {
+      const extra = extras[k];
+      const at = rows.findIndex((row, idx) => row.source === extra.after && idx >= 0);
+      const insertAt = at < 0 ? 0 : at + 1;
+      const cells = cols.map(() => null);
+      cells[colIndex] = extra.index;
+      rows.splice(insertAt, 0, { source: null, cells });
+    }
+  });
+
+  return rows.map((row, index) => ({
+    cells: [row.source, ...row.cells],
+    key: `row/${index}`,
+  }));
+}
+
+__exports["signatureOf"] = signatureOf;
+__exports["lcsPairs"] = lcsPairs;
+__exports["alignPair"] = alignPair;
+__exports["alignColumns"] = alignColumns;
+};
+__modules["scene/blocks.js"] = function (__exports, __require) {
+/**
+ * `ContentBlock[]` → VNode.
+ *
+ * This is the only place in L8 that turns the prospect's content into markup,
+ * and it is written under three constraints that are laws rather than style:
+ *
+ *  - **§18.3 — the "before" side is presented unmodified.** Nothing here
+ *    rewrites, summarises, truncates-with-an-ellipsis-in-the-model, or
+ *    re-orders a block. Where space runs out the CSS clamps and the clamp is
+ *    *reported* to the overflow detector (`maxLines`), so a scene that cannot
+ *    hold its content shows up as a finding instead of quietly losing a
+ *    paragraph.
+ *  - **Zero network (§13).** A `media` block renders an `<img>` only when its
+ *    `MediaRef` is a `data:` URI; anything else renders a visible "not
+ *    available" frame. A `cta` block renders its label and never its `href` —
+ *    an artifact whose markup carries a live URL is a `NETWORK_REFERENCE` even
+ *    if nothing clicks it. A `raw` block is rendered as *text*, never as
+ *    markup (§8 makes raw HTML an explicit per-specimen opt-in the studio
+ *    grants, and a layout is not where that decision gets made).
+ *  - **Every run of text sits inside an element carrying `data-pp-tx`.** That
+ *    attribute is what `scenes.css` styles and what `measureScene` reads back,
+ *    so a text node that escaped it would be invisible to §22.2's detector.
+ *    `test/scene/measure.test.mjs` walks the rendered tree and fails on any.
+ *
+ * @module scene/blocks
+ */
+
+const { h } = __require("core/vdom.js");
+
+/** Heading level → text role. Levels below 3 all share the smallest role. */
+function headingRole(level) {
+  const n = Number(level) || 1;
+  return n <= 1 ? 'bh1' : n === 2 ? 'bh2' : 'bh3';
+}
+
+/**
+ * @typedef {object} BlockOptions
+ * @property {Map<string, import('../core/contracts.d.ts').MediaRef>} [media]
+ * @property {string|null} [id]           element id — the block becomes revealable
+ * @property {string|null} [group]        beat group key for `buildScene`
+ * @property {number} [clampParagraph]    `-webkit-line-clamp` for prose
+ * @property {number} [clampHeading]
+ * @property {number} [maxListItems]      list items rendered; the rest are counted, never dropped silently
+ * @property {number} [maxTableRows]
+ * @property {'full'|'condensed'} [density]
+ * @property {boolean} [mediaTall]        media may take the full box height
+ */
+
+/**
+ * Render one content block.
+ * @param {import('../core/contracts.d.ts').ContentBlock} block
+ * @param {BlockOptions} [options]
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function renderBlock(block, options = {}) {
+  const o = options || {};
+  const attrs = {
+    class: `pp-block pp-block--${block && block.type ? block.type : 'unknown'}`,
+    'data-pp-block': block && block.type ? block.type : 'unknown',
+  };
+  if (o.id) {
+    attrs['data-pp-el'] = o.id;
+    if (o.group) attrs['data-pp-group'] = o.group;
+  }
+  return h('div', attrs, blockBody(block, o));
+}
+
+/**
+ * The block's content, without the revealable wrapper.
+ * @param {import('../core/contracts.d.ts').ContentBlock} block
+ * @param {BlockOptions} o
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function blockBody(block, o) {
+  if (!block || typeof block !== 'object') return null;
+  switch (block.type) {
+    case 'heading': {
+      const level = Math.min(6, Math.max(1, Number(block.level) || 1));
+      return h(`h${level}`, {
+        class: 'pp-h',
+        'data-pp-tx': headingRole(level),
+        'data-pp-clamp': o.clampHeading || null,
+      }, String(block.text ?? ''));
+    }
+
+    case 'paragraph':
+      return h('p', {
+        class: 'pp-p',
+        'data-pp-tx': 'body',
+        'data-pp-clamp': o.clampParagraph || null,
+      }, String(block.text ?? ''));
+
+    case 'list': {
+      const items = Array.isArray(block.items) ? block.items : [];
+      const limit = o.maxListItems && items.length > o.maxListItems ? o.maxListItems : items.length;
+      const shown = items.slice(0, limit);
+      const rest = items.length - shown.length;
+      return h(block.ordered ? 'ol' : 'ul', { class: 'pp-list', 'data-pp-ordered': block.ordered ? 'true' : 'false' },
+        shown.map((item, i) => h('li', { class: 'pp-list-item', 'data-pp-inset': 'list-marker-w' },
+          h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco' }, block.ordered ? `${i + 1}.` : '•'),
+          h('span', { class: 'pp-list-text', 'data-pp-tx': 'listItem', 'data-pp-clamp': o.clampParagraph || null }, String(item ?? '')))),
+        rest > 0
+          ? h('li', { class: 'pp-list-more', 'data-pp-inset': 'list-marker-w' },
+            h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco' }, '·'),
+            h('span', { class: 'pp-list-text', 'data-pp-tx': 'caption' }, `${rest} more ${rest === 1 ? 'item' : 'items'} in the source`))
+          : null);
+    }
+
+    case 'quote':
+      return h('blockquote', { class: 'pp-quote' },
+        h('p', { class: 'pp-quote-text', 'data-pp-tx': 'blockQuote', 'data-pp-clamp': o.clampParagraph || null }, String(block.text ?? '')),
+        block.attribution
+          ? h('p', { class: 'pp-quote-attr', 'data-pp-tx': 'blockAttribution' }, String(block.attribution))
+          : null);
+
+    case 'table': {
+      const rows = Array.isArray(block.rows) ? block.rows.filter(Array.isArray) : [];
+      const cols = rows.reduce((m, r) => Math.max(m, r.length), 0) || 1;
+      const limit = o.maxTableRows && rows.length > o.maxTableRows ? o.maxTableRows : rows.length;
+      const shown = rows.slice(0, limit);
+      const rest = rows.length - shown.length;
+      const headerRow = block.header && shown.length ? shown[0] : null;
+      const bodyRows = block.header ? shown.slice(1) : shown;
+      const cellAttrs = {
+        'data-pp-frac': String(cols),
+        'data-pp-inset': 'cell-pad,cell-pad',
+      };
+      return h('div', { class: 'pp-table-wrap' },
+        h('table', { class: 'pp-table', 'data-pp-cols': String(cols) },
+          headerRow
+            ? h('thead', null, h('tr', null, padRow(headerRow, cols).map((cell) =>
+              h('th', { ...cellAttrs, 'data-pp-tx': 'cellHead', scope: 'col' }, cell))))
+            : null,
+          h('tbody', null, bodyRows.map((row) => h('tr', null, padRow(row, cols).map((cell) =>
+            h('td', { ...cellAttrs, 'data-pp-tx': 'cell' }, cell)))))),
+        rest > 0
+          ? h('p', { class: 'pp-table-more', 'data-pp-tx': 'caption' }, `${rest} more ${rest === 1 ? 'row' : 'rows'} in the source`)
+          : null);
+    }
+
+    case 'cta':
+      // The label only. §13's scanner treats any absolute URL in the emitted
+      // document as a network reference, and a proof does not need a live link
+      // to show what the client's page asks a visitor to do.
+      return h('span', { class: 'pp-cta', 'data-pp-tx': 'cta' }, String(block.label ?? ''));
+
+    case 'media': {
+      const ref = o.media ? o.media.get(String(block.ref)) : null;
+      const usable = ref && typeof ref.dataUri === 'string' && ref.dataUri.startsWith('data:');
+      return h('figure', { class: `pp-figure${o.mediaTall ? ' pp-figure--tall' : ''}` },
+        usable
+          ? h('img', {
+            class: 'pp-img',
+            src: ref.dataUri,
+            alt: ref.alt || '',
+            width: ref.intrinsic && ref.intrinsic.w ? String(ref.intrinsic.w) : null,
+            height: ref.intrinsic && ref.intrinsic.h ? String(ref.intrinsic.h) : null,
+            loading: null,
+          })
+          : h('div', { class: 'pp-img-missing', role: 'img', 'aria-label': 'Image unavailable' },
+            h('span', { class: 'pp-img-missing-text', 'data-pp-tx': 'caption' }, 'Image not included in this build')),
+        block.caption
+          ? h('figcaption', { class: 'pp-figcaption', 'data-pp-tx': 'caption', 'data-pp-clamp': o.clampParagraph || null }, String(block.caption))
+          : null);
+    }
+
+    case 'raw':
+      // §8: raw source is never presented as markup by a layout.
+      return h('div', { class: 'pp-raw' },
+        h('p', { class: 'pp-raw-label', 'data-pp-tx': 'caption' }, 'Source markup, shown as text'),
+        h('p', { class: 'pp-raw-text', 'data-pp-tx': 'body', 'data-pp-clamp': o.clampParagraph || null }, stripTags(block.html)));
+
+    default:
+      return null;
+  }
+}
+
+/**
+ * Render a run of blocks, one revealable element each when `id` supplies one.
+ * @param {import('../core/contracts.d.ts').ContentBlock[]} blocks
+ * @param {BlockOptions & {id?: (index: number) => string|null, group?: (index: number) => string|null}} [options]
+ * @returns {import('../core/vdom.js').VNode[]}
+ */
+function renderBlocks(blocks, options = {}) {
+  const list = Array.isArray(blocks) ? blocks : [];
+  return list.map((block, i) => renderBlock(block, {
+    ...options,
+    id: typeof options.id === 'function' ? options.id(i) : null,
+    group: typeof options.group === 'function' ? options.group(i) : null,
+  }));
+}
+
+/**
+ * The first block matching a type, for layouts that lead with one thing.
+ * @param {import('../core/contracts.d.ts').ContentBlock[]} blocks
+ * @param {string} type
+ * @returns {{block: import('../core/contracts.d.ts').ContentBlock, index: number}|null}
+ */
+function firstOfType(blocks, type) {
+  const list = Array.isArray(blocks) ? blocks : [];
+  for (let i = 0; i < list.length; i++) if (list[i] && list[i].type === type) return { block: list[i], index: i };
+  return null;
+}
+
+/**
+ * A one-line summary of a block set for a card or an index row: the first
+ * heading, else the first paragraph, else the first text of any kind. Never
+ * invented — if there is no text, there is no summary.
+ * @param {import('../core/contracts.d.ts').ContentBlock[]} blocks
+ * @returns {{title: string|null, blurb: string|null}}
+ */
+function summarize(blocks) {
+  const list = Array.isArray(blocks) ? blocks : [];
+  let title = null;
+  let blurb = null;
+  for (const b of list) {
+    if (!b) continue;
+    if (!title && b.type === 'heading' && b.text) title = String(b.text);
+    else if (!blurb && b.type === 'paragraph' && b.text) blurb = String(b.text);
+    else if (!blurb && b.type === 'list' && Array.isArray(b.items) && b.items.length) blurb = String(b.items[0]);
+    else if (!blurb && b.type === 'quote' && b.text) blurb = String(b.text);
+    if (title && blurb) break;
+  }
+  if (!title && blurb) { title = blurb; blurb = null; }
+  return { title, blurb };
+}
+
+/** @param {string[]} row @param {number} cols @returns {string[]} */
+function padRow(row, cols) {
+  const out = row.map((c) => String(c ?? ''));
+  while (out.length < cols) out.push('');
+  return out.slice(0, cols);
+}
+
+/**
+ * Strip tags and collapse whitespace. Used only for `raw` blocks, which are
+ * shown as text.
+ * @param {string} html
+ * @returns {string}
+ */
+function stripTags(html) {
+  return String(html ?? '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+__exports["headingRole"] = headingRole;
+__exports["renderBlock"] = renderBlock;
+__exports["blockBody"] = blockBody;
+__exports["renderBlocks"] = renderBlocks;
+__exports["firstOfType"] = firstOfType;
+__exports["summarize"] = summarize;
+__exports["stripTags"] = stripTags;
+};
+__modules["scene/parts.js"] = function (__exports, __require) {
+/**
+ * The furniture every layout shares: the scene header band, panel headers, the
+ * provenance label, source attribution, and the empty states.
+ *
+ * Keeping these in one place is what makes eight layouts read as one deck. It
+ * is also where two of the honesty laws live in code:
+ *
+ *  - **§9 / §18.1 provenance.** `provenanceLabel()` is the single producer of
+ *    `pp-provenance`, it is called by every layout that renders a rendition,
+ *    and it never puts `data-pp-el` on the label — a beat can hide anything
+ *    carrying that attribute, and a label a beat can hide is not
+ *    non-removable. The emitter re-checks the result (§22.6); this is the
+ *    render-side half of the same law.
+ *  - **§18.2 no invention.** Nothing here writes a number, a customer name, a
+ *    testimonial or a logo that is not already in the model. `renditionCount()`
+ *    counts renditions the proof actually contains; that is arithmetic over
+ *    the model, not a claim about the world.
+ *
+ * @module scene/parts
+ */
+
+const { h } = __require("core/vdom.js");
+
+/** The class §18.1 requires on the illustrative label. Owned by runtime.css. */
+const PROVENANCE_LABEL_CLASS = 'pp-provenance';
+
+/** The words the label says. Plain, short, and not softened. */
+const PROVENANCE_LABEL_TEXT = 'Illustrative example — not client-approved content';
+
+/**
+ * §9: any rendition not `client-supplied` and not explicitly promoted to
+ * `verified-by-user` must carry a visible label. Written as "not one of the two
+ * safe values" rather than "equals illustrative", so a provenance value this
+ * lane has never heard of is labelled rather than trusted.
+ * @param {import('../core/contracts.d.ts').Rendition|null|undefined} rendition
+ * @returns {boolean}
+ */
+function needsProvenanceLabel(rendition) {
+  if (!rendition) return false;
+  const p = rendition.provenance;
+  return !(p === 'client-supplied' || p === 'verified-by-user');
+}
+
+/**
+ * The label element, or null when the rendition is the client's own content or
+ * the build has labelling switched off.
+ *
+ * The `labelIllustrative` flag is honoured exactly as given. Forcing it true
+ * for review-reachable builds happens upstream — `normalizeEmitOptions()` in
+ * core/contracts.js, and again in the emitter — because that is a property of
+ * the *build*, which a layout cannot see. See docs/decisions/L8-scenes.md.
+ *
+ * @param {import('../core/contracts.d.ts').Rendition|null|undefined} rendition
+ * @param {{labelIllustrative?: boolean}} ctx
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function provenanceLabel(rendition, ctx) {
+  if (!ctx || ctx.labelIllustrative === false) return null;
+  if (!needsProvenanceLabel(rendition)) return null;
+  // Deliberately no `data-pp-el`: an element without it is always visible, so
+  // no beat can reveal-order this label away from the content it describes.
+  return h('p', {
+    class: PROVENANCE_LABEL_CLASS,
+    'data-pp-tx': 'provenance',
+    'data-pp-provenance-for': rendition.id,
+  }, PROVENANCE_LABEL_TEXT);
+}
+
+/**
+ * The scene header band: a kicker naming what kind of scene this is, the
+ * headline, and the subhead. Present in every layout at the same height, so a
+ * deck's body content starts on the same line from scene to scene.
+ *
+ * @param {import('../runtime/layouts.js').LayoutContext} ctx
+ * @param {{kicker?: string|null, group?: string, path?: string, extra?: import('../core/vdom.js').VNode}} [options]
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function sceneHead(ctx, options = {}) {
+  const { scene } = ctx;
+  const path = options.path || 'head';
+  const kicker = options.kicker || null;
+  if (!kicker && !scene.headline && !scene.subhead && !options.extra) return null;
+  return h('header', {
+    class: 'pp-scene-head',
+    'data-pp-box': 'head',
+    'data-pp-el': ctx.el(path),
+    'data-pp-group': options.group || 'head',
+  },
+  h('div', { class: 'pp-scene-head-text' },
+    kicker ? h('p', { class: 'pp-kicker', 'data-pp-tx': 'kicker' }, kicker) : null,
+    scene.headline ? h('h2', { class: 'pp-headline', 'data-pp-tx': 'headline', 'data-pp-clamp': '2' }, scene.headline) : null,
+    scene.subhead ? h('p', { class: 'pp-subhead', 'data-pp-tx': 'subhead', 'data-pp-clamp': '2' }, scene.subhead) : null),
+  options.extra || null);
+}
+
+/**
+ * A panel header: what this column is, and where it came from.
+ * @param {{title: string, meta?: string|null, tone?: 'before'|'after'|'neutral', trailing?: import('../core/vdom.js').VNode}} spec
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function panelHead(spec) {
+  return h('div', { class: `pp-panel-head pp-panel-head--${spec.tone || 'neutral'}` },
+    h('div', { class: 'pp-panel-head-text' },
+      h('p', { class: 'pp-panel-title', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' }, spec.title),
+      spec.meta ? h('p', { class: 'pp-panel-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, spec.meta) : null),
+    spec.trailing || null);
+}
+
+/**
+ * A source URL as a label a client can read: no scheme, no trailing slash.
+ *
+ * The scheme is dropped for a reason beyond tidiness — an absolute URL written
+ * into the artifact is a `NETWORK_REFERENCE` under §13, and the artifact's own
+ * chrome has no business carrying one. The prospect's *content* is rendered
+ * verbatim (§18.3); this is our label, not their copy.
+ * @param {string|null|undefined} url
+ * @returns {string|null}
+ */
+function displayUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) return null;
+  const stripped = url.trim()
+    .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
+    .replace(/^\/\//, '')
+    .replace(/\/+$/, '');
+  return stripped || null;
+}
+
+/**
+ * The meta line for a specimen: host and path, capture kind, locale.
+ * @param {import('../core/contracts.d.ts').Specimen|null} specimen
+ * @returns {string|null}
+ */
+function specimenMeta(specimen) {
+  if (!specimen) return null;
+  const parts = [];
+  const url = displayUrl(specimen.sourceUrl);
+  if (url) parts.push(url);
+  if (specimen.locale) parts.push(specimen.locale);
+  if (!url && specimen.kind) parts.push(specimen.kind);
+  return parts.length ? parts.join('  ·  ') : null;
+}
+
+/**
+ * The meta line for a rendition: its label and how it was produced.
+ * @param {import('../core/contracts.d.ts').Rendition|null} rendition
+ * @returns {string|null}
+ */
+function renditionMeta(rendition) {
+  if (!rendition) return null;
+  const parts = [];
+  if (rendition.producedBy) parts.push(PRODUCED_BY_LABEL[rendition.producedBy] || rendition.producedBy);
+  if (rendition.provenance === 'client-supplied') parts.push('client supplied');
+  else if (rendition.provenance === 'verified-by-user') parts.push('verified');
+  return parts.length ? parts.join('  ·  ') : null;
+}
+
+/** How each `producedBy` value reads to a client in the room. */
+const PRODUCED_BY_LABEL = {
+  'manual-paste': 'pasted by the team',
+  adapter: 'produced by an adapter',
+  template: 'assembled from a template',
+};
+
+/**
+ * The state every layout needs and no layout should improvise: a scene with
+ * nothing to show yet. It says which piece is missing, because the studio
+ * preview is where this is seen and a blank panel there costs the user minutes.
+ * @param {string} message
+ * @param {{box?: string}} [options]
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function emptyState(message, options = {}) {
+  return h('div', { class: 'pp-empty', 'data-pp-box': options.box || null },
+    h('p', { class: 'pp-empty-text', 'data-pp-tx': 'caption' }, message));
+}
+
+/**
+ * A count, rendered as a number and a noun. Arithmetic over the model — never
+ * a metric about the world (§18.2).
+ * @param {number} n
+ * @param {string} singular
+ * @param {string} [plural]
+ * @returns {string}
+ */
+function countLabel(n, singular, plural) {
+  const word = n === 1 ? singular : (plural || `${singular}s`);
+  return `${n} ${word}`;
+}
+
+/**
+ * The beat group an item belongs to.
+ *
+ * Below the threshold every item is its own beat, because a presenter walking
+ * three variants wants to talk about each one. Above it, items reveal in waves:
+ * nine locale cards landing one keypress at a time is nine keypresses of dead
+ * air, and the point of nine cards is the nine, not the ninth.
+ * @param {string} prefix
+ * @param {number} index
+ * @param {number} total
+ * @param {number} [max]
+ * @returns {string}
+ */
+function waveGroup(prefix, index, total, max = 4) {
+  return total > max ? `${prefix}/wave/${Math.floor(index / max)}` : `${prefix}/${index}`;
+}
+
+/**
+ * A rendition's display label, falling back to its id rather than to an
+ * invented name.
+ * @param {import('../core/contracts.d.ts').Rendition|null} rendition
+ * @param {number} index
+ * @returns {string}
+ */
+function renditionLabel(rendition, index) {
+  if (!rendition) return `Rendition ${index + 1}`;
+  const label = typeof rendition.label === 'string' ? rendition.label.trim() : '';
+  return label || `Rendition ${index + 1}`;
+}
+
+/**
+ * The specimen's display title, falling back to its source or its kind.
+ * @param {import('../core/contracts.d.ts').Specimen|null} specimen
+ * @returns {string}
+ */
+function specimenTitle(specimen) {
+  if (!specimen) return 'Their content';
+  const title = typeof specimen.title === 'string' ? specimen.title.trim() : '';
+  return title || displayUrl(specimen.sourceUrl) || 'Their content';
+}
+
+__exports["PROVENANCE_LABEL_CLASS"] = PROVENANCE_LABEL_CLASS;
+__exports["PROVENANCE_LABEL_TEXT"] = PROVENANCE_LABEL_TEXT;
+__exports["needsProvenanceLabel"] = needsProvenanceLabel;
+__exports["provenanceLabel"] = provenanceLabel;
+__exports["sceneHead"] = sceneHead;
+__exports["panelHead"] = panelHead;
+__exports["displayUrl"] = displayUrl;
+__exports["specimenMeta"] = specimenMeta;
+__exports["renditionMeta"] = renditionMeta;
+__exports["emptyState"] = emptyState;
+__exports["countLabel"] = countLabel;
+__exports["waveGroup"] = waveGroup;
+__exports["renditionLabel"] = renditionLabel;
+__exports["specimenTitle"] = specimenTitle;
+};
+__modules["scene/layouts/split-before-after.js"] = function (__exports, __require) {
+/**
+ * `splitBeforeAfter` — the workhorse (§4, §10).
+ *
+ * The prospect's own content on the left, the rendition on the right, aligned
+ * block to block. Everything about the construction serves one sentence a
+ * client says to themselves without being prompted: *that is our page, and that
+ * is what it becomes.*
+ *
+ *  - **Rows, not panels.** The two sides share one row sequence produced by
+ *    `alignColumns`, so their H1s sit on the same line and their paragraphs sit
+ *    opposite the paragraphs that replaced them. Grid items in a row stretch to
+ *    the row's height, so the alignment holds at every breakpoint and at every
+ *    beat — including beats where one side is still hidden, because
+ *    `.pp-unrevealed` keeps the box (runtime.css) and nothing reflows when the
+ *    reveal lands.
+ *  - **More than one rendition is a column, not a tab.** A scene carrying three
+ *    renditions renders four aligned columns. If that is too many for the
+ *    breakpoint, `measureScene` reports the narrower boxes and the overflow
+ *    detector says so before the meeting rather than during it.
+ *  - **The source side is untouched (§18.3).** No clamping, no truncation, no
+ *    reordering on the specimen column.
+ *
+ * @module scene/layouts/split-before-after
+ */
+
+const { h } = __require("core/vdom.js");
+const { alignColumns } = __require("scene/align.js");
+const { renderBlock } = __require("scene/blocks.js");
+const { sceneHead, panelHead, provenanceLabel, emptyState, specimenMeta, specimenTitle, renditionMeta, renditionLabel } = __require("scene/parts.js");
+
+
+
+
+/**
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function splitBeforeAfter(ctx) {
+  const { specimen, renditions } = ctx;
+  const sourceBlocks = specimen && Array.isArray(specimen.blocks) ? specimen.blocks : [];
+  const rends = Array.isArray(renditions) ? renditions.filter(Boolean) : [];
+  const columnCount = 1 + rends.length;
+
+  const body = (!specimen && rends.length === 0)
+    ? emptyState('This scene has no specimen and no rendition attached yet.', { box: 'body' })
+    : renderSplit(ctx, sourceBlocks, rends, columnCount);
+
+  return h('div', {
+    class: 'pp-layout pp-layout--split',
+    'data-pp-layout': 'splitBeforeAfter',
+    'data-pp-box': 'stage',
+    style: { '--pp-sc-split-cols': String(columnCount) },
+  },
+  sceneHead(ctx, { kicker: 'Their content, and what it becomes' }),
+  body);
+}
+
+/**
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @param {import('../../core/contracts.d.ts').ContentBlock[]} sourceBlocks
+ * @param {import('../../core/contracts.d.ts').Rendition[]} rends
+ * @param {number} columnCount
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderSplit(ctx, sourceBlocks, rends, columnCount) {
+  const rows = alignColumns(sourceBlocks, rends.map((r) => (Array.isArray(r.blocks) ? r.blocks : [])));
+  const n = String(columnCount);
+
+  const headRow = h('div', { class: 'pp-split-row pp-split-row--head' },
+    h('div', {
+      class: 'pp-split-cell pp-split-cell--head pp-col pp-col--before',
+      'data-pp-box': 'splitPanelHead',
+      'data-pp-n': n,
+      'data-pp-el': ctx.el('before/panel'),
+      'data-pp-group': 'before',
+    }, panelHead({
+      title: specimenTitle(ctx.specimen),
+      meta: specimenMeta(ctx.specimen),
+      tone: 'before',
+    })),
+    rends.map((rendition, index) => h('div', {
+      class: 'pp-split-cell pp-split-cell--head pp-col pp-col--after',
+      'data-pp-box': 'splitPanelHead',
+      'data-pp-n': n,
+      'data-pp-el': ctx.el(`after/rendition/${index}/panel`),
+      'data-pp-group': `after/${index}`,
+      'data-pp-rendition': rendition.id,
+    }, panelHead({
+      title: renditionLabel(rendition, index),
+      meta: renditionMeta(rendition),
+      tone: 'after',
+    }), provenanceLabel(rendition, ctx))));
+
+  const bodyRows = rows.map((row, rowIndex) => h('div', {
+    class: 'pp-split-row',
+    'data-pp-row': String(rowIndex),
+  },
+  cell(ctx, {
+    columnClass: 'pp-col--before',
+    n,
+    index: row.cells[0],
+    blocks: sourceBlocks,
+    path: (i) => `before/block/${i}`,
+    group: 'before',
+    media: ctx.media,
+  }),
+  rends.map((rendition, colIndex) => cell(ctx, {
+    columnClass: 'pp-col--after',
+    n,
+    index: row.cells[colIndex + 1],
+    blocks: Array.isArray(rendition.blocks) ? rendition.blocks : [],
+    path: (i) => `after/rendition/${colIndex}/block/${i}`,
+    group: `after/${colIndex}`,
+    media: ctx.media,
+    renditionId: rendition.id,
+  }))));
+
+  return h('div', { class: 'pp-split', 'data-pp-box': 'body' },
+    headRow,
+    h('div', { class: 'pp-split-body' }, bodyRows));
+}
+
+/**
+ * One aligned cell. A null index renders the empty half of a row, which keeps
+ * the columns in step rather than letting one side slide up into the other's
+ * line.
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function cell(ctx, spec) {
+  const shared = {
+    class: `pp-split-cell pp-col ${spec.columnClass}`,
+    'data-pp-box': 'splitCell',
+    'data-pp-n': spec.n,
+  };
+  if (spec.index === null || spec.index === undefined) {
+    return h('div', { ...shared, class: `${shared.class} pp-split-cell--empty`, 'aria-hidden': 'true' });
+  }
+  const block = spec.blocks[spec.index];
+  return h('div', {
+    ...shared,
+    'data-pp-el': ctx.el(spec.path(spec.index)),
+    'data-pp-group': spec.group,
+    'data-pp-rendition': spec.renditionId || null,
+  }, renderBlock(block, { media: spec.media, density: 'full' }));
+}
+
+__exports["splitBeforeAfter"] = splitBeforeAfter;
+};
+__modules["scene/layouts/fan-out.js"] = function (__exports, __require) {
+/**
+ * `fanOut` — one source, many renditions, arranged so the count is felt (§4).
+ *
+ * This is the layout for `locale-fanout` and `channel-variants`, and its whole
+ * job is to make a number physical. A sentence claiming nine markets is an
+ * assertion; nine cards filling the frame, each carrying the client's own
+ * content in a different market's structure, is an observation the room makes
+ * for itself.
+ *
+ * Three things make that work:
+ *  - the source stays on screen, small, on the left, so the fan is visibly *of*
+ *    something rather than free-floating;
+ *  - the count is rendered once, large, from `renditions.length` — arithmetic
+ *    over the model, never a claim about the world (§18.2);
+ *  - every card is the same size, because uniform cards read as a quantity
+ *    while ragged ones read as a list.
+ *
+ * Cards clamp their prose and report the clamp (`maxLines`) to `measureScene`,
+ * so content that does not fit is a finding rather than a silent trim.
+ *
+ * @module scene/layouts/fan-out
+ */
+
+const { h } = __require("core/vdom.js");
+const { renderBlock, summarize } = __require("scene/blocks.js");
+const { sceneHead, panelHead, provenanceLabel, emptyState, waveGroup, specimenMeta, specimenTitle, renditionLabel, renditionMeta } = __require("scene/parts.js");
+
+
+
+
+/** Cards past this count reveal in waves rather than one at a time. */
+const WAVE_SIZE = 4;
+
+/**
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function fanOut(ctx) {
+  const { specimen } = ctx;
+  const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
+  const sourceBlocks = specimen && Array.isArray(specimen.blocks) ? specimen.blocks : [];
+
+  return h('div', {
+    class: 'pp-layout pp-layout--fan',
+    'data-pp-layout': 'fanOut',
+    'data-pp-box': 'stage',
+  },
+  sceneHead(ctx, { kicker: 'One source, every variant' }),
+  rends.length === 0
+    ? emptyState('This scene has no renditions attached yet.', { box: 'body' })
+    : h('div', { class: 'pp-fan', 'data-pp-box': 'body' },
+      renderSource(ctx, sourceBlocks, rends.length),
+      renderGrid(ctx, rends)));
+}
+
+/**
+ * The source rail: what every card in the fan came from, plus the count.
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderSource(ctx, sourceBlocks, count) {
+  const lead = sourceBlocks.slice(0, 2);
+  return h('aside', {
+    class: 'pp-fan-source',
+    'data-pp-box': 'fanSource',
+    'data-pp-el': ctx.el('source/panel'),
+    'data-pp-group': 'source',
+  },
+  panelHead({
+    title: specimenTitle(ctx.specimen),
+    meta: specimenMeta(ctx.specimen),
+    tone: 'before',
+  }),
+  h('div', { class: 'pp-fan-source-body' },
+    lead.length
+      ? lead.map((block) => renderBlock(block, {
+        media: ctx.media,
+        density: 'condensed',
+        clampParagraph: 4,
+        clampHeading: 2,
+        maxListItems: 3,
+        maxTableRows: 3,
+      }))
+      : h('p', { class: 'pp-fan-source-empty', 'data-pp-tx': 'caption' }, 'No source specimen attached.')),
+  h('div', {
+    class: 'pp-fan-count',
+    'data-pp-el': ctx.el('source/count'),
+    'data-pp-group': 'source',
+  },
+  h('p', { class: 'pp-fan-count-number', 'data-pp-tx': 'badgeNumber' }, String(count)),
+  h('p', { class: 'pp-fan-count-label', 'data-pp-tx': 'badgeLabel' }, count === 1 ? 'rendition' : 'renditions')));
+}
+
+/**
+ * The fan itself. `data-pp-n` drives both the CSS column count and the
+ * measured card width, so the two cannot disagree.
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderGrid(ctx, rends) {
+  const n = String(rends.length);
+  return h('div', { class: 'pp-fan-grid', 'data-pp-n': n },
+    rends.map((rendition, index) => {
+      const blocks = Array.isArray(rendition.blocks) ? rendition.blocks : [];
+      const { title, blurb } = summarize(blocks);
+      const group = waveGroup('fan', index, rends.length, WAVE_SIZE);
+      return h('article', {
+        class: 'pp-fan-card',
+        'data-pp-box': 'fanCard',
+        'data-pp-n': n,
+        'data-pp-el': ctx.el(`fan/rendition/${index}`),
+        'data-pp-group': group,
+        'data-pp-rendition': rendition.id,
+      },
+      h('header', { class: 'pp-fan-card-head' },
+        h('p', { class: 'pp-fan-card-label', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' }, renditionLabel(rendition, index)),
+        renditionMeta(rendition)
+          ? h('p', { class: 'pp-fan-card-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, renditionMeta(rendition))
+          : null),
+      h('div', { class: 'pp-fan-card-body' },
+        title ? h('p', { class: 'pp-fan-card-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '2' }, title) : null,
+        blurb ? h('p', { class: 'pp-fan-card-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '4' }, blurb) : null,
+        !title && !blurb
+          ? h('p', { class: 'pp-fan-card-empty', 'data-pp-tx': 'caption' }, 'No content blocks on this rendition.')
+          : null),
+      provenanceLabel(rendition, ctx));
+    }));
+}
+
+__exports["WAVE_SIZE"] = WAVE_SIZE;
+__exports["fanOut"] = fanOut;
+};
+__modules["scene/layouts/stack.js"] = function (__exports, __require) {
+/**
+ * `stack` — sequential states of the same asset (§4).
+ *
+ * The layout for `governed-iteration` and `approval-chain`: one asset, shown at
+ * each state it passes through, in order, on one screen. The point is not each
+ * state individually — it is that the brand and the claims hold across all of
+ * them, which you can only see when they are stacked where the eye can compare
+ * them without scrolling.
+ *
+ * The rail on the left is a real spine: every step is numbered, the numbers are
+ * text (so they are measured like any other text), and each step is its own
+ * reveal so the presenter can walk the chain one state at a time. Steps share
+ * the body height equally — a flex column of `flex: 1 1 0` — so a chain of
+ * three and a chain of six both fill the frame, and `measureScene` reports the
+ * per-step height that follows from the count.
+ *
+ * @module scene/layouts/stack
+ */
+
+const { h } = __require("core/vdom.js");
+const { renderBlock, summarize } = __require("scene/blocks.js");
+const { sceneHead, provenanceLabel, emptyState, specimenTitle, specimenMeta, renditionLabel, renditionMeta } = __require("scene/parts.js");
+
+
+
+
+/**
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function stack(ctx) {
+  const steps = stepsOf(ctx);
+
+  return h('div', {
+    class: 'pp-layout pp-layout--stack',
+    'data-pp-layout': 'stack',
+    'data-pp-box': 'stage',
+  },
+  sceneHead(ctx, { kicker: 'The same asset, at every state' }),
+  steps.length === 0
+    ? emptyState('This scene has no states to show yet — attach a specimen or renditions.', { box: 'body' })
+    : h('ol', { class: 'pp-stack', 'data-pp-box': 'body', 'data-pp-n': String(steps.length) },
+      steps.map((step, index) => renderStep(ctx, step, index, steps.length))));
+}
+
+/**
+ * The states, in order: the specimen as it starts, then one per rendition.
+ * A scene with no specimen starts at its first rendition rather than inventing
+ * a starting state.
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {{kind: 'source'|'rendition', title: string, meta: string|null, blocks: any[], rendition: any, path: string, group: string}[]}
+ */
+function stepsOf(ctx) {
+  /** @type {any[]} */
+  const steps = [];
+  if (ctx.specimen) {
+    steps.push({
+      kind: 'source',
+      title: specimenTitle(ctx.specimen),
+      meta: specimenMeta(ctx.specimen),
+      blocks: Array.isArray(ctx.specimen.blocks) ? ctx.specimen.blocks : [],
+      rendition: null,
+      path: 'stack/source',
+      group: 'stack/0',
+    });
+  }
+  const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
+  rends.forEach((rendition, index) => {
+    steps.push({
+      kind: 'rendition',
+      title: renditionLabel(rendition, index),
+      meta: renditionMeta(rendition),
+      blocks: Array.isArray(rendition.blocks) ? rendition.blocks : [],
+      rendition,
+      path: `stack/step/${index}`,
+      group: `stack/${steps.length}`,
+    });
+  });
+  return steps;
+}
+
+/** @returns {import('../../core/vdom.js').VNode} */
+function renderStep(ctx, step, index, total) {
+  const { title, blurb } = summarize(step.blocks);
+  const lead = step.blocks.length ? step.blocks[0] : null;
+  return h('li', {
+    class: `pp-stack-step pp-stack-step--${step.kind}`,
+    'data-pp-box': 'stackStep',
+    'data-pp-n': String(total),
+    'data-pp-el': ctx.el(step.path),
+    'data-pp-group': step.group,
+    'data-pp-rendition': step.rendition ? step.rendition.id : null,
+  },
+  h('div', { class: 'pp-stack-rail', 'aria-hidden': 'true' },
+    h('span', { class: 'pp-stack-index', 'data-pp-tx': 'stepIndex' }, String(index + 1))),
+  h('div', { class: 'pp-stack-body' },
+    h('div', { class: 'pp-stack-head' },
+      h('p', { class: 'pp-stack-label', 'data-pp-tx': 'stepLabel', 'data-pp-clamp': '1' }, step.title),
+      step.meta ? h('p', { class: 'pp-stack-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, step.meta) : null),
+    h('div', { class: 'pp-stack-content' },
+      lead && lead.type !== 'paragraph' && lead.type !== 'heading'
+        ? renderBlock(lead, { media: ctx.media, density: 'condensed', clampParagraph: 2, maxListItems: 3, maxTableRows: 3 })
+        : [
+          title ? h('p', { class: 'pp-stack-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '1' }, title) : null,
+          blurb ? h('p', { class: 'pp-stack-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2' }, blurb) : null,
+          !title && !blurb ? h('p', { class: 'pp-stack-empty', 'data-pp-tx': 'caption' }, 'No content blocks at this state.') : null,
+        ]),
+    provenanceLabel(step.rendition, ctx)));
+}
+
+__exports["stack"] = stack;
+};
+__modules["scene/layouts/full-bleed.js"] = function (__exports, __require) {
+/**
+ * `fullBleed` — one visual filling the frame (§4).
+ *
+ * Used where a scene has one thing to say and a picture that says it: a hero,
+ * a captured page, an asset in situ. There is no header band; the headline
+ * lives in an overlay panel on the visual, because a full-bleed scene with a
+ * header band above it is not full bleed.
+ *
+ * Two honesty rules apply harder here than anywhere else:
+ *  - a `MediaRef` is rendered only when it is a `data:` URI (§13 — an artifact
+ *    that reaches the network for its hero image is a failed artifact), and a
+ *    missing asset renders a visible frame saying so rather than a blank screen
+ *    the presenter discovers live;
+ *  - when the visual comes from an illustrative rendition, the provenance label
+ *    sits *in the overlay* — on top of the image, in the client's eyeline, not
+ *    tucked into a corner of the layout (§9, §18.1).
+ *
+ * With no media at all the layout degrades to a typographic statement rather
+ * than to an empty box: the headline set large is a legitimate full-bleed
+ * scene, and it is what the studio shows while assets are still being gathered.
+ *
+ * @module scene/layouts/full-bleed
+ */
+
+const { h } = __require("core/vdom.js");
+const { provenanceLabel, emptyState, specimenTitle, renditionLabel } = __require("scene/parts.js");
+
+/**
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function fullBleed(ctx) {
+  const pick = pickVisual(ctx);
+  const scene = ctx.scene;
+
+  return h('div', {
+    class: `pp-layout pp-layout--bleed${pick.media ? '' : ' pp-layout--bleed-type'}`,
+    'data-pp-layout': 'fullBleed',
+    'data-pp-box': 'stage',
+  },
+  h('figure', {
+    class: 'pp-bleed-frame',
+    'data-pp-box': 'bleedMedia',
+    'data-pp-el': ctx.el('bleed/media'),
+    'data-pp-group': 'media',
+    'data-pp-rendition': pick.rendition ? pick.rendition.id : null,
+  },
+  pick.media
+    ? h('img', {
+      class: 'pp-bleed-img',
+      src: pick.media.dataUri,
+      alt: pick.media.alt || scene.headline || specimenTitle(ctx.specimen),
+      width: pick.media.intrinsic && pick.media.intrinsic.w ? String(pick.media.intrinsic.w) : null,
+      height: pick.media.intrinsic && pick.media.intrinsic.h ? String(pick.media.intrinsic.h) : null,
+    })
+    : h('div', { class: 'pp-bleed-void', role: 'presentation' },
+      h('p', { class: 'pp-bleed-void-text', 'data-pp-tx': 'caption' },
+        pick.reason))),
+
+  h('div', {
+    class: 'pp-bleed-overlay',
+    'data-pp-box': 'bleedOverlay',
+    'data-pp-el': ctx.el('bleed/overlay'),
+    'data-pp-group': 'head',
+    'data-pp-rendition': pick.rendition ? pick.rendition.id : null,
+  },
+  pick.source ? h('p', { class: 'pp-bleed-kicker', 'data-pp-tx': 'kicker' }, pick.source) : null,
+  scene.headline
+    ? h('h2', { class: 'pp-bleed-headline', 'data-pp-tx': 'displayXL', 'data-pp-clamp': '3' }, scene.headline)
+    : null,
+  scene.subhead
+    ? h('p', { class: 'pp-bleed-sub', 'data-pp-tx': 'displaySub', 'data-pp-clamp': '3' }, scene.subhead)
+    : null,
+  pick.caption
+    ? h('p', { class: 'pp-bleed-caption', 'data-pp-tx': 'caption', 'data-pp-clamp': '2' }, pick.caption)
+    : null,
+  !scene.headline && !scene.subhead && !pick.caption && !pick.source
+    ? emptyState('This scene has no headline yet.')
+    : null,
+  provenanceLabel(pick.rendition, ctx)));
+}
+
+/**
+ * The visual, and where it came from. Renditions win over the specimen when the
+ * scene carries one, because a full-bleed scene attached to a rendition is
+ * showing the rendition.
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {{media: import('../../core/contracts.d.ts').MediaRef|null, rendition: any, source: string|null, caption: string|null, reason: string}}
+ */
+function pickVisual(ctx) {
+  const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
+  for (let i = 0; i < rends.length; i++) {
+    const found = firstUsableMedia(rends[i], ctx);
+    if (found) {
+      return {
+        media: found.media,
+        rendition: rends[i],
+        source: renditionLabel(rends[i], i),
+        caption: found.caption,
+        reason: '',
+      };
+    }
+  }
+  const fromSpecimen = firstUsableMedia(ctx.specimen, ctx);
+  if (fromSpecimen) {
+    return {
+      media: fromSpecimen.media,
+      rendition: null,
+      source: ctx.specimen ? specimenTitle(ctx.specimen) : null,
+      caption: fromSpecimen.caption,
+      reason: '',
+    };
+  }
+  const carrier = rends[0] || ctx.specimen || null;
+  const hasRefs = carrier && ((Array.isArray(carrier.media) && carrier.media.length > 0)
+    || (Array.isArray(carrier.blocks) && carrier.blocks.some((b) => b && b.type === 'media')));
+  return {
+    media: null,
+    rendition: rends[0] || null,
+    source: carrier ? (rends[0] ? renditionLabel(rends[0], 0) : specimenTitle(ctx.specimen)) : null,
+    caption: null,
+    reason: hasRefs
+      ? 'This image is not included in this build.'
+      : 'No image attached to this scene.',
+  };
+}
+
+/**
+ * The first media a carrier can actually show: a `data:` URI, resolved through
+ * the carrier's own media list first and the scene's media map second.
+ * @returns {{media: import('../../core/contracts.d.ts').MediaRef, caption: string|null}|null}
+ */
+function firstUsableMedia(carrier, ctx) {
+  if (!carrier) return null;
+  const usable = (m) => m && typeof m.dataUri === 'string' && m.dataUri.startsWith('data:');
+
+  const blocks = Array.isArray(carrier.blocks) ? carrier.blocks : [];
+  for (const block of blocks) {
+    if (!block || block.type !== 'media') continue;
+    const direct = (Array.isArray(carrier.media) ? carrier.media : []).find((m) => m && m.id === block.ref);
+    const viaMap = ctx.media ? ctx.media.get(String(block.ref)) : null;
+    const media = usable(direct) ? direct : (usable(viaMap) ? viaMap : null);
+    if (media) return { media, caption: block.caption ? String(block.caption) : (media.alt || null) };
+  }
+  const own = (Array.isArray(carrier.media) ? carrier.media : []).find(usable);
+  return own ? { media: own, caption: own.alt || null } : null;
+}
+
+__exports["fullBleed"] = fullBleed;
+__exports["pickVisual"] = pickVisual;
+};
+__modules["scene/layouts/side-note.js"] = function (__exports, __require) {
+/**
+ * `sideNote` — content with a margin annotation (§4).
+ *
+ * The layout for the moment in a pitch where the content is the client's and
+ * the commentary is yours: their page runs down the main column, and each
+ * change, constraint or observation sits in the margin *opposite the block it
+ * is about*. Annotation that floats away from its subject is decoration; this
+ * one is anchored by construction, because notes are placed on the row of the
+ * source block they were aligned to.
+ *
+ * Notes come from the model and nowhere else — a rendition's blocks aligned
+ * against the specimen, and the rendition's `notes` string. Nothing is
+ * invented (§18.2).
+ *
+ * @module scene/layouts/side-note
+ */
+
+const { h } = __require("core/vdom.js");
+const { alignPair } = __require("scene/align.js");
+const { renderBlock } = __require("scene/blocks.js");
+const { blockText } = __require("core/contracts.js");
+const { sceneHead, provenanceLabel, emptyState, waveGroup, specimenMeta, specimenTitle, renditionLabel } = __require("scene/parts.js");
+
+
+
+
+/**
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function sideNote(ctx) {
+  const { specimen } = ctx;
+  const mainBlocks = specimen && Array.isArray(specimen.blocks) ? specimen.blocks : [];
+  const notes = notesFor(ctx, mainBlocks);
+  const rowCount = Math.max(mainBlocks.length, notes.length, 1);
+
+  if (mainBlocks.length === 0 && notes.length === 0) {
+    return h('div', {
+      class: 'pp-layout pp-layout--side',
+      'data-pp-layout': 'sideNote',
+      'data-pp-box': 'stage',
+    },
+    sceneHead(ctx, { kicker: 'Their content, annotated' }),
+    emptyState('This scene has no specimen and no notes attached yet.', { box: 'body' }));
+  }
+
+  // One row per main block, with any notes anchored to that row beside it, plus
+  // trailing rows for notes that outlive the main column.
+  const rows = [];
+  const maxRow = Math.max(mainBlocks.length, ...notes.map((note) => note.row + 1), 0);
+  for (let row = 0; row < maxRow; row++) {
+    rows.push({ block: row < mainBlocks.length ? row : null, notes: notes.filter((note) => note.row === row) });
+  }
+
+  return h('div', {
+    class: 'pp-layout pp-layout--side',
+    'data-pp-layout': 'sideNote',
+    'data-pp-box': 'stage',
+  },
+  sceneHead(ctx, {
+    kicker: 'Their content, annotated',
+    extra: specimen
+      ? h('p', { class: 'pp-side-source', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' },
+        [specimenTitle(specimen), specimenMeta(specimen)].filter(Boolean).join('  ·  '))
+      : null,
+  }),
+  h('div', { class: 'pp-side', 'data-pp-box': 'body' },
+    rows.map((row, index) => h('div', { class: 'pp-side-row', 'data-pp-row': String(index) },
+      h('div', {
+        class: 'pp-side-main',
+        'data-pp-box': 'sideMain',
+      },
+      row.block === null
+        ? null
+        : h('div', {
+          class: 'pp-side-block',
+          'data-pp-el': ctx.el(`main/block/${row.block}`),
+          'data-pp-group': 'main',
+        }, renderBlock(mainBlocks[row.block], { media: ctx.media, density: 'full' }))),
+      h('div', { class: 'pp-side-margin' },
+        row.notes.map((note) => renderNote(ctx, note, rowCount)))))));
+}
+
+/**
+ * The notes, each carrying the row of the main block it belongs beside.
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @param {import('../../core/contracts.d.ts').ContentBlock[]} mainBlocks
+ * @returns {{row: number, index: number, label: string, kind: 'block'|'note', block: any, text: string|null, rendition: any}[]}
+ */
+function notesFor(ctx, mainBlocks) {
+  const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
+  /** @type {any[]} */
+  const notes = [];
+  rends.forEach((rendition, rIndex) => {
+    const label = renditionLabel(rendition, rIndex);
+    if (typeof rendition.notes === 'string' && rendition.notes.trim()) {
+      notes.push({ row: 0, index: notes.length, label, kind: 'note', block: null, text: rendition.notes.trim(), rendition });
+    }
+    const blocks = Array.isArray(rendition.blocks) ? rendition.blocks : [];
+    const pairs = alignPair(mainBlocks, blocks);
+    let lastRow = 0;
+    for (const [source, target] of pairs) {
+      if (source !== null) lastRow = source;
+      if (target === null) continue;
+      const block = blocks[target];
+      const text = blockText(block).join(' ').trim();
+      if (!text) continue;
+      notes.push({
+        row: source === null ? lastRow : source,
+        index: notes.length,
+        label,
+        kind: 'block',
+        block,
+        text: null,
+        rendition,
+      });
+    }
+  });
+  return notes.map((note, i) => ({ ...note, index: i }));
+}
+
+/** @returns {import('../../core/vdom.js').VNode} */
+function renderNote(ctx, note, rowCount) {
+  return h('aside', {
+    class: `pp-side-note pp-side-note--${note.kind}`,
+    'data-pp-box': 'sideNote',
+    'data-pp-n': String(rowCount),
+    'data-pp-el': ctx.el(`note/${note.index}`),
+    'data-pp-group': waveGroup('notes', note.index, rowCount),
+    'data-pp-rendition': note.rendition ? note.rendition.id : null,
+  },
+  h('p', { class: 'pp-side-note-label', 'data-pp-tx': 'noteLabel', 'data-pp-clamp': '1' }, note.label),
+  note.kind === 'note'
+    ? h('p', { class: 'pp-side-note-text', 'data-pp-tx': 'note', 'data-pp-clamp': '6' }, note.text)
+    : renderBlock(note.block, { media: ctx.media, density: 'condensed', clampParagraph: 6, clampHeading: 2, maxListItems: 4, maxTableRows: 3 }),
+  provenanceLabel(note.rendition, ctx));
+}
+
+__exports["sideNote"] = sideNote;
+};
+__modules["core/text-metrics.js"] = function (__exports, __require) {
+/**
+ * Deterministic text measurement (DECISIONS D7).
+ *
+ * §22.2 names post-substitution text overflow as the defect most likely to make
+ * a proof look amateur in front of a client, and §14 calls overflow detection
+ * "the highest-value check in the entire tool". A detector is only worth having
+ * if it measures the same way everywhere, so measurement here is a table lookup,
+ * not a canvas call:
+ *
+ *   - `AFM_TABLES` carries the published Adobe Core-14 advance-width tables
+ *     (Helvetica, Helvetica-Bold, Times-Roman, Times-Bold, Courier) at 1000
+ *     units per em, together with their published cap-height and x-height.
+ *   - `FAMILY_MODELS` maps every family the studio is likely to meet onto one of
+ *     those tables plus a documented width scale and its own published vertical
+ *     metrics. Families backed by an AFM table are `exact`; the rest are
+ *     `approximate` and say so, and their confidence is lowered accordingly.
+ *   - Line breaking is greedy over the same widths, so a wrapped paragraph
+ *     measures identically in Node, in the studio and in CI.
+ *
+ * A browser cross-check (`test/core/text-metrics.browser.test.mjs`) compares
+ * these numbers against real Chromium measurement and reports the residual
+ * rather than hiding it. Canvas is a calibration instrument here, never the
+ * source of truth.
+ *
+ * @module core/text-metrics
+ */
+
+/** Every AFM table is expressed in this many units per em. */
+const UNITS_PER_EM = 1000;
+
+/**
+ * Advance widths for codepoints 32..126, in 1000ths of an em, straight from the
+ * Adobe Font Metrics files distributed with the Core-14 PostScript fonts.
+ */
+const W_HELVETICA = [
+  278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278,
+  556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556,
+  1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,
+  667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,
+  333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
+  556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+];
+
+const W_HELVETICA_BOLD = [
+  278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278,
+  556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611,
+  975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778,
+  667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556,
+  333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611,
+  611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584,
+];
+
+const W_TIMES_ROMAN = [
+  250, 333, 408, 500, 500, 833, 778, 180, 333, 333, 500, 564, 250, 333, 250, 278,
+  500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 278, 278, 564, 564, 564, 444,
+  921, 722, 667, 667, 722, 611, 556, 722, 722, 333, 389, 722, 611, 889, 722, 722,
+  556, 722, 667, 556, 611, 722, 722, 944, 722, 722, 611, 333, 278, 333, 469, 500,
+  333, 444, 500, 444, 500, 444, 333, 500, 500, 278, 278, 500, 278, 778, 500, 500,
+  500, 500, 333, 389, 278, 500, 500, 722, 500, 500, 444, 480, 200, 480, 541,
+];
+
+const W_TIMES_BOLD = [
+  250, 333, 555, 500, 500, 1000, 833, 278, 333, 333, 500, 570, 250, 333, 250, 278,
+  500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 333, 333, 570, 570, 570, 500,
+  930, 722, 667, 722, 722, 667, 611, 778, 778, 389, 500, 778, 667, 944, 722, 778,
+  611, 778, 722, 556, 667, 722, 722, 1000, 722, 722, 667, 333, 278, 333, 581, 500,
+  333, 500, 556, 444, 556, 444, 333, 500, 556, 278, 333, 556, 278, 833, 556, 500,
+  556, 556, 444, 389, 333, 556, 500, 722, 500, 500, 444, 394, 220, 394, 520,
+];
+
+const W_COURIER = new Array(95).fill(600);
+
+/**
+ * Latin-1 and General-Punctuation characters that appear constantly in real
+ * captured copy. Accented Latin letters take the advance of their base letter,
+ * which is exact in every Latin design that composes them from a base glyph and
+ * a mark; the rest are the published AFM widths for those codepoints.
+ * @type {Record<number, string|number>}
+ */
+const EXTENDED = {
+  0x00a0: ' ', 0x00a1: '!', 0x00a2: '$', 0x00a3: '$', 0x00a5: '$', 0x00a9: '@',
+  0x00ab: '"', 0x00ad: '-', 0x00ae: '@', 0x00b0: '*', 0x00b7: '.', 0x00bb: '"',
+  0x00bf: '?', 0x00d7: '+', 0x00f7: '+',
+  0x2010: '-', 0x2011: '-', 0x2012: '-', 0x2013: '-', 0x2014: 'm', 0x2015: 'm',
+  0x2018: "'", 0x2019: "'", 0x201a: ',', 0x201c: '"', 0x201d: '"', 0x201e: '"',
+  0x2020: '+', 0x2021: '+', 0x2022: '.', 0x2026: 'W', 0x2030: '%',
+  0x2039: '<', 0x203a: '>', 0x2044: '/', 0x20ac: '$', 0x2122: 'W',
+  0x2192: '+', 0x2260: '=', 0x2264: '=', 0x2265: '=',
+};
+
+/** Base letters for the Latin-1 accented range, so `é` measures as `e`. */
+const DEACCENT = (() => {
+  /** @type {Record<number, string>} */
+  const m = {};
+  const put = (from, to, base) => { for (let c = from; c <= to; c++) m[c] = base[c - from]; };
+  put(0x00c0, 0x00c5, 'AAAAAA'); m[0x00c6] = 'A'; m[0x00c7] = 'C';
+  put(0x00c8, 0x00cb, 'EEEE'); put(0x00cc, 0x00cf, 'IIII');
+  m[0x00d0] = 'D'; m[0x00d1] = 'N'; put(0x00d2, 0x00d6, 'OOOOO'); m[0x00d8] = 'O';
+  put(0x00d9, 0x00dc, 'UUUU'); m[0x00dd] = 'Y'; m[0x00de] = 'P'; m[0x00df] = 'B';
+  put(0x00e0, 0x00e5, 'aaaaaa'); m[0x00e6] = 'a'; m[0x00e7] = 'c';
+  put(0x00e8, 0x00eb, 'eeee'); put(0x00ec, 0x00ef, 'iiii');
+  m[0x00f0] = 'o'; m[0x00f1] = 'n'; put(0x00f2, 0x00f6, 'ooooo'); m[0x00f8] = 'o';
+  put(0x00f9, 0x00fc, 'uuuu'); m[0x00fd] = 'y'; m[0x00fe] = 'p'; m[0x00ff] = 'y';
+  put(0x0100, 0x0105, 'AaAaAa'); put(0x0106, 0x010d, 'CcCcCcCc');
+  put(0x010e, 0x0111, 'DdDd'); put(0x0112, 0x011b, 'EeEeEeEeEe');
+  put(0x011c, 0x0123, 'GgGgGgGg'); put(0x0124, 0x0127, 'HhHh');
+  put(0x0128, 0x0131, 'IiIiIiIiIi'); put(0x0139, 0x0142, 'LlLlLlLlLl');
+  put(0x0143, 0x014b, 'NnNnNnnNn'); put(0x014c, 0x0151, 'OoOoOo');
+  put(0x0154, 0x0159, 'RrRrRr'); put(0x015a, 0x0161, 'SsSsSsSs');
+  put(0x0162, 0x0167, 'TtTtTt'); put(0x0168, 0x0173, 'UuUuUuUuUuUu');
+  m[0x0174] = 'W'; m[0x0175] = 'w'; put(0x0176, 0x0178, 'YyY');
+  put(0x0179, 0x017e, 'ZzZzZz');
+  return m;
+})();
+
+/**
+ * @typedef {object} AfmTable
+ * @property {string} name
+ * @property {number[]} widths   codepoints 32..126
+ * @property {number} capHeight
+ * @property {number} xHeight
+ * @property {number} ascender
+ * @property {number} descender  negative
+ * @property {number} defaultWidth
+ */
+
+/** The published Core-14 tables. @type {Record<string, AfmTable>} */
+const AFM_TABLES = {
+  'Helvetica': { name: 'Helvetica', widths: W_HELVETICA, capHeight: 718, xHeight: 523, ascender: 718, descender: -207, defaultWidth: 556 },
+  'Helvetica-Bold': { name: 'Helvetica-Bold', widths: W_HELVETICA_BOLD, capHeight: 718, xHeight: 532, ascender: 718, descender: -207, defaultWidth: 611 },
+  'Times-Roman': { name: 'Times-Roman', widths: W_TIMES_ROMAN, capHeight: 662, xHeight: 450, ascender: 683, descender: -217, defaultWidth: 500 },
+  'Times-Bold': { name: 'Times-Bold', widths: W_TIMES_BOLD, capHeight: 676, xHeight: 461, ascender: 683, descender: -217, defaultWidth: 500 },
+  'Courier': { name: 'Courier', widths: W_COURIER, capHeight: 562, xHeight: 426, ascender: 629, descender: -157, defaultWidth: 600 },
+};
+
+/**
+ * The corpus the average advance is taken over: the Latin alphabet in both
+ * cases, the digits, and a space, each counted once. Documented rather than
+ * tuned, so `metricDelta.avgAdvance` means the same thing for every family.
+ */
+const AVG_ADVANCE_CORPUS =
+  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ';
+
+/**
+ * @typedef {object} FamilyModel
+ * @property {string} key            normalized family name
+ * @property {string} label          canonical display name
+ * @property {string} base           AFM table for regular weights
+ * @property {string|null} boldBase  AFM table for weight >= 600, when one exists
+ * @property {number} widthScale     multiplier on the base table's advances
+ * @property {number} capHeight      per mille of em, published
+ * @property {number} xHeight        per mille of em, published
+ * @property {number} ascender
+ * @property {number} descender
+ * @property {'sans'|'serif'|'mono'|'display'} category
+ * @property {boolean} exact         true when the widths come from this family's own AFM
+ * @property {string[]} aliases      other names that resolve to this model
+ */
+
+/**
+ * @param {string} label
+ * @param {Partial<FamilyModel> & {base: string, capHeight: number, xHeight: number, category: FamilyModel['category']}} spec
+ * @returns {FamilyModel}
+ */
+function model(label, spec) {
+  return {
+    key: normalizeFamily(label),
+    label,
+    base: spec.base,
+    boldBase: spec.boldBase ?? null,
+    widthScale: spec.widthScale ?? 1,
+    capHeight: spec.capHeight,
+    xHeight: spec.xHeight,
+    ascender: spec.ascender ?? Math.round(spec.capHeight * 1.02),
+    descender: spec.descender ?? -Math.round(spec.capHeight * 0.29),
+    category: spec.category,
+    exact: spec.exact ?? false,
+    aliases: spec.aliases ?? [],
+  };
+}
+
+/**
+ * Every family model. Vertical metrics are the families' own published values
+ * (OS/2 sCapHeight and sxHeight, normalized to a 1000-unit em); `widthScale` is
+ * the ratio of the family's average advance over `AVG_ADVANCE_CORPUS` to the
+ * base table's, taken from the same source. Families marked `exact` are the
+ * ones whose advance table *is* the base table.
+ * @type {FamilyModel[]}
+ */
+const MODELS = [
+  // --- metric-compatible with Helvetica -----------------------------------
+  model('Helvetica', { base: 'Helvetica', boldBase: 'Helvetica-Bold', capHeight: 718, xHeight: 523, ascender: 718, descender: -207, category: 'sans', exact: true, aliases: ['nimbus sans', 'helvetica lt', 'helvetica now'] }),
+  model('Arial', { base: 'Helvetica', boldBase: 'Helvetica-Bold', capHeight: 716, xHeight: 519, ascender: 728, descender: -210, category: 'sans', exact: true, aliases: ['arialmt', 'arial mt'] }),
+  model('Liberation Sans', { base: 'Helvetica', boldBase: 'Helvetica-Bold', capHeight: 688, xHeight: 528, category: 'sans', exact: true }),
+  model('Arimo', { base: 'Helvetica', boldBase: 'Helvetica-Bold', capHeight: 716, xHeight: 519, category: 'sans', exact: true }),
+  model('Helvetica Neue', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.985, capHeight: 714, xHeight: 517, category: 'sans', aliases: ['helveticaneue', 'tex gyre heros'] }),
+  // --- metric-compatible with Times ---------------------------------------
+  model('Times New Roman', { base: 'Times-Roman', boldBase: 'Times-Bold', capHeight: 662, xHeight: 447, ascender: 693, descender: -216, category: 'serif', exact: true, aliases: ['times', 'timesnewromanpsmt'] }),
+  model('Liberation Serif', { base: 'Times-Roman', boldBase: 'Times-Bold', capHeight: 654, xHeight: 450, category: 'serif', exact: true }),
+  model('Tinos', { base: 'Times-Roman', boldBase: 'Times-Bold', capHeight: 662, xHeight: 447, category: 'serif', exact: true }),
+  // --- metric-compatible with Courier -------------------------------------
+  model('Courier New', { base: 'Courier', capHeight: 571, xHeight: 423, category: 'mono', exact: true, aliases: ['courier'] }),
+  model('Liberation Mono', { base: 'Courier', capHeight: 571, xHeight: 423, category: 'mono', exact: true }),
+  model('Cousine', { base: 'Courier', capHeight: 571, xHeight: 423, category: 'mono', exact: true }),
+  // --- system sans ---------------------------------------------------------
+  model('Verdana', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 1.105, capHeight: 727, xHeight: 545, category: 'sans' }),
+  model('Tahoma', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 1.015, capHeight: 727, xHeight: 546, category: 'sans' }),
+  model('Trebuchet MS', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.995, capHeight: 715, xHeight: 522, category: 'sans' }),
+  model('Segoe UI', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.955, capHeight: 700, xHeight: 500, category: 'sans' }),
+  model('Calibri', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.915, capHeight: 644, xHeight: 466, category: 'sans' }),
+  model('San Francisco', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.965, capHeight: 700, xHeight: 517, category: 'sans', aliases: ['sf pro', 'sf pro text', 'sf pro display', '-apple-system', 'blinkmacsystemfont', 'system-ui'] }),
+  // --- ubiquitous webfonts -------------------------------------------------
+  model('Roboto', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.962, capHeight: 711, xHeight: 528, category: 'sans' }),
+  model('Open Sans', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.992, capHeight: 714, xHeight: 535, category: 'sans' }),
+  model('Lato', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.948, capHeight: 720, xHeight: 506, category: 'sans' }),
+  model('Montserrat', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 1.088, capHeight: 700, xHeight: 517, category: 'sans' }),
+  model('Inter', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 1.002, capHeight: 727, xHeight: 517, category: 'sans' }),
+  model('Poppins', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 1.078, capHeight: 700, xHeight: 548, category: 'sans' }),
+  model('Source Sans Pro', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.928, capHeight: 660, xHeight: 486, category: 'sans', aliases: ['source sans 3'] }),
+  model('Nunito Sans', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.975, capHeight: 705, xHeight: 490, category: 'sans', aliases: ['nunito'] }),
+  model('Raleway', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.968, capHeight: 720, xHeight: 520, category: 'sans' }),
+  model('Work Sans', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.985, capHeight: 720, xHeight: 500, category: 'sans' }),
+  model('Rubik', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.995, capHeight: 700, xHeight: 519, category: 'sans' }),
+  model('DM Sans', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.972, capHeight: 700, xHeight: 517, category: 'sans' }),
+  model('Manrope', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.978, capHeight: 715, xHeight: 520, category: 'sans' }),
+  model('Plus Jakarta Sans', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.985, capHeight: 730, xHeight: 525, category: 'sans' }),
+  model('Figtree', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.968, capHeight: 720, xHeight: 520, category: 'sans' }),
+  model('Outfit', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 1.015, capHeight: 700, xHeight: 500, category: 'sans' }),
+  model('Space Grotesk', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 1.005, capHeight: 700, xHeight: 505, category: 'sans' }),
+  model('Karla', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.945, capHeight: 715, xHeight: 510, category: 'sans' }),
+  model('Barlow', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.925, capHeight: 720, xHeight: 520, category: 'sans' }),
+  model('Mulish', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.965, capHeight: 700, xHeight: 500, category: 'sans' }),
+  model('Geist', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.972, capHeight: 730, xHeight: 520, category: 'sans' }),
+  model('Noto Sans', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.995, capHeight: 714, xHeight: 536, category: 'sans' }),
+  model('PT Sans', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.955, capHeight: 700, xHeight: 500, category: 'sans' }),
+  model('Ubuntu', { base: 'Helvetica', boldBase: 'Helvetica-Bold', widthScale: 0.972, capHeight: 693, xHeight: 520, category: 'sans' }),
+  // --- serif ---------------------------------------------------------------
+  model('Georgia', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 1.075, capHeight: 692, xHeight: 484, category: 'serif' }),
+  model('Merriweather', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 1.125, capHeight: 740, xHeight: 554, category: 'serif' }),
+  model('Playfair Display', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 1.022, capHeight: 700, xHeight: 517, category: 'serif' }),
+  model('Lora', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 1.048, capHeight: 700, xHeight: 510, category: 'serif' }),
+  model('PT Serif', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 1.035, capHeight: 700, xHeight: 500, category: 'serif' }),
+  model('Noto Serif', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 1.075, capHeight: 714, xHeight: 536, category: 'serif' }),
+  model('Libre Baskerville', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 1.115, capHeight: 700, xHeight: 530, category: 'serif' }),
+  model('Source Serif Pro', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 1.005, capHeight: 660, xHeight: 475, category: 'serif', aliases: ['source serif 4'] }),
+  model('Crimson Text', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 0.965, capHeight: 660, xHeight: 430, category: 'serif', aliases: ['crimson pro'] }),
+  model('EB Garamond', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 0.955, capHeight: 660, xHeight: 440, category: 'serif', aliases: ['garamond'] }),
+  model('Palatino', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 1.045, capHeight: 692, xHeight: 469, category: 'serif', aliases: ['palatino linotype', 'book antiqua'] }),
+  model('Cambria', { base: 'Times-Roman', boldBase: 'Times-Bold', widthScale: 1.035, capHeight: 667, xHeight: 467, category: 'serif' }),
+  // --- mono ----------------------------------------------------------------
+  model('Menlo', { base: 'Courier', widthScale: 1.005, capHeight: 720, xHeight: 545, category: 'mono' }),
+  model('Monaco', { base: 'Courier', widthScale: 1.028, capHeight: 700, xHeight: 545, category: 'mono' }),
+  model('Consolas', { base: 'Courier', widthScale: 0.916, capHeight: 644, xHeight: 466, category: 'mono' }),
+  model('SF Mono', { base: 'Courier', widthScale: 1.0, capHeight: 700, xHeight: 517, category: 'mono', aliases: ['ui-monospace'] }),
+  model('JetBrains Mono', { base: 'Courier', widthScale: 1.0, capHeight: 730, xHeight: 550, category: 'mono' }),
+  model('Fira Code', { base: 'Courier', widthScale: 1.0, capHeight: 700, xHeight: 527, category: 'mono', aliases: ['fira mono'] }),
+  model('IBM Plex Mono', { base: 'Courier', widthScale: 1.0, capHeight: 698, xHeight: 516, category: 'mono' }),
+  model('Roboto Mono', { base: 'Courier', widthScale: 1.002, capHeight: 711, xHeight: 528, category: 'mono' }),
+  model('Source Code Pro', { base: 'Courier', widthScale: 1.0, capHeight: 660, xHeight: 486, category: 'mono' }),
+  model('Geist Mono', { base: 'Courier', widthScale: 1.0, capHeight: 730, xHeight: 520, category: 'mono' }),
+  model('Space Mono', { base: 'Courier', widthScale: 1.0, capHeight: 700, xHeight: 496, category: 'mono' }),
+];
+
+/** @type {Map<string, FamilyModel>} */
+const MODEL_INDEX = (() => {
+  const m = new Map();
+  for (const mod of MODELS) {
+    m.set(mod.key, mod);
+    for (const a of mod.aliases) m.set(normalizeFamily(a), mod);
+  }
+  // Generic CSS families resolve to a representative concrete model.
+  m.set('sans-serif', m.get('arial'));
+  m.set('serif', m.get('times new roman'));
+  m.set('monospace', m.get('courier new'));
+  m.set('cursive', m.get('georgia'));
+  m.set('fantasy', m.get('arial'));
+  m.set('ui-sans-serif', m.get('arial'));
+  m.set('ui-serif', m.get('times new roman'));
+  m.set('ui-rounded', m.get('arial'));
+  return m;
+})();
+
+/** Every model, for lanes that need to enumerate what the studio knows. */
+const FAMILY_MODELS = MODELS.slice();
+
+/**
+ * Normalize a CSS family name to a lookup key: unquoted, collapsed whitespace,
+ * lowercase, with weight/style suffixes that CSS carries in the family string
+ * ("Inter Tight SemiBold") left intact, because those are genuinely different
+ * families and guessing otherwise would silently mis-measure.
+ * @param {string} family
+ * @returns {string}
+ */
+function normalizeFamily(family) {
+  return String(family || '')
+    .replace(/^\s*["']|["']\s*$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Split a CSS `font-family` list into its entries.
+ * @param {string} list
+ * @returns {string[]}
+ */
+function parseFamilyList(list) {
+  /** @type {string[]} */
+  const out = [];
+  let cur = '';
+  let quote = '';
+  for (const ch of String(list || '')) {
+    if (quote) { if (ch === quote) quote = ''; else cur += ch; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === ',') { if (cur.trim()) out.push(cur.trim()); cur = ''; continue; }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+/**
+ * The model for a family, or null when this build has no published metrics for
+ * it. Callers that need a guaranteed answer use `metricsFor`, which falls back
+ * to a category-matched model and says so.
+ * @param {string} family
+ * @returns {FamilyModel|null}
+ */
+function lookupFamily(family) {
+  return MODEL_INDEX.get(normalizeFamily(family)) || null;
+}
+
+/**
+ * Guess a category from a family name when the family is unknown. Documented,
+ * not clever: the name is the only signal available, and the answer is reported
+ * as approximate.
+ * @param {string} family
+ * @returns {'sans'|'serif'|'mono'|'display'}
+ */
+function guessCategory(family) {
+  const n = normalizeFamily(family);
+  if (/\b(mono|code|console|courier|typewriter|terminal)\b/.test(n)) return 'mono';
+  if (/\b(serif|times|georgia|garamond|baskerville|caslon|didot|bodoni|playfair|roman|book|slab)\b/.test(n)
+      && !/sans[- ]?serif/.test(n)) return 'serif';
+  if (/\b(display|headline|poster|condensed|expanded|black)\b/.test(n)) return 'display';
+  return 'sans';
+}
+
+/**
+ * @typedef {object} ResolvedMetrics
+ * @property {string} family        the family asked for
+ * @property {string} resolved      the family whose metrics were used
+ * @property {AfmTable} table
+ * @property {number} widthScale
+ * @property {number} capHeight     per mille
+ * @property {number} xHeight       per mille
+ * @property {number} ascender
+ * @property {number} descender
+ * @property {'sans'|'serif'|'mono'|'display'} category
+ * @property {boolean} exact        widths come from this family's own AFM
+ * @property {boolean} known        this build has published metrics for the family
+ * @property {number} avgAdvance    per mille, over AVG_ADVANCE_CORPUS
+ */
+
+/** @type {Map<string, ResolvedMetrics>} */
+const METRIC_CACHE = new Map();
+
+/**
+ * Metrics for a family at a weight. Unknown families fall back to the closest
+ * model in their guessed category and come back with `known: false`, which is
+ * what lowers `TypeFace` confidence and what makes the studio ask the user.
+ * @param {string} family
+ * @param {number} [weight]
+ * @returns {ResolvedMetrics}
+ */
+function metricsFor(family, weight = 400) {
+  const key = `${normalizeFamily(family)}|${weight}`;
+  const hit = METRIC_CACHE.get(key);
+  if (hit) return hit;
+
+  const found = lookupFamily(family);
+  const known = !!found;
+  const category = found ? found.category : guessCategory(family);
+  const mod = found || MODEL_INDEX.get(
+    category === 'serif' ? 'times new roman' : category === 'mono' ? 'courier new' : 'arial',
+  );
+
+  const bold = weight >= 600;
+  const table = AFM_TABLES[bold && mod.boldBase ? mod.boldBase : mod.base];
+  // A family with no bold table of its own still gets wider: the ratio of
+  // Helvetica-Bold to Helvetica over AVG_ADVANCE_CORPUS is 1.0429, and the same
+  // ratio is used for every synthesized bold. Weights between 400 and 600
+  // interpolate; above 700 the growth flattens, as it does in real families.
+  let widthScale = mod.widthScale;
+  if (!mod.boldBase) {
+    const t = weight <= 400 ? 0 : Math.min(1, (weight - 400) / 300);
+    widthScale *= 1 + t * 0.0429;
+  } else if (weight > 700) {
+    widthScale *= 1 + Math.min(1, (weight - 700) / 200) * 0.03;
+  } else if (weight > 400 && weight < 600) {
+    // 500 sits between the regular and bold tables; the regular table with a
+    // partial scale is closer than snapping to either.
+    widthScale *= 1 + ((weight - 400) / 200) * 0.028;
+  } else if (weight < 400) {
+    widthScale *= 1 - Math.min(1, (400 - weight) / 300) * 0.035;
+  }
+
+  const out = {
+    family,
+    resolved: mod.label,
+    table,
+    widthScale,
+    capHeight: mod.capHeight,
+    xHeight: mod.xHeight,
+    ascender: mod.ascender,
+    descender: mod.descender,
+    category,
+    exact: !!(found && found.exact && (!bold || !!mod.boldBase)),
+    known,
+    avgAdvance: 0,
+  };
+  out.avgAdvance = advanceOfString(AVG_ADVANCE_CORPUS, out) / AVG_ADVANCE_CORPUS.length;
+  METRIC_CACHE.set(key, out);
+  return out;
+}
+
+/**
+ * Advance of one codepoint in per-mille units.
+ * @param {number} cp
+ * @param {ResolvedMetrics} m
+ * @returns {number}
+ */
+function advanceOfCodepoint(cp, m) {
+  if (cp >= 32 && cp <= 126) return m.table.widths[cp - 32] * m.widthScale;
+  if (cp === 9) return m.table.widths[0] * 8 * m.widthScale;     // tab: eight spaces
+  if (cp === 10 || cp === 13) return 0;
+  const ext = EXTENDED[cp];
+  if (typeof ext === 'string') return m.table.widths[ext.charCodeAt(0) - 32] * m.widthScale;
+  if (typeof ext === 'number') return ext * m.widthScale;
+  const de = DEACCENT[cp];
+  if (de) return m.table.widths[de.charCodeAt(0) - 32] * m.widthScale;
+  if (cp >= 0x0370 && cp <= 0x04ff) return m.table.defaultWidth * m.widthScale;          // Greek/Cyrillic
+  if (cp >= 0x0590 && cp <= 0x08ff) return m.table.defaultWidth * 0.9 * m.widthScale;    // Hebrew/Arabic
+  if (isWideCodepoint(cp)) return UNITS_PER_EM * (m.category === 'mono' ? 1 : 1);        // CJK: one em
+  if (cp >= 0xfe00 && cp <= 0xfe0f) return 0;                                            // variation selectors
+  if (cp >= 0x200b && cp <= 0x200f) return 0;                                            // zero-width
+  return m.table.defaultWidth * m.widthScale;
+}
+
+/**
+ * CJK, Hangul, Kana and full-width forms advance a full em in every Latin
+ * fallback that has them at all.
+ * @param {number} cp
+ * @returns {boolean}
+ */
+function isWideCodepoint(cp) {
+  return (cp >= 0x1100 && cp <= 0x115f)
+    || (cp >= 0x2e80 && cp <= 0x303e)
+    || (cp >= 0x3041 && cp <= 0x33ff)
+    || (cp >= 0x3400 && cp <= 0x4dbf)
+    || (cp >= 0x4e00 && cp <= 0x9fff)
+    || (cp >= 0xa000 && cp <= 0xa4cf)
+    || (cp >= 0xac00 && cp <= 0xd7a3)
+    || (cp >= 0xf900 && cp <= 0xfaff)
+    || (cp >= 0xfe30 && cp <= 0xfe6f)
+    || (cp >= 0xff00 && cp <= 0xff60)
+    || (cp >= 0xffe0 && cp <= 0xffe6)
+    || (cp >= 0x1f300 && cp <= 0x1faff);
+}
+
+/**
+ * Total advance of a string in per-mille units.
+ * @param {string} text
+ * @param {ResolvedMetrics} m
+ * @returns {number}
+ */
+function advanceOfString(text, m) {
+  let total = 0;
+  for (const ch of String(text)) total += advanceOfCodepoint(ch.codePointAt(0), m);
+  return total;
+}
+
+/**
+ * @typedef {object} TextStyle
+ * @property {string} family
+ * @property {number} [weight]        default 400
+ * @property {number} fontSizePx
+ * @property {number} [letterSpacingPx] default 0
+ * @property {number} [wordSpacingPx]   default 0
+ * @property {number} [lineHeight]      unitless multiplier, default 1.2
+ * @property {'none'|'uppercase'|'lowercase'|'capitalize'} [textTransform]
+ */
+
+/**
+ * Apply `text-transform` before measurement, because a headline set in
+ * uppercase measures nothing like the string in the model.
+ * @param {string} text
+ * @param {TextStyle['textTransform']} [transform]
+ * @returns {string}
+ */
+function applyTransform(text, transform) {
+  switch (transform) {
+    case 'uppercase': return String(text).toUpperCase();
+    case 'lowercase': return String(text).toLowerCase();
+    case 'capitalize': return String(text).replace(/(^|\s)(\S)/g, (_, a, b) => a + b.toUpperCase());
+    default: return String(text);
+  }
+}
+
+/**
+ * Width of a single run of text in CSS pixels.
+ * @param {string} text
+ * @param {TextStyle} style
+ * @returns {number}
+ */
+function measureText(text, style) {
+  const m = metricsFor(style.family, style.weight ?? 400);
+  const s = applyTransform(text, style.textTransform);
+  const em = style.fontSizePx / UNITS_PER_EM;
+  let w = advanceOfString(s, m) * em;
+  const chars = [...s].length;
+  if (chars > 0 && style.letterSpacingPx) w += style.letterSpacingPx * chars;
+  if (style.wordSpacingPx) {
+    let spaces = 0;
+    for (const ch of s) if (ch === ' ') spaces++;
+    w += style.wordSpacingPx * spaces;
+  }
+  return w;
+}
+
+/** Characters after which a line may break even without a space. */
+const BREAK_AFTER = new Set(['-', '‐', '‒', '–', '—', '/', '​', '­']);
+
+/**
+ * Split text into break-opportunity segments. Each segment carries the text
+ * that would stay on the line and whether the break after it is collapsible
+ * whitespace (which disappears at end of line) or a hard character.
+ * @param {string} text
+ * @returns {{text: string, trailingSpace: string}[]}
+ */
+function segments(text) {
+  /** @type {{text: string, trailingSpace: string}[]} */
+  const out = [];
+  const chars = [...String(text)];
+  let cur = '';
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (ch === ' ' || ch === '\t' || ch === ' ') {
+      if (ch === ' ') { cur += ch; continue; }   // nbsp never breaks
+      let ws = '';
+      while (i < chars.length && (chars[i] === ' ' || chars[i] === '\t')) { ws += chars[i]; i++; }
+      i--;
+      out.push({ text: cur, trailingSpace: ws });
+      cur = '';
+      continue;
+    }
+    cur += ch;
+    if (BREAK_AFTER.has(ch) && i + 1 < chars.length) {
+      out.push({ text: cur, trailingSpace: '' });
+      cur = '';
+    }
+    if (isWideCodepoint(ch.codePointAt(0)) && i + 1 < chars.length) {
+      out.push({ text: cur, trailingSpace: '' });
+      cur = '';
+    }
+  }
+  if (cur) out.push({ text: cur, trailingSpace: '' });
+  return out;
+}
+
+/**
+ * @typedef {object} LayoutOptions
+ * @property {number} maxWidthPx
+ * @property {'normal'|'nowrap'|'pre'|'pre-wrap'} [whiteSpace]
+ * @property {'normal'|'break-word'|'anywhere'} [overflowWrap]
+ * @property {number} [maxLines]        `-webkit-line-clamp`
+ */
+
+/**
+ * @typedef {object} TextLayout
+ * @property {{text: string, widthPx: number}[]} lines
+ * @property {number} lineCount
+ * @property {number} maxLineWidthPx
+ * @property {number} heightPx
+ * @property {number} lineHeightPx
+ * @property {string[]} unbreakable    segments wider than the container on their own
+ * @property {boolean} clamped         maxLines truncated the result
+ */
+
+/**
+ * Greedy line breaking. The same algorithm every browser uses for
+ * `white-space: normal` with no justification: fill a line until the next
+ * segment would exceed the container, then break.
+ * @param {string} text
+ * @param {TextStyle} style
+ * @param {LayoutOptions} options
+ * @returns {TextLayout}
+ */
+function layoutText(text, style, options) {
+  const ws = options.whiteSpace || 'normal';
+  const lineHeightPx = (style.lineHeight ?? 1.2) * style.fontSizePx;
+  const transformed = applyTransform(text, style.textTransform);
+  const maxWidthPx = Math.max(0, options.maxWidthPx);
+
+  /** @param {string} s @returns {number} */
+  const w = (s) => measureText(s, { ...style, textTransform: 'none' });
+
+  /** @type {{text: string, widthPx: number}[]} */
+  const lines = [];
+  /** @type {string[]} */
+  const unbreakable = [];
+
+  const hardLines = ws === 'pre' || ws === 'pre-wrap'
+    ? transformed.split('\n')
+    : [transformed.replace(/\s*\n\s*/g, ' ')];
+
+  for (const hard of hardLines) {
+    if (ws === 'nowrap' || ws === 'pre') {
+      const width = w(hard);
+      if (width > maxWidthPx && maxWidthPx > 0) unbreakable.push(hard);
+      lines.push({ text: hard, widthPx: width });
+      continue;
+    }
+    const segs = segments(hard);
+    if (segs.length === 0) { lines.push({ text: '', widthPx: 0 }); continue; }
+    let cur = '';
+    let curW = 0;
+    // A break collapses trailing whitespace, so a line's recorded width is the
+    // width of its content without the space that ended it.
+    const pushLine = (text) => lines.push({ text, widthPx: w(text.replace(/[ \t]+$/, '')) });
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i];
+      const piece = cur === '' ? seg.text : cur + seg.text;
+      const pieceW = w(piece);
+      if (cur !== '' && pieceW > maxWidthPx) {
+        pushLine(cur);
+        cur = seg.text;
+        curW = w(cur);
+      } else {
+        cur = piece;
+        curW = pieceW;
+      }
+      // A single segment that does not fit on an empty line.
+      if (cur === seg.text && curW > maxWidthPx && maxWidthPx > 0) {
+        if (options.overflowWrap === 'break-word' || options.overflowWrap === 'anywhere') {
+          const broken = breakLongSegment(cur, style, maxWidthPx, w);
+          for (let k = 0; k < broken.length - 1; k++) pushLine(broken[k].text);
+          cur = broken[broken.length - 1].text;
+          curW = broken[broken.length - 1].widthPx;
+        } else {
+          unbreakable.push(seg.text);
+        }
+      }
+      if (seg.trailingSpace && i < segs.length - 1) {
+        const withSpace = cur + seg.trailingSpace;
+        const wsWidth = w(withSpace);
+        // Trailing whitespace at a break point is collapsed, so it only counts
+        // while more text follows on the same line.
+        cur = withSpace;
+        curW = wsWidth;
+      }
+    }
+    pushLine(cur);
+  }
+
+  let clamped = false;
+  let final = lines;
+  if (options.maxLines && lines.length > options.maxLines) {
+    final = lines.slice(0, options.maxLines);
+    clamped = true;
+  }
+
+  const maxLineWidthPx = final.reduce((a, l) => Math.max(a, l.widthPx), 0);
+  return {
+    lines: final,
+    lineCount: final.length,
+    maxLineWidthPx,
+    lineHeightPx,
+    heightPx: final.length * lineHeightPx,
+    unbreakable,
+    clamped,
+  };
+}
+
+/**
+ * Break a segment that cannot fit on a line, character by character.
+ * @param {string} seg
+ * @param {TextStyle} style
+ * @param {number} maxWidthPx
+ * @param {(s: string) => number} w
+ * @returns {{text: string, widthPx: number}[]}
+ */
+function breakLongSegment(seg, style, maxWidthPx, w) {
+  /** @type {{text: string, widthPx: number}[]} */
+  const out = [];
+  let cur = '';
+  for (const ch of seg) {
+    const next = cur + ch;
+    if (cur !== '' && w(next) > maxWidthPx) { out.push({ text: cur, widthPx: w(cur) }); cur = ch; }
+    else cur = next;
+  }
+  out.push({ text: cur, widthPx: w(cur) });
+  return out;
+}
+
+/**
+ * Cap height in CSS pixels at a given font size.
+ * @param {string} family @param {number} fontSizePx @param {number} [weight]
+ */
+function capHeightPx(family, fontSizePx, weight = 400) {
+  return metricsFor(family, weight).capHeight * fontSizePx / UNITS_PER_EM;
+}
+
+/**
+ * x-height in CSS pixels at a given font size.
+ * @param {string} family @param {number} fontSizePx @param {number} [weight]
+ */
+function xHeightPx(family, fontSizePx, weight = 400) {
+  return metricsFor(family, weight).xHeight * fontSizePx / UNITS_PER_EM;
+}
+
+/**
+ * The §4 `TypeFace.metricDelta`: the ratio of the requested face's metrics to
+ * the fallback that will actually render. 1.0 means the substitution is
+ * metrically invisible; 1.1 means every headline is ten percent wider than the
+ * design assumed, which is exactly the §22.2 failure.
+ * @param {string} requested
+ * @param {string} fallback
+ * @param {number} [weight]
+ * @returns {{capHeight: number, xHeight: number, avgAdvance: number}}
+ */
+function metricDelta(requested, fallback, weight = 400) {
+  const a = metricsFor(requested, weight);
+  const b = metricsFor(fallback, weight);
+  return {
+    capHeight: round6(a.capHeight / b.capHeight),
+    xHeight: round6(a.xHeight / b.xHeight),
+    avgAdvance: round6(a.avgAdvance / b.avgAdvance),
+  };
+}
+
+/** @param {number} n @returns {number} */
+function round6(n) { return Math.round(n * 1e6) / 1e6; }
+
+/**
+ * Candidates a fallback stack may be built from: families present on
+ * essentially every machine a proof will be opened on, plus the CSS generics.
+ */
+const FALLBACK_CANDIDATES = [
+  'Arial', 'Helvetica', 'Helvetica Neue', 'Liberation Sans', 'Segoe UI', 'Roboto',
+  'Verdana', 'Tahoma', 'Trebuchet MS', 'Calibri',
+  'Times New Roman', 'Georgia', 'Liberation Serif', 'Palatino', 'Cambria',
+  'Courier New', 'Consolas', 'Menlo', 'Monaco', 'Liberation Mono',
+];
+
+/** Families that are metrically identical, in preference order. */
+const METRIC_GROUPS = [
+  ['Arial', 'Helvetica', 'Liberation Sans', 'Arimo', 'Helvetica Neue'],
+  ['Times New Roman', 'Times', 'Liberation Serif', 'Tinos'],
+  ['Courier New', 'Courier', 'Liberation Mono', 'Cousine'],
+];
+
+/**
+ * Distance between two families' metrics. Advance width dominates, because that
+ * is what overflows a container; cap-height and x-height follow, because they
+ * are what makes a substitution look wrong even when it fits.
+ * @param {ResolvedMetrics} a
+ * @param {ResolvedMetrics} b
+ * @returns {number}
+ */
+function metricDistance(a, b) {
+  return 3 * Math.abs(a.avgAdvance / b.avgAdvance - 1)
+    + Math.abs(a.capHeight / b.capHeight - 1)
+    + Math.abs(a.xHeight / b.xHeight - 1);
+}
+
+/**
+ * @typedef {object} FaceResolution
+ * @property {string} requested
+ * @property {string} resolved            the family that will actually render
+ * @property {string[]} stack             the CSS fallback stack, metric-compatible first
+ * @property {{capHeight: number, xHeight: number, avgAdvance: number}} metricDelta
+ * @property {boolean} available          the requested family is guaranteed present
+ * @property {boolean} known              this build has published metrics for it
+ * @property {number} confidence          0..1
+ */
+
+/**
+ * Build a metric-compatible fallback stack for a requested family (§7).
+ *
+ * `available` lists families the artifact can count on: families the user
+ * supplied a licensed font file for, plus the system families in
+ * `FALLBACK_CANDIDATES`. A requested family that is not available is *resolved*
+ * to the closest available one, and that resolution — not the request — is what
+ * every downstream measurement uses. That is what "post-substitution" means in
+ * §14, and it is why overflow detection here cannot be fooled by a font the
+ * client's laptop does not have.
+ *
+ * @param {string} family
+ * @param {object} [options]
+ * @param {string[]} [options.available]  families guaranteed to render
+ * @param {number} [options.weight]
+ * @returns {FaceResolution}
+ */
+function resolveFace(family, options = {}) {
+  const weight = options.weight ?? 400;
+  const available = options.available || FALLBACK_CANDIDATES;
+  const availKeys = new Set(available.map(normalizeFamily));
+  const reqKey = normalizeFamily(family);
+  const reqMetrics = metricsFor(family, weight);
+  const known = reqMetrics.known;
+
+  /** @type {string[]} */
+  const stack = [];
+  const push = (name) => { if (name && !stack.some((s) => normalizeFamily(s) === normalizeFamily(name))) stack.push(name); };
+
+  push(family);
+
+  // 1. Anything in the same metric group is a free, exact substitution.
+  for (const group of METRIC_GROUPS) {
+    if (group.some((g) => normalizeFamily(g) === reqKey)) for (const g of group) if (availKeys.has(normalizeFamily(g))) push(g);
+  }
+
+  // 2. Otherwise rank available families of the same category by metric distance.
+  const ranked = available
+    .filter((c) => normalizeFamily(c) !== reqKey)
+    .map((c) => ({ name: c, m: metricsFor(c, weight) }))
+    .filter((c) => c.m.category === reqMetrics.category)
+    .map((c) => ({ ...c, d: metricDistance(reqMetrics, c.m) }))
+    .sort((a, b) => (a.d === b.d ? a.name.localeCompare(b.name) : a.d - b.d));
+
+  for (const c of ranked.slice(0, 3)) push(c.name);
+
+  const generic = reqMetrics.category === 'serif' ? 'serif'
+    : reqMetrics.category === 'mono' ? 'monospace' : 'sans-serif';
+  push(generic);
+
+  const isAvailable = availKeys.has(reqKey);
+  const resolved = isAvailable ? family : (ranked[0]?.name || generic);
+  const delta = metricDelta(family, resolved, weight);
+
+  // Confidence: a family we have exact tables for, that is itself available, is
+  // certain. Anything else loses confidence in proportion to how far the
+  // substitution moves the advance width, because that is the quantity that
+  // decides whether a layout survives.
+  let confidence = 1;
+  if (!known) confidence -= 0.35;
+  else if (!reqMetrics.exact) confidence -= 0.12;
+  if (!isAvailable) confidence -= Math.min(0.4, Math.abs(delta.avgAdvance - 1) * 2 + 0.05);
+  confidence = Math.max(0, Math.min(1, round6(confidence)));
+
+  return { requested: family, resolved, stack, metricDelta: delta, available: isAvailable, known, confidence };
+}
+
+/**
+ * Serialize a fallback stack into a CSS `font-family` value, quoting families
+ * whose names need it.
+ * @param {string[]} stack
+ * @returns {string}
+ */
+function cssFontFamily(stack) {
+  return stack.map((f) => (/^[a-zA-Z][a-zA-Z0-9-]*$/.test(f) ? f : `"${f.replace(/"/g, '')}"`)).join(', ');
+}
+
+__exports["UNITS_PER_EM"] = UNITS_PER_EM;
+__exports["AFM_TABLES"] = AFM_TABLES;
+__exports["AVG_ADVANCE_CORPUS"] = AVG_ADVANCE_CORPUS;
+__exports["FAMILY_MODELS"] = FAMILY_MODELS;
+__exports["normalizeFamily"] = normalizeFamily;
+__exports["parseFamilyList"] = parseFamilyList;
+__exports["lookupFamily"] = lookupFamily;
+__exports["guessCategory"] = guessCategory;
+__exports["metricsFor"] = metricsFor;
+__exports["advanceOfCodepoint"] = advanceOfCodepoint;
+__exports["isWideCodepoint"] = isWideCodepoint;
+__exports["advanceOfString"] = advanceOfString;
+__exports["applyTransform"] = applyTransform;
+__exports["measureText"] = measureText;
+__exports["segments"] = segments;
+__exports["layoutText"] = layoutText;
+__exports["capHeightPx"] = capHeightPx;
+__exports["xHeightPx"] = xHeightPx;
+__exports["metricDelta"] = metricDelta;
+__exports["FALLBACK_CANDIDATES"] = FALLBACK_CANDIDATES;
+__exports["metricDistance"] = metricDistance;
+__exports["resolveFace"] = resolveFace;
+__exports["cssFontFamily"] = cssFontFamily;
+};
+__modules["scene/tokens.js"] = function (__exports, __require) {
+/**
+ * The scene design tokens — the single source of truth for every number that
+ * appears both in `src/scene/scenes.css` and in `measureScene`.
+ *
+ * §22.2 makes post-substitution text overflow the defect that matters most, and
+ * a detector is only as good as the container dimensions it is handed. So the
+ * geometry a layout is drawn with and the geometry it is measured with are not
+ * allowed to be two lists that someone keeps in sync by hand: they are this
+ * one table. `scenes.css` declares these values as `--pp-sc-*` custom properties
+ * — one `:root` block per breakpoint — and
+ * `test/scene/css-agreement.test.mjs` parses the stylesheet and asserts it
+ * declares exactly `sceneVars(bp)`, value for value. A number changed in one
+ * place and not the other fails the build.
+ *
+ * Variables are `--pp-*` only (D11). The studio chrome's own variable namespace
+ * may not appear anywhere under `src/scene`, and
+ * `test/scene/css-agreement.test.mjs` asserts its absence.
+ *
+ * @module scene/tokens
+ */
+
+/** The three breakpoint ids from `BREAKPOINTS` in core/contracts.js. */
+const BP_IDS = ['sm', 'md', 'lg'];
+
+/**
+ * The CSS media query each breakpoint is selected by, in `scenes.css`. `sm` is
+ * the unqualified base block, so it has no query.
+ * @type {Record<string, string|null>}
+ */
+const BP_QUERY = {
+  sm: null,
+  md: '(min-width: 768px)',
+  lg: '(min-width: 1400px)',
+};
+
+/**
+ * Geometry tokens, per breakpoint.
+ *
+ * Lengths are px unless the name ends in a unit-bearing suffix; a few are
+ * percentage or `auto`-like strings because the CSS uses them in a grid track,
+ * and those are carried verbatim. Unitless counts (`fan-cols`) are numbers.
+ *
+ * The vertical model every layout shares:
+ *
+ *     contentHeight = viewportHeight - 2 * stagePad        (runtime.css)
+ *     bodyHeight    = contentHeight - headH - headGap      (this table)
+ *
+ * so every scene's body starts at the same y across the whole deck, which is
+ * what makes a sequence of scenes read as one document rather than eight.
+ */
+const GEOM = {
+  sm: {
+    'head-h': 84,
+    'head-gap': 16,
+    'panel-pad': 14,
+    'panel-head-h': 34,
+    'row-gap': 10,
+    'list-marker-w': 14,
+    'cell-pad': 6,
+    'split-gap': 16,
+    'fan-gap': 12,
+    'fan-cols': 2,
+    'fan-source-w': '100%',
+    'fan-source-h': 140,
+    'fan-source-gap': 16,
+    'card-pad': 10,
+    'stack-rail-w': 28,
+    'stack-rail-gap': 12,
+    'stack-step-gap': 10,
+    'step-pad': 12,
+    'bleed-max-w': 350,
+    'bleed-pad': 16,
+    'note-w': '100%',
+    'note-gap': 12,
+    'note-pad': 12,
+    'quote-max-w': 350,
+    'quote-pad': 16,
+    'index-num-w': 32,
+    'index-gap': 12,
+    'index-row-gap': 10,
+    'map-legend-h': 96,
+    'map-legend-cols': 1,
+    'map-canvas-min-h': 180,
+  },
+  md: {
+    'head-h': 104,
+    'head-gap': 24,
+    'panel-pad': 18,
+    'panel-head-h': 40,
+    'row-gap': 12,
+    'list-marker-w': 16,
+    'cell-pad': 8,
+    'split-gap': 24,
+    'fan-gap': 18,
+    'fan-cols': 3,
+    'fan-source-w': 280,
+    'fan-source-h': 140,
+    'fan-source-gap': 24,
+    'card-pad': 12,
+    'stack-rail-w': 36,
+    'stack-rail-gap': 16,
+    'stack-step-gap': 12,
+    'step-pad': 16,
+    'bleed-max-w': 640,
+    'bleed-pad': 22,
+    'note-w': 260,
+    'note-gap': 24,
+    'note-pad': 14,
+    'quote-max-w': 760,
+    'quote-pad': 28,
+    'index-num-w': 44,
+    'index-gap': 14,
+    'index-row-gap': 12,
+    'map-legend-h': 88,
+    'map-legend-cols': 3,
+    'map-canvas-min-h': 240,
+  },
+  lg: {
+    'head-h': 120,
+    'head-gap': 28,
+    'panel-pad': 22,
+    'panel-head-h': 46,
+    'row-gap': 14,
+    'list-marker-w': 18,
+    'cell-pad': 9,
+    'split-gap': 32,
+    'fan-gap': 24,
+    'fan-cols': 4,
+    'fan-source-w': 360,
+    'fan-source-h': 140,
+    'fan-source-gap': 32,
+    'card-pad': 14,
+    'stack-rail-w': 40,
+    'stack-rail-gap': 20,
+    'stack-step-gap': 16,
+    'step-pad': 18,
+    'bleed-max-w': 820,
+    'bleed-pad': 28,
+    'note-w': 320,
+    'note-gap': 32,
+    'note-pad': 16,
+    'quote-max-w': 980,
+    'quote-pad': 36,
+    'index-num-w': 52,
+    'index-gap': 16,
+    'index-row-gap': 14,
+    'map-legend-h': 88,
+    'map-legend-cols': 4,
+    'map-canvas-min-h': 280,
+  },
+};
+
+/** Tokens whose value is a bare number in CSS rather than a length. */
+const UNITLESS_TOKENS = new Set(['fan-cols', 'map-legend-cols']);
+
+/**
+ * The type scale.
+ *
+ * One entry per *text role*. A role is stamped on the element as
+ * `data-pp-tx="<role>"`, `scenes.css` styles that attribute, and `measureScene`
+ * reads the same attribute back. There is exactly one path from a rendered run
+ * of text to the style that will apply to it, which is the only way the
+ * measurement can be trusted.
+ *
+ * `face` names which of the brand's three faces applies — the CSS says
+ * `var(--pp-font-display|body|mono)` and the measurement resolves the brand's
+ * `TypeFace` of that role, so the two agree by construction even when the
+ * prospect's type system is nothing like the default.
+ *
+ * `definedIn: 'runtime.css'` marks a role whose type is set by L2's stylesheet
+ * rather than ours — `provenance` is the only one, because §18.1 makes its size
+ * and contrast a law the emitter checks, and a second declaration here would be
+ * a second place for that law to drift.
+ *
+ * @typedef {object} TypeRole
+ * @property {'display'|'body'|'mono'} face
+ * @property {{sm: number, md: number, lg: number}} sizes   font-size, CSS px
+ * @property {number} lineHeight        unitless
+ * @property {number} weight
+ * @property {number} [letterSpacingEm] em, converted to px at measure time
+ * @property {'none'|'uppercase'|'lowercase'|'capitalize'} [textTransform]
+ * @property {'scenes.css'|'runtime.css'} [definedIn]
+ * @property {boolean} [svg]            sized in SVG design units, scaled to px
+ */
+
+/** @type {Record<string, TypeRole>} */
+const TYPE_ROLES = {
+  kicker: { face: 'body', sizes: { sm: 10, md: 11, lg: 12 }, lineHeight: 1.2, weight: 600, letterSpacingEm: 0.08, textTransform: 'uppercase' },
+  headline: { face: 'display', sizes: { sm: 22, md: 30, lg: 38 }, lineHeight: 1.15, weight: 700, letterSpacingEm: -0.01 },
+  subhead: { face: 'body', sizes: { sm: 14, md: 17, lg: 20 }, lineHeight: 1.35, weight: 400 },
+
+  panelTitle: { face: 'display', sizes: { sm: 13, md: 15, lg: 17 }, lineHeight: 1.25, weight: 600 },
+  panelMeta: { face: 'mono', sizes: { sm: 10, md: 11, lg: 12 }, lineHeight: 1.3, weight: 400, letterSpacingEm: 0.01 },
+
+  bh1: { face: 'display', sizes: { sm: 18, md: 22, lg: 26 }, lineHeight: 1.2, weight: 700 },
+  bh2: { face: 'display', sizes: { sm: 15, md: 18, lg: 21 }, lineHeight: 1.25, weight: 700 },
+  bh3: { face: 'display', sizes: { sm: 13, md: 15, lg: 17 }, lineHeight: 1.3, weight: 600 },
+  body: { face: 'body', sizes: { sm: 12, md: 14, lg: 16 }, lineHeight: 1.5, weight: 400 },
+  listItem: { face: 'body', sizes: { sm: 12, md: 14, lg: 16 }, lineHeight: 1.45, weight: 400 },
+  quote: { face: 'display', sizes: { sm: 20, md: 28, lg: 34 }, lineHeight: 1.3, weight: 500, letterSpacingEm: -0.01 },
+  attribution: { face: 'body', sizes: { sm: 12, md: 14, lg: 15 }, lineHeight: 1.4, weight: 600 },
+  blockQuote: { face: 'display', sizes: { sm: 14, md: 17, lg: 20 }, lineHeight: 1.4, weight: 500 },
+  blockAttribution: { face: 'body', sizes: { sm: 10, md: 12, lg: 13 }, lineHeight: 1.3, weight: 600 },
+  cellHead: { face: 'body', sizes: { sm: 10, md: 12, lg: 13 }, lineHeight: 1.3, weight: 600, letterSpacingEm: 0.02 },
+  cell: { face: 'body', sizes: { sm: 10, md: 12, lg: 13 }, lineHeight: 1.35, weight: 400 },
+  cta: { face: 'body', sizes: { sm: 11, md: 13, lg: 14 }, lineHeight: 1.2, weight: 600, letterSpacingEm: 0.01 },
+  caption: { face: 'body', sizes: { sm: 10, md: 11, lg: 12 }, lineHeight: 1.35, weight: 400 },
+
+  badgeNumber: { face: 'display', sizes: { sm: 28, md: 40, lg: 52 }, lineHeight: 1, weight: 700, letterSpacingEm: -0.02 },
+  badgeLabel: { face: 'body', sizes: { sm: 10, md: 11, lg: 12 }, lineHeight: 1.2, weight: 600, letterSpacingEm: 0.08, textTransform: 'uppercase' },
+
+  stepIndex: { face: 'mono', sizes: { sm: 11, md: 13, lg: 14 }, lineHeight: 1, weight: 700 },
+  stepLabel: { face: 'display', sizes: { sm: 13, md: 15, lg: 17 }, lineHeight: 1.25, weight: 600 },
+
+  note: { face: 'body', sizes: { sm: 11, md: 12, lg: 13 }, lineHeight: 1.45, weight: 400 },
+  noteLabel: { face: 'body', sizes: { sm: 9, md: 10, lg: 11 }, lineHeight: 1.2, weight: 600, letterSpacingEm: 0.08, textTransform: 'uppercase' },
+
+  indexNumber: { face: 'mono', sizes: { sm: 12, md: 14, lg: 16 }, lineHeight: 1.2, weight: 700 },
+  indexTitle: { face: 'display', sizes: { sm: 14, md: 17, lg: 20 }, lineHeight: 1.3, weight: 600 },
+  indexBlurb: { face: 'body', sizes: { sm: 11, md: 13, lg: 14 }, lineHeight: 1.45, weight: 400 },
+
+  displayXL: { face: 'display', sizes: { sm: 26, md: 40, lg: 52 }, lineHeight: 1.1, weight: 700, letterSpacingEm: -0.02 },
+  displaySub: { face: 'body', sizes: { sm: 13, md: 16, lg: 18 }, lineHeight: 1.4, weight: 400 },
+
+  deco: { face: 'body', sizes: { sm: 11, md: 12, lg: 13 }, lineHeight: 1, weight: 400 },
+
+  // SVG roles are sized in the map's design units and scaled with the drawing.
+  mapNodeTitle: { face: 'display', sizes: { sm: 16, md: 16, lg: 16 }, lineHeight: 1.25, weight: 600, svg: true },
+  mapNodeMeta: { face: 'mono', sizes: { sm: 12, md: 12, lg: 12 }, lineHeight: 1.25, weight: 400, svg: true },
+
+  // §18.1 — declared by runtime.css, never re-declared here.
+  provenance: { face: 'body', sizes: { sm: 12, md: 12, lg: 12 }, lineHeight: 1.35, weight: 600, letterSpacingEm: 0.01, definedIn: 'runtime.css' },
+};
+
+/** Roles whose type `scenes.css` is responsible for declaring. */
+function scenesCssRoles() {
+  return Object.keys(TYPE_ROLES).filter((r) => (TYPE_ROLES[r].definedIn || 'scenes.css') === 'scenes.css');
+}
+
+/**
+ * Every `--pp-sc-*` custom property `scenes.css` must declare for a breakpoint,
+ * with the exact value it must declare. The stylesheet is checked against this.
+ * @param {'sm'|'md'|'lg'} bp
+ * @returns {Record<string, string>}
+ */
+function sceneVars(bp) {
+  /** @type {Record<string, string>} */
+  const out = {};
+  const g = GEOM[bp];
+  for (const key of Object.keys(g).sort()) {
+    const v = g[key];
+    out[`--pp-sc-${key}`] = UNITLESS_TOKENS.has(key) ? String(v)
+      : typeof v === 'number' ? `${v}px` : String(v);
+  }
+  for (const role of scenesCssRoles().sort()) {
+    // SVG roles are sized in the drawing's design units and scale with it, so
+    // they carry a literal font-size in the rule rather than a breakpoint
+    // variable — there is nothing per-breakpoint about them.
+    if (TYPE_ROLES[role].svg) continue;
+    out[`--pp-sc-fs-${cssRoleName(role)}`] = `${TYPE_ROLES[role].sizes[bp]}px`;
+  }
+  return out;
+}
+
+/**
+ * Role names are camelCase in the model and kebab-case in CSS. One function
+ * owns the mapping so the agreement test cannot be fooled by a typo.
+ * @param {string} role
+ * @returns {string}
+ */
+function cssRoleName(role) {
+  return role.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+}
+
+/**
+ * A geometry token as a number, for the layouts and the measurement.
+ * @param {'sm'|'md'|'lg'} bp
+ * @param {string} key
+ * @returns {number}
+ */
+function geom(bp, key) {
+  const v = GEOM[bp][key];
+  if (v === undefined) throw new Error(`scene/tokens: no geometry token "${key}"`);
+  if (typeof v === 'number') return v;
+  const m = /^(-?\d+(?:\.\d+)?)/.exec(String(v));
+  return m ? Number(m[1]) : 0;
+}
+
+/**
+ * True when a token is expressed as a percentage — the stacked-at-`sm` case,
+ * where the track is the full content width rather than a fixed rail.
+ * @param {'sm'|'md'|'lg'} bp
+ * @param {string} key
+ * @returns {boolean}
+ */
+function isProportional(bp, key) {
+  return typeof GEOM[bp][key] === 'string' && String(GEOM[bp][key]).endsWith('%');
+}
+
+__exports["BP_IDS"] = BP_IDS;
+__exports["BP_QUERY"] = BP_QUERY;
+__exports["GEOM"] = GEOM;
+__exports["UNITLESS_TOKENS"] = UNITLESS_TOKENS;
+__exports["TYPE_ROLES"] = TYPE_ROLES;
+__exports["scenesCssRoles"] = scenesCssRoles;
+__exports["sceneVars"] = sceneVars;
+__exports["cssRoleName"] = cssRoleName;
+__exports["geom"] = geom;
+__exports["isProportional"] = isProportional;
+};
+__modules["scene/geometry.js"] = function (__exports, __require) {
+/**
+ * Scene geometry — the box dimensions the CSS gives every text container, at
+ * each of the three §14 breakpoints, computed from the same tokens the
+ * stylesheet is written from.
+ *
+ * This module exists because of §22.2. The overflow detector is handed a
+ * container width and height per text run; if those numbers are a guess, the
+ * highest-value check in the product is a guess. So every number here is
+ * derived, and the derivation is stated next to it:
+ *
+ *   - the viewport comes from `BREAKPOINTS` in core/contracts.js (390/1024/1600);
+ *   - the stage padding comes from `--pp-stage-pad` in runtime.css, which is
+ *     `clamp(20px, 3.2vw, 56px)` — reproduced by `stagePadPx()` and asserted
+ *     against the stylesheet by test/scene/css-agreement.test.mjs;
+ *   - everything else comes from `GEOM` in tokens.js, which scenes.css declares
+ *     verbatim as `--pp-sc-*` custom properties.
+ *
+ * Where a dimension is produced by a CSS grid rather than by a token — the two
+ * equal columns of `splitBeforeAfter`, the equal cards of a fan — the formula
+ * here is the one `1fr` tracks with a gap actually produce, so the agreement is
+ * structural rather than copied.
+ *
+ * @module scene/geometry
+ */
+
+const { BREAKPOINTS } = __require("core/contracts.js");
+const { geom, isProportional, BP_IDS } = __require("scene/tokens.js");
+
+/**
+ * The hairline every structural panel in a scene is drawn with, in px.
+ *
+ * Scene chrome is deliberately *not* drawn with the brand's `--pp-border-width`:
+ * a prospect whose shape language says 4px borders would change every measured
+ * container width by 8px, and the geometry would stop matching the stylesheet.
+ * Brand border width is honoured where it belongs — on the content inside the
+ * panels (tables, CTAs, media frames), where it does not move a text box's
+ * inner width. Recorded in docs/decisions/L8-scenes.md.
+ */
+const PANEL_BORDER_PX = 1;
+
+/** The `systemMap` drawing's design space. The SVG scales; these do not. */
+const MAP_DESIGN = { width: 960, height: 540 };
+
+/**
+ * `--pp-stage-pad` from runtime.css: `clamp(20px, 3.2vw, 56px)`.
+ * @param {number} viewportWidthPx
+ * @returns {number}
+ */
+function stagePadPx(viewportWidthPx) {
+  return Math.min(56, Math.max(20, viewportWidthPx * 0.032));
+}
+
+/**
+ * Normalise whatever a caller passes as a breakpoint into its id.
+ * @param {string|{id?: string, width?: number}} bp
+ * @returns {'sm'|'md'|'lg'}
+ */
+function breakpointId(bp) {
+  const id = typeof bp === 'string' ? bp : bp && bp.id;
+  if (BP_IDS.includes(id)) return /** @type {'sm'|'md'|'lg'} */ (id);
+  if (bp && typeof bp === 'object' && typeof bp.width === 'number') {
+    const match = BREAKPOINTS.find((b) => b.width === bp.width);
+    if (match) return /** @type {'sm'|'md'|'lg'} */ (match.id);
+  }
+  throw new Error(`scene/geometry: "${String(id)}" is not one of ${BP_IDS.join(', ')}`);
+}
+
+/**
+ * @typedef {object} StageBox
+ * @property {'sm'|'md'|'lg'} id
+ * @property {number} viewportWidthPx
+ * @property {number} viewportHeightPx
+ * @property {number} stagePadPx
+ * @property {number} contentWidthPx    inside .pp-scene's padding
+ * @property {number} contentHeightPx
+ * @property {number} headHeightPx      the scene header band
+ * @property {number} bodyWidthPx       the layout body, below the header
+ * @property {number} bodyHeightPx
+ */
+
+/**
+ * The stage the layout is drawn into at a breakpoint.
+ * @param {string|{id?: string}} bp
+ * @returns {StageBox}
+ */
+function stageBox(bp) {
+  const id = breakpointId(bp);
+  const view = BREAKPOINTS.find((b) => b.id === id);
+  const pad = stagePadPx(view.width);
+  const contentWidthPx = view.width - pad * 2;
+  const contentHeightPx = view.height - pad * 2;
+  const headHeightPx = geom(id, 'head-h');
+  return {
+    id,
+    viewportWidthPx: view.width,
+    viewportHeightPx: view.height,
+    stagePadPx: pad,
+    contentWidthPx,
+    contentHeightPx,
+    headHeightPx,
+    bodyWidthPx: contentWidthPx,
+    bodyHeightPx: contentHeightPx - headHeightPx - geom(id, 'head-gap'),
+  };
+}
+
+/** A width/height pair, both in CSS px, both the *inner* box available to text. */
+/**
+ * @typedef {object} BoxSize
+ * @property {number} widthPx
+ * @property {number} heightPx
+ */
+
+/**
+ * How many columns a fan grid has: the breakpoint's maximum, or the item count
+ * when there are fewer items than columns. `scenes.css` expresses exactly this
+ * with `--pp-sc-fan-cols` plus one `[data-pp-n="k"]` override per k below the
+ * maximum, and test/scene/css-agreement.test.mjs checks each override.
+ * @param {'sm'|'md'|'lg'} bp
+ * @param {number} n
+ * @returns {number}
+ */
+function fanColumns(bp, n) {
+  const max = geom(bp, 'fan-cols');
+  return Math.max(1, Math.min(max, Math.max(1, n)));
+}
+
+/**
+ * The scale the `systemMap` SVG is drawn at: `preserveAspectRatio="xMidYMid
+ * meet"` on a 960×540 viewBox inside the body box is exactly `min(w/960,
+ * h/540)`, so this is not an approximation of the CSS, it is the CSS.
+ * @param {'sm'|'md'|'lg'} bp
+ * @returns {number}
+ */
+function mapScale(bp) {
+  const s = stageBox(bp);
+  const canvasHeight = Math.max(0, s.bodyHeightPx - geom(breakpointId(bp), 'map-legend-h') - geom(breakpointId(bp), 'row-gap'));
+  return Math.min(s.bodyWidthPx / MAP_DESIGN.width, canvasHeight / MAP_DESIGN.height);
+}
+
+/**
+ * Equal tracks from a CSS grid: `repeat(cols, minmax(0, 1fr))` with `gap`.
+ * @param {number} totalPx
+ * @param {number} cols
+ * @param {number} gapPx
+ * @returns {number}
+ */
+function trackWidth(totalPx, cols, gapPx) {
+  if (cols <= 0) return 0;
+  return (totalPx - gapPx * (cols - 1)) / cols;
+}
+
+/** Shrink a box by symmetric padding and the panel hairline. */
+function inset(widthPx, heightPx, padPx, border = PANEL_BORDER_PX) {
+  return {
+    widthPx: Math.max(0, widthPx - padPx * 2 - border * 2),
+    heightPx: Math.max(0, heightPx - padPx * 2 - border * 2),
+  };
+}
+
+/**
+ * The inner box of a named layout slot.
+ *
+ * `slot` is the value a layout stamps as `data-pp-box`; `params.n` is the item
+ * count it stamps as `data-pp-n` where the slot's size depends on it. Every
+ * text run reported by `measureScene` names the slot it sits in, so a layout
+ * cannot report a box it does not draw, and cannot draw a box it does not
+ * report.
+ *
+ * @param {string} slot
+ * @param {string|{id?: string}} bpIn
+ * @param {{n?: number, unitWidth?: number, unitHeight?: number, variant?: string}} [params]
+ * @returns {BoxSize}
+ */
+function boxGeometry(slot, bpIn, params = {}) {
+  const bp = breakpointId(bpIn);
+  const s = stageBox(bp);
+  const n = Math.max(1, Math.floor(params.n || 1));
+  const stacked = bp === 'sm';
+
+  switch (slot) {
+    // ---------------------------------------------------------------- shared
+    case 'stage':
+      return { widthPx: s.contentWidthPx, heightPx: s.contentHeightPx };
+    case 'head':
+      return { widthPx: s.contentWidthPx, heightPx: s.headHeightPx };
+    case 'body':
+      return { widthPx: s.bodyWidthPx, heightPx: s.bodyHeightPx };
+
+    // ------------------------------------------------------ splitBeforeAfter
+    case 'splitCol': {
+      // `repeat(--pp-sc-split-cols, minmax(0,1fr))` with `--pp-sc-split-gap` at
+      // md/lg; one column, stacked, at sm. `n` is the column count: the source
+      // column plus one per rendition the scene carries.
+      const gap = geom(bp, 'split-gap');
+      const cols = Math.max(1, n);
+      const w = stacked ? s.contentWidthPx : trackWidth(s.contentWidthPx, cols, gap);
+      const hOuter = stacked ? trackWidth(s.bodyHeightPx, cols, gap) : s.bodyHeightPx;
+      return inset(w, hOuter, geom(bp, 'panel-pad'));
+    }
+    case 'splitPanelHead': {
+      const col = boxGeometry('splitCol', bp, { n });
+      return { widthPx: col.widthPx, heightPx: geom(bp, 'panel-head-h') };
+    }
+    case 'splitCell': {
+      // The rows region below the panel header. Reported per cell as the space
+      // the column affords it; `containerId` on every box lets L11 sum the
+      // siblings that share a column (docs/decisions/L8-scenes.md).
+      const col = boxGeometry('splitCol', bp, { n });
+      return {
+        widthPx: col.widthPx,
+        heightPx: Math.max(0, col.heightPx - geom(bp, 'panel-head-h') - geom(bp, 'row-gap')),
+      };
+    }
+
+    // ----------------------------------------------------------------- fanOut
+    case 'fanSource': {
+      const w = isProportional(bp, 'fan-source-w') ? s.contentWidthPx : geom(bp, 'fan-source-w');
+      const h = stacked ? geom(bp, 'fan-source-h') : s.bodyHeightPx;
+      return inset(w, h, geom(bp, 'panel-pad'));
+    }
+    case 'fanGrid': {
+      const railW = isProportional(bp, 'fan-source-w') ? s.contentWidthPx : geom(bp, 'fan-source-w');
+      const gap = geom(bp, 'fan-source-gap');
+      return stacked
+        ? { widthPx: s.contentWidthPx, heightPx: Math.max(0, s.bodyHeightPx - geom(bp, 'fan-source-h') - gap) }
+        : { widthPx: Math.max(0, s.contentWidthPx - railW - gap), heightPx: s.bodyHeightPx };
+    }
+    case 'fanCard': {
+      const grid = boxGeometry('fanGrid', bp);
+      const gap = geom(bp, 'fan-gap');
+      const cols = fanColumns(bp, n);
+      const rows = Math.max(1, Math.ceil(n / cols));
+      // `grid-auto-rows: minmax(0, 1fr)` on a full-height grid: every card gets
+      // an equal share of the height, which is what makes a count *felt*.
+      return inset(
+        trackWidth(grid.widthPx, cols, gap),
+        trackWidth(grid.heightPx, rows, gap),
+        geom(bp, 'card-pad'),
+      );
+    }
+
+    // ------------------------------------------------------------------ stack
+    case 'stackStep': {
+      const w = s.contentWidthPx - geom(bp, 'stack-rail-w') - geom(bp, 'stack-rail-gap');
+      const h = trackWidth(s.bodyHeightPx, n, geom(bp, 'stack-step-gap'));
+      return inset(w, h, geom(bp, 'step-pad'));
+    }
+    case 'stackRail':
+      return { widthPx: geom(bp, 'stack-rail-w'), heightPx: s.bodyHeightPx };
+
+    // -------------------------------------------------------------- fullBleed
+    // `fullBleed` has no header band — the visual takes the whole content box,
+    // and the headline lives in the overlay on top of it.
+    case 'bleedMedia':
+      return { widthPx: s.contentWidthPx, heightPx: s.contentHeightPx };
+    case 'bleedOverlay': {
+      const w = Math.min(s.contentWidthPx, geom(bp, 'bleed-max-w'));
+      // `.pp-bleed-overlay { max-height: 50% }` of the content box.
+      return inset(w, s.contentHeightPx * 0.5, geom(bp, 'bleed-pad'), 0);
+    }
+
+    // --------------------------------------------------------------- sideNote
+    case 'sideMain': {
+      const noteW = isProportional(bp, 'note-w') ? s.contentWidthPx : geom(bp, 'note-w');
+      const gap = geom(bp, 'note-gap');
+      const w = stacked ? s.contentWidthPx : Math.max(0, s.contentWidthPx - noteW - gap);
+      return { widthPx: w, heightPx: s.bodyHeightPx };
+    }
+    case 'sideNote': {
+      const w = isProportional(bp, 'note-w') ? s.contentWidthPx : geom(bp, 'note-w');
+      const h = trackWidth(s.bodyHeightPx, n, geom(bp, 'row-gap'));
+      return inset(w, h, geom(bp, 'note-pad'));
+    }
+
+    // -------------------------------------------------------------- quoteCard
+    case 'quoteBox': {
+      const w = Math.min(s.bodyWidthPx, geom(bp, 'quote-max-w'));
+      // `variant: 'full'` is the headline-as-statement case, where the layout
+      // renders no header band and the card takes the whole content box.
+      const h0 = params.variant === 'full' ? s.contentHeightPx : s.bodyHeightPx;
+      return inset(w, h0, geom(bp, 'quote-pad'), 0);
+    }
+
+    // ---------------------------------------------------------- contentsIndex
+    case 'indexRow': {
+      const w = Math.max(0, s.contentWidthPx - geom(bp, 'index-num-w') - geom(bp, 'index-gap'));
+      const h = trackWidth(s.bodyHeightPx, n, geom(bp, 'index-row-gap'));
+      return { widthPx: w, heightPx: h };
+    }
+    case 'indexNumber': {
+      const h = trackWidth(s.bodyHeightPx, n, geom(bp, 'index-row-gap'));
+      return { widthPx: geom(bp, 'index-num-w'), heightPx: h };
+    }
+
+    // -------------------------------------------------------------- systemMap
+    case 'mapCanvas': {
+      const scale = mapScale(bp);
+      return { widthPx: MAP_DESIGN.width * scale, heightPx: MAP_DESIGN.height * scale };
+    }
+    case 'mapLegend': {
+      const gap = geom(bp, 'fan-gap');
+      const cols = Math.max(1, Math.min(n, bp === 'sm' ? 1 : bp === 'md' ? 3 : 4));
+      return inset(trackWidth(s.contentWidthPx, cols, gap), geom(bp, 'map-legend-h'), geom(bp, 'card-pad'));
+    }
+    case 'mapText': {
+      const scale = mapScale(bp);
+      return {
+        widthPx: (params.unitWidth || MAP_DESIGN.width) * scale,
+        heightPx: (params.unitHeight || MAP_DESIGN.height) * scale,
+      };
+    }
+
+    default:
+      throw new Error(`scene/geometry: unknown slot "${slot}"`);
+  }
+}
+
+/** Every slot name `boxGeometry` answers for. Used by the completeness test. */
+const SLOTS = [
+  'stage', 'head', 'body',
+  'splitCol', 'splitPanelHead', 'splitCell',
+  'fanSource', 'fanGrid', 'fanCard',
+  'stackStep', 'stackRail',
+  'bleedMedia', 'bleedOverlay',
+  'sideMain', 'sideNote',
+  'quoteBox',
+  'indexRow', 'indexNumber',
+  'mapCanvas', 'mapLegend', 'mapText',
+];
+
+__exports["PANEL_BORDER_PX"] = PANEL_BORDER_PX;
+__exports["MAP_DESIGN"] = MAP_DESIGN;
+__exports["stagePadPx"] = stagePadPx;
+__exports["breakpointId"] = breakpointId;
+__exports["stageBox"] = stageBox;
+__exports["fanColumns"] = fanColumns;
+__exports["mapScale"] = mapScale;
+__exports["trackWidth"] = trackWidth;
+__exports["boxGeometry"] = boxGeometry;
+__exports["SLOTS"] = SLOTS;
+};
+__modules["scene/brand-access.js"] = function (__exports, __require) {
+/**
+ * Reading a `BrandSystem` safely from inside a layout.
+ *
+ * Layouts run in three places — the studio preview, the rehearsal sweep, and
+ * the artifact — and in the studio the brand is half-extracted for most of the
+ * session. A layout that threw on a missing face would make the preview
+ * useless exactly when the user needs it. So every read goes through here and
+ * every read has a neutral answer.
+ *
+ * The neutral answers deliberately mirror the defaults in
+ * `src/runtime/runtime.css`, so an un-themed preview measures as what it
+ * renders. §15's law that the artifact never wears the studio palette is kept
+ * by construction: nothing in this module knows the studio exists.
+ *
+ * @module scene/brand-access
+ */
+
+/** The default stacks, matching `--pp-font-display|body|mono` in runtime.css. */
+const DEFAULT_STACKS = {
+  display: ['system-ui', 'sans-serif'],
+  body: ['system-ui', 'sans-serif'],
+  mono: ['ui-monospace', 'monospace'],
+};
+
+/**
+ * The brand face for a type role, or a neutral stand-in.
+ * @param {import('../core/contracts.d.ts').BrandSystem|null|undefined} brand
+ * @param {'display'|'body'|'mono'} role
+ * @returns {{family: string, fallbackStack: string[], role: string, embeddable: boolean}}
+ */
+function faceFor(brand, role) {
+  const faces = (brand && Array.isArray(brand.faces)) ? brand.faces : [];
+  const exact = faces.find((f) => f && f.role === role && typeof f.family === 'string' && f.family);
+  const chosen = exact
+    || (role === 'display' ? faces.find((f) => f && f.role === 'body') : null)
+    || (role === 'body' ? faces.find((f) => f && f.role === 'display') : null)
+    || null;
+  if (!chosen) {
+    return { family: DEFAULT_STACKS[role][0], fallbackStack: DEFAULT_STACKS[role].slice(), role, embeddable: false };
+  }
+  const stack = Array.isArray(chosen.fallbackStack) && chosen.fallbackStack.length
+    ? chosen.fallbackStack.slice()
+    : [chosen.family, ...DEFAULT_STACKS[role]];
+  return { family: chosen.family, fallbackStack: stack, role, embeddable: !!chosen.embeddable };
+}
+
+/**
+ * A colour role's hex, or null. Layouts colour themselves with `var(--pp-*)`
+ * rather than with literals — this is for the two places a value has to reach
+ * an attribute (an SVG `fill` on a gradient stop, say), and it returns null so
+ * the caller falls back to a variable rather than inventing a colour.
+ * @param {import('../core/contracts.d.ts').BrandSystem|null|undefined} brand
+ * @param {import('../core/contracts.d.ts').ColorRole} role
+ * @returns {string|null}
+ */
+function colorFor(brand, role) {
+  const colors = (brand && Array.isArray(brand.colors)) ? brand.colors : [];
+  const found = colors.find((c) => c && c.role === role && typeof c.hex === 'string');
+  return found ? found.hex : null;
+}
+
+/**
+ * The brand's primary logo as inline SVG markup, or null.
+ *
+ * Only `kind: 'svg'` is returned as markup and only when it is markup — a
+ * raster logo is a data URI and belongs in an `<img>`, and a logo whose `data`
+ * is neither is dropped rather than injected. A layout must never be the path
+ * by which unreviewed markup reaches the artifact.
+ * @param {import('../core/contracts.d.ts').BrandSystem|null|undefined} brand
+ * @param {import('../core/contracts.d.ts').LogoAsset['variant']} [variant]
+ * @returns {import('../core/contracts.d.ts').LogoAsset|null}
+ */
+function logoFor(brand, variant = 'primary') {
+  const logos = (brand && Array.isArray(brand.logos)) ? brand.logos : [];
+  return logos.find((l) => l && l.variant === variant) || logos[0] || null;
+}
+
+/**
+ * A neutral, contract-shaped brand for planning and for previews with nothing
+ * extracted yet. Not exported into any artifact: `buildScene` uses it to render
+ * a scene once so it can read the element ids the layout actually mints.
+ * @returns {import('../core/contracts.d.ts').BrandSystem}
+ */
+function neutralBrand() {
+  return {
+    id: 'br_neutral',
+    sourceUrl: null,
+    capturedAt: '1970-01-01T00:00:00.000Z',
+    colors: [],
+    faces: [
+      { family: DEFAULT_STACKS.display[0], fallbackStack: DEFAULT_STACKS.display.slice(), weightsSeen: [400, 700], role: 'display', metricDelta: null, embeddable: false },
+      { family: DEFAULT_STACKS.body[0], fallbackStack: DEFAULT_STACKS.body.slice(), weightsSeen: [400, 600], role: 'body', metricDelta: null, embeddable: false },
+      { family: DEFAULT_STACKS.mono[0], fallbackStack: DEFAULT_STACKS.mono.slice(), weightsSeen: [400], role: 'mono', metricDelta: null, embeddable: false },
+    ],
+    logos: [],
+    shape: { radiusPx: 8, borderWidthPx: 1, shadowLevel: 0 },
+    imagery: { treatment: 'unknown', saturationBias: 0 },
+    confidence: { colors: 0, faces: 0, logos: 0, shape: 0, imagery: 0 },
+    manualOverrides: [],
+  };
+}
+
+__exports["DEFAULT_STACKS"] = DEFAULT_STACKS;
+__exports["faceFor"] = faceFor;
+__exports["colorFor"] = colorFor;
+__exports["logoFor"] = logoFor;
+__exports["neutralBrand"] = neutralBrand;
+};
+__modules["scene/type-scale.js"] = function (__exports, __require) {
+/**
+ * From a rendered text run to the `TextStyle` that will actually apply to it.
+ *
+ * One function, one direction: a role name (`data-pp-tx`) plus a breakpoint
+ * plus the brand produces the style. `scenes.css` styles the same attribute
+ * from the same tokens, so what the overflow detector measures is what the
+ * client sees — which is the whole point of §22.2.
+ *
+ * The family reported is the brand's *requested* family, with its fallback
+ * stack alongside it. L11 resolves it with `resolveFace(...)` and measures
+ * against `.resolved`; that is what "post-substitution" means, and doing the
+ * substitution here as well would do it twice.
+ *
+ * @module scene/type-scale
+ */
+
+const { TYPE_ROLES } = __require("scene/tokens.js");
+const { faceFor } = __require("scene/brand-access.js");
+
+/**
+ * @typedef {object} RoleStyle
+ * @property {import('../core/text-metrics.js').TextStyle} style
+ * @property {string[]} fontStack   the CSS stack the family sits at the head of
+ * @property {'display'|'body'|'mono'} face
+ */
+
+/**
+ * @param {string} role                 a `data-pp-tx` value
+ * @param {'sm'|'md'|'lg'} bp
+ * @param {import('../core/contracts.d.ts').BrandSystem|null} brand
+ * @param {{scale?: number}} [options]  SVG roles are drawn in design units and
+ *                                      scale with the drawing
+ * @returns {RoleStyle}
+ */
+function styleForRole(role, bp, brand, options = {}) {
+  const spec = TYPE_ROLES[role];
+  if (!spec) throw new Error(`scene/type-scale: unknown text role "${role}"`);
+  const scale = spec.svg ? (options.scale ?? 1) : 1;
+  const face = faceFor(brand, spec.face);
+  const fontSizePx = round4(spec.sizes[bp] * scale);
+  /** @type {import('../core/text-metrics.js').TextStyle} */
+  const style = {
+    family: face.family,
+    weight: spec.weight,
+    fontSizePx,
+    lineHeight: spec.lineHeight,
+    letterSpacingPx: round4((spec.letterSpacingEm || 0) * fontSizePx),
+    textTransform: spec.textTransform || 'none',
+  };
+  return { style, fontStack: face.fallbackStack, face: spec.face };
+}
+
+/** @param {number} n @returns {number} */
+function round4(n) {
+  return Math.round(n * 10000) / 10000;
+}
+
+/** Every role a layout may stamp. @returns {string[]} */
+function textRoles() {
+  return Object.keys(TYPE_ROLES);
+}
+
+__exports["styleForRole"] = styleForRole;
+__exports["textRoles"] = textRoles;
+};
+__modules["scene/layouts/system-map.js"] = function (__exports, __require) {
+/**
+ * `systemMap` — a structural diagram of components and flow, drawn as inline
+ * SVG (§4).
+ *
+ * The scene for "how does this actually work": where the content comes in, what
+ * acts on it, and what comes out. It is drawn rather than bulleted because a
+ * flow with three shapes and two arrows is understood in the second it appears,
+ * and the same flow as a list is read aloud by the presenter while the room
+ * waits.
+ *
+ * Constraints that shaped it:
+ *  - **Inline SVG only.** No external assets, no icon font, no image request —
+ *    §13's scanner treats any of those as a `NETWORK_REFERENCE`. Everything
+ *    here is markup and CSS.
+ *  - **Deterministic line breaking.** Node labels are wrapped by
+ *    `layoutText()` from core/text-metrics into explicit `<tspan>` lines, in
+ *    the drawing's design units. SVG does not wrap text, so a label that is not
+ *    broken here is a label that runs out of its box on someone's projector.
+ *    Because the wrapping is computed from published metrics it is identical in
+ *    the studio, in the sweep and in the artifact (D7).
+ *  - **Provenance lives in HTML.** The output legend under the drawing carries
+ *    one chip per rendition, and that chip is where the `pp-provenance` label
+ *    goes. §18.1 makes the label's computed size and contrast a check the
+ *    emitter runs against the final stylesheet; an SVG `<text>` has no
+ *    background and takes `fill` rather than `color`, so a label placed inside
+ *    the drawing would be a label whose legibility could not be verified. The
+ *    chips are numbered to match the nodes.
+ *
+ * @module scene/layouts/system-map
+ */
+
+const { h } = __require("core/vdom.js");
+const { layoutText } = __require("core/text-metrics.js");
+const { MAP_DESIGN } = __require("scene/geometry.js");
+const { styleForRole } = __require("scene/type-scale.js");
+const { sceneHead, provenanceLabel, emptyState, specimenTitle, specimenMeta, renditionLabel, renditionMeta } = __require("scene/parts.js");
+
+
+
+
+/** The drawing's design geometry, in viewBox units. */
+const MAP = {
+  nodeW: 200,
+  nodePad: 14,
+  sourceX: 40,
+  transformX: 380,
+  outputX: 720,
+  top: 48,
+  bottom: 492,
+  outputGap: 16,
+  minOutputH: 56,
+  maxOutputs: 5,
+  titleLines: 3,
+  metaLines: 2,
+  lineStep: { title: 20, meta: 15 },
+};
+
+/**
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function systemMap(ctx) {
+  const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
+  const hasSubject = !!ctx.specimen || rends.length > 0;
+
+  if (!hasSubject) {
+    return h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
+      sceneHead(ctx, { kicker: 'How it runs' }),
+      emptyState('This scene has nothing to map yet — attach a specimen or renditions.', { box: 'body' }));
+  }
+
+  const shown = rends.slice(0, MAP.maxOutputs);
+  const overflow = rends.length - shown.length;
+  const outputCount = shown.length + (overflow > 0 ? 1 : 0);
+  const outputs = outputBoxes(outputCount);
+
+  const arrowId = ctx.el('map/arrow');
+  const source = { x: MAP.sourceX, y: 210, w: MAP.nodeW, h: 120 };
+  const transform = { x: MAP.transformX, y: 210, w: MAP.nodeW, h: 120 };
+
+  const sourceLabel = specimenTitle(ctx.specimen);
+  const sourceMeta = specimenMeta(ctx.specimen) || (ctx.specimen ? ctx.specimen.kind : 'no specimen attached');
+  const transformLabel = ctx.scene.subhead ? String(ctx.scene.subhead) : 'Transformation';
+  const recipeCount = new Set(rends.map((r) => r.recipeId).filter(Boolean)).size;
+  const transformMeta = recipeCount === 1 ? '1 recipe' : `${recipeCount} recipes`;
+
+  return h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
+    sceneHead(ctx, { kicker: 'How it runs' }),
+    h('div', { class: 'pp-map', 'data-pp-box': 'body' },
+      h('div', { class: 'pp-map-canvas' },
+        h('svg', {
+          class: 'pp-map-svg',
+          viewBox: `0 0 ${MAP_DESIGN.width} ${MAP_DESIGN.height}`,
+          preserveAspectRatio: 'xMidYMid meet',
+          role: 'img',
+          'aria-label': `${sourceLabel} through ${transformLabel} to ${outputCount} outputs`,
+          focusable: 'false',
+        },
+        h('defs', null,
+          h('marker', {
+            id: arrowId, markerWidth: '10', markerHeight: '8', refX: '9', refY: '4', orient: 'auto',
+          }, h('path', { class: 'pp-map-arrow', d: 'M0,0 L10,4 L0,8 z' }))),
+
+        h('g', {
+          class: 'pp-map-edges',
+          'data-pp-el': ctx.el('map/edge/source'),
+          'data-pp-group': 'map/transform',
+        },
+        h('line', {
+          class: 'pp-map-edge',
+          x1: String(source.x + source.w), y1: '270',
+          x2: String(transform.x - 12), y2: '270',
+          'marker-end': `url(#${arrowId})`,
+        })),
+
+        h('g', {
+          class: 'pp-map-edges',
+          'data-pp-el': ctx.el('map/edge/outputs'),
+          'data-pp-group': 'map/outputs',
+        },
+        outputs.map((box) => h('path', {
+          class: 'pp-map-edge',
+          d: fanPath(transform.x + transform.w, 270, MAP.outputX - 12, box.y + box.h / 2),
+          'marker-end': `url(#${arrowId})`,
+          fill: 'none',
+        }))),
+
+        node(ctx, {
+          box: source, path: 'map/source', group: 'map/source', tone: 'source',
+          title: sourceLabel, meta: sourceMeta, index: null,
+        }),
+        node(ctx, {
+          box: transform, path: 'map/transform', group: 'map/transform', tone: 'transform',
+          title: transformLabel, meta: transformMeta, index: null,
+        }),
+        shown.map((rendition, i) => node(ctx, {
+          box: outputs[i],
+          path: `map/output/${i}`,
+          group: 'map/outputs',
+          tone: 'output',
+          title: renditionLabel(rendition, i),
+          meta: renditionMeta(rendition),
+          index: i + 1,
+        })),
+        overflow > 0
+          ? node(ctx, {
+            box: outputs[outputs.length - 1],
+            path: 'map/output/more',
+            group: 'map/outputs',
+            tone: 'more',
+            title: `${overflow} more ${overflow === 1 ? 'rendition' : 'renditions'}`,
+            meta: 'in this scene',
+            index: null,
+          })
+          : null)),
+
+      h('ul', { class: 'pp-map-legend', 'data-pp-n': String(Math.max(1, shown.length)) },
+        shown.map((rendition, i) => h('li', {
+          class: 'pp-map-chip',
+          'data-pp-box': 'mapLegend',
+          'data-pp-n': String(Math.max(1, shown.length)),
+          'data-pp-el': ctx.el(`map/legend/${i}`),
+          'data-pp-group': 'map/outputs',
+          'data-pp-rendition': rendition.id,
+        },
+        h('p', { class: 'pp-map-chip-label', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' },
+          `${i + 1}. ${renditionLabel(rendition, i)}`),
+        renditionMeta(rendition)
+          ? h('p', { class: 'pp-map-chip-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, renditionMeta(rendition))
+          : null,
+        provenanceLabel(rendition, ctx))),
+        shown.length === 0
+          ? h('li', { class: 'pp-map-chip pp-map-chip--empty', 'data-pp-box': 'mapLegend', 'data-pp-n': '1' },
+            h('p', { class: 'pp-map-chip-label', 'data-pp-tx': 'caption' }, 'No renditions attached to this scene.'))
+          : null)));
+}
+
+/**
+ * Where the output nodes sit, top to bottom, filling the drawing's height so a
+ * flow with two outputs and one with six both look composed.
+ * @param {number} count
+ * @returns {{x: number, y: number, w: number, h: number}[]}
+ */
+function outputBoxes(count) {
+  const n = Math.max(1, count);
+  const span = MAP.bottom - MAP.top;
+  const height = Math.max(MAP.minOutputH, (span - MAP.outputGap * (n - 1)) / n);
+  const total = height * n + MAP.outputGap * (n - 1);
+  const start = MAP.top + Math.max(0, (span - total) / 2);
+  return Array.from({ length: n }, (_, i) => ({
+    x: MAP.outputX,
+    y: start + i * (height + MAP.outputGap),
+    w: MAP.nodeW,
+    h: height,
+  }));
+}
+
+/**
+ * A node: a rounded rect and its wrapped label. The label's lines are computed,
+ * not guessed — SVG has no line breaking of its own.
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function node(ctx, spec) {
+  const { box } = spec;
+  const innerW = box.w - MAP.nodePad * 2;
+  const titleLines = wrap(spec.title, 'mapNodeTitle', innerW, MAP.titleLines, ctx.brand);
+  const metaLines = spec.meta ? wrap(spec.meta, 'mapNodeMeta', innerW, MAP.metaLines, ctx.brand) : [];
+  const blockH = titleLines.length * MAP.lineStep.title + metaLines.length * MAP.lineStep.meta;
+  const firstBaseline = box.y + (box.h - blockH) / 2 + MAP.lineStep.title * 0.75;
+  const x = box.x + MAP.nodePad;
+
+  return h('g', {
+    class: `pp-map-node pp-map-node--${spec.tone}`,
+    'data-pp-el': ctx.el(spec.path),
+    'data-pp-group': spec.group,
+  },
+  h('rect', {
+    class: 'pp-map-box',
+    x: String(box.x), y: String(box.y), width: String(box.w), height: String(box.h),
+    rx: '10', ry: '10',
+  }),
+  spec.index !== null && spec.index !== undefined
+    ? h('text', { class: 'pp-map-index', x: String(box.x + box.w - MAP.nodePad), y: String(box.y + 22), 'text-anchor': 'end' },
+      h('tspan', {
+        'data-pp-tx': 'mapNodeMeta',
+        'data-pp-box': 'mapText',
+        'data-pp-unit-w': String(innerW),
+        'data-pp-unit-h': String(MAP.lineStep.meta),
+        'data-pp-ws': 'nowrap',
+      }, String(spec.index)))
+    : null,
+  h('text', { class: 'pp-map-title', x: String(x), y: String(firstBaseline) },
+    titleLines.map((line, i) => h('tspan', {
+      x: String(x),
+      dy: i === 0 ? '0' : String(MAP.lineStep.title),
+      'data-pp-tx': 'mapNodeTitle',
+      'data-pp-box': 'mapText',
+      'data-pp-unit-w': String(innerW),
+      'data-pp-unit-h': String(MAP.lineStep.title),
+      'data-pp-ws': 'nowrap',
+    }, line))),
+  metaLines.length
+    ? h('text', {
+      class: 'pp-map-meta',
+      x: String(x),
+      y: String(firstBaseline + titleLines.length * MAP.lineStep.title),
+    },
+    metaLines.map((line, i) => h('tspan', {
+      x: String(x),
+      dy: i === 0 ? '0' : String(MAP.lineStep.meta),
+      'data-pp-tx': 'mapNodeMeta',
+      'data-pp-box': 'mapText',
+      'data-pp-unit-w': String(innerW),
+      'data-pp-unit-h': String(MAP.lineStep.meta),
+      'data-pp-ws': 'nowrap',
+    }, line)))
+    : null);
+}
+
+/**
+ * Break a label into lines that fit a node, in design units.
+ *
+ * The breakpoint passed to `styleForRole` is immaterial for SVG roles — their
+ * design size is the same at all three, by construction in tokens.js — so the
+ * wrapping is one answer for the whole document, which is what a single SVG
+ * tree rendered at every breakpoint requires.
+ * @param {string} text
+ * @param {string} role
+ * @param {number} maxUnits
+ * @param {number} maxLines
+ * @param {import('../../core/contracts.d.ts').BrandSystem} brand
+ * @returns {string[]}
+ */
+function wrap(text, role, maxUnits, maxLines, brand) {
+  const value = String(text ?? '').trim();
+  if (!value) return [];
+  const { style } = styleForRole(role, 'md', brand, { scale: 1 });
+  const laid = layoutText(value, style, {
+    maxWidthPx: maxUnits,
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+    maxLines,
+  });
+  return laid.lines.map((line) => line.text);
+}
+
+/**
+ * A cubic from the transform node's edge to an output node's edge. Curves
+ * rather than elbows: a fan of curves reads as one flow branching, which is
+ * what it is.
+ * @returns {string}
+ */
+function fanPath(x1, y1, x2, y2) {
+  const dx = Math.max(40, (x2 - x1) / 2);
+  return `M${round(x1)},${round(y1)} C${round(x1 + dx)},${round(y1)} ${round(x2 - dx)},${round(y2)} ${round(x2)},${round(y2)}`;
+}
+
+/** @param {number} n @returns {string} */
+function round(n) {
+  return String(Math.round(n * 100) / 100);
+}
+
+__exports["MAP"] = MAP;
+__exports["systemMap"] = systemMap;
+__exports["outputBoxes"] = outputBoxes;
+__exports["wrap"] = wrap;
+};
+__modules["scene/layouts/quote-card.js"] = function (__exports, __require) {
+/**
+ * `quoteCard` — a pulled quote with attribution (§4).
+ *
+ * One sentence, given the room. Used for the client's own words — a line from
+ * their brand guidelines, a stakeholder's phrasing of the problem, a passage
+ * from the page under discussion — where reading it aloud from a dense slide
+ * would waste it.
+ *
+ * §18.2 is the binding constraint. **This layout never invents a quote and
+ * never invents an attribution.** It renders, in order of preference: a `quote`
+ * block from a rendition, a `quote` block from the specimen, or the scene's own
+ * headline set as a statement with no attribution at all. An attribution
+ * appears only when the block carries one; there is no "— a customer" fallback,
+ * because that is exactly the fabricated testimonial §18.2 forbids.
+ *
+ * @module scene/layouts/quote-card
+ */
+
+const { h } = __require("core/vdom.js");
+const { firstOfType } = __require("scene/blocks.js");
+const { sceneHead, provenanceLabel, emptyState, specimenTitle, renditionLabel, specimenMeta } = __require("scene/parts.js");
+
+
+
+/**
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function quoteCard(ctx) {
+  const pulled = pullQuote(ctx);
+
+  return h('div', {
+    class: 'pp-layout pp-layout--quote',
+    'data-pp-layout': 'quoteCard',
+    'data-pp-box': 'stage',
+  },
+  pulled.fallback ? null : sceneHead(ctx, { kicker: pulled.kicker }),
+  pulled.text
+    ? h('figure', {
+      class: 'pp-quote-card',
+      'data-pp-box': 'quoteBox',
+      'data-pp-variant': pulled.fallback ? 'full' : null,
+      'data-pp-el': ctx.el('quote/text'),
+      'data-pp-group': 'quote',
+      'data-pp-rendition': pulled.rendition ? pulled.rendition.id : null,
+    },
+    h('div', { class: 'pp-quote-rule', 'aria-hidden': 'true' }),
+    h('blockquote', { class: 'pp-quote-body' },
+      h('p', { class: 'pp-quote-line', 'data-pp-tx': 'quote', 'data-pp-clamp': '8' }, pulled.text)),
+    pulled.attribution || pulled.source
+      ? h('figcaption', {
+        class: 'pp-quote-figcaption',
+        'data-pp-el': ctx.el('quote/attribution'),
+        'data-pp-group': 'attribution',
+      },
+      pulled.attribution
+        ? h('p', { class: 'pp-quote-attribution', 'data-pp-tx': 'attribution', 'data-pp-clamp': '2' }, pulled.attribution)
+        : null,
+      pulled.source
+        ? h('p', { class: 'pp-quote-source', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, pulled.source)
+        : null)
+      : null,
+    provenanceLabel(pulled.rendition, ctx))
+    : emptyState('This scene has no quote yet — attach a specimen with a quote block, or give the scene a headline.', { box: 'body' }));
+}
+
+/**
+ * The quote, its attribution, and where it came from. Attribution is copied,
+ * never supplied.
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {{text: string|null, attribution: string|null, source: string|null, kicker: string|null, rendition: any, fallback: boolean}}
+ */
+function pullQuote(ctx) {
+  const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
+  for (let i = 0; i < rends.length; i++) {
+    const found = firstOfType(Array.isArray(rends[i].blocks) ? rends[i].blocks : [], 'quote');
+    if (found && found.block.text) {
+      return {
+        text: String(found.block.text),
+        attribution: found.block.attribution ? String(found.block.attribution) : null,
+        source: renditionLabel(rends[i], i),
+        kicker: 'In their words',
+        rendition: rends[i],
+        fallback: false,
+      };
+    }
+  }
+  const fromSpecimen = ctx.specimen
+    ? firstOfType(Array.isArray(ctx.specimen.blocks) ? ctx.specimen.blocks : [], 'quote')
+    : null;
+  if (fromSpecimen && fromSpecimen.block.text) {
+    return {
+      text: String(fromSpecimen.block.text),
+      attribution: fromSpecimen.block.attribution ? String(fromSpecimen.block.attribution) : null,
+      source: [specimenTitle(ctx.specimen), specimenMeta(ctx.specimen)].filter(Boolean).join('  ·  ') || null,
+      kicker: 'In their words',
+      rendition: null,
+      fallback: false,
+    };
+  }
+  // No quote in the model: the scene's own headline, set as a statement, with
+  // no attribution — because there is nobody to attribute it to. The header
+  // band is suppressed in that case so the headline is said once, not twice.
+  if (ctx.scene && ctx.scene.headline) {
+    return {
+      text: String(ctx.scene.headline),
+      attribution: null,
+      source: ctx.scene.subhead
+        ? String(ctx.scene.subhead)
+        : (ctx.specimen ? specimenTitle(ctx.specimen) : null),
+      kicker: null,
+      rendition: null,
+      fallback: true,
+    };
+  }
+  return { text: null, attribution: null, source: null, kicker: null, rendition: null, fallback: false };
+}
+
+__exports["quoteCard"] = quoteCard;
+__exports["pullQuote"] = pullQuote;
+};
+__modules["scene/layouts/contents-index.js"] = function (__exports, __require) {
+/**
+ * `contentsIndex` — the Review-mode contents list (§2, §4).
+ *
+ * §2 gives a forwarded recipient a contents index, and this is the scene form
+ * of it: a numbered list of what the proof covers, sitting in the deck as a
+ * scene the presenter can also open with. (The *overlay* contents index, opened
+ * with a key during presentation, is L9's; this is the scene, and the two are
+ * deliberately separate — a layout sees only its own scene, never the deck.)
+ *
+ * Entries are derived from the model, in this order:
+ *   1. the specimen's headings, each with the prose that follows it as a blurb;
+ *   2. failing that, the renditions, each with its label;
+ *   3. failing that, an empty state that says which piece is missing.
+ *
+ * Nothing is written that is not already in the proof (§18.2).
+ *
+ * @module scene/layouts/contents-index
+ */
+
+const { h } = __require("core/vdom.js");
+const { blockText } = __require("core/contracts.js");
+const { sceneHead, provenanceLabel, emptyState, waveGroup, specimenTitle, renditionLabel, renditionMeta } = __require("scene/parts.js");
+
+
+
+
+/**
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function contentsIndex(ctx) {
+  const entries = entriesFor(ctx);
+
+  return h('div', {
+    class: 'pp-layout pp-layout--index',
+    'data-pp-layout': 'contentsIndex',
+    'data-pp-box': 'stage',
+  },
+  sceneHead(ctx, { kicker: 'Contents' }),
+  entries.length === 0
+    ? emptyState('This contents scene has nothing to list yet — attach a specimen or renditions.', { box: 'body' })
+    : h('ol', { class: 'pp-index', 'data-pp-box': 'body', 'data-pp-n': String(entries.length) },
+      entries.map((entry, index) => h('li', {
+        class: 'pp-index-row',
+        'data-pp-el': ctx.el(`index/entry/${index}`),
+        'data-pp-group': waveGroup('index', index, entries.length, 5),
+        'data-pp-rendition': entry.rendition ? entry.rendition.id : null,
+      },
+      h('div', { class: 'pp-index-num', 'data-pp-box': 'indexNumber', 'data-pp-n': String(entries.length) },
+        h('span', { class: 'pp-index-num-text', 'data-pp-tx': 'indexNumber' }, pad2(index + 1))),
+      h('div', { class: 'pp-index-text', 'data-pp-box': 'indexRow', 'data-pp-n': String(entries.length) },
+        h('p', { class: 'pp-index-title', 'data-pp-tx': 'indexTitle', 'data-pp-clamp': '2' }, entry.title),
+        entry.blurb
+          ? h('p', { class: 'pp-index-blurb', 'data-pp-tx': 'indexBlurb', 'data-pp-clamp': '2' }, entry.blurb)
+          : null,
+        provenanceLabel(entry.rendition, ctx))))));
+}
+
+/**
+ * @param {import('../../runtime/layouts.js').LayoutContext} ctx
+ * @returns {{title: string, blurb: string|null, rendition: any}[]}
+ */
+function entriesFor(ctx) {
+  /** @type {{title: string, blurb: string|null, rendition: any}[]} */
+  const entries = [];
+  const blocks = ctx.specimen && Array.isArray(ctx.specimen.blocks) ? ctx.specimen.blocks : [];
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (!block || block.type !== 'heading' || !block.text) continue;
+    if ((Number(block.level) || 1) > 3) continue;
+    let blurb = null;
+    for (let j = i + 1; j < blocks.length && !blurb; j++) {
+      const next = blocks[j];
+      if (!next || next.type === 'heading') break;
+      const text = blockText(next).join(' ').trim();
+      if (text) blurb = text;
+    }
+    entries.push({ title: String(block.text), blurb, rendition: null });
+  }
+
+  // Renditions are listed too, after the sections — a contents scene that
+  // silently dropped the variants the scene carries would be a contents list
+  // that is not a list of the contents.
+  const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
+  rends.forEach((rendition, index) => {
+    entries.push({
+      title: renditionLabel(rendition, index),
+      blurb: renditionMeta(rendition),
+      rendition,
+    });
+  });
+
+  if (entries.length === 0 && ctx.specimen) {
+    entries.push({ title: specimenTitle(ctx.specimen), blurb: null, rendition: null });
+  }
+  return entries;
+}
+
+/** Two-digit row numbers, so the column does not jitter at ten. */
+function pad2(n) {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+__exports["contentsIndex"] = contentsIndex;
+};
+__modules["scene/layouts/all.js"] = function (__exports, __require) {
+/**
+ * The eight layouts, in one table.
+ *
+ * `registerAllLayouts()` puts them in L2's registry; `LAYOUT_FUNCTIONS` is the
+ * same set as a plain map, which is what `measureScene` and `buildScene` render
+ * through. They deliberately do *not* go via the registry: measuring and
+ * planning must work whether or not somebody remembered to call
+ * `registerAllLayouts()` first, and a lane that quietly depended on global
+ * registration order would be a lane whose tests pass alone and fail in the
+ * suite.
+ *
+ * @module scene/layouts/all
+ */
+
+const { registerLayout } = __require("runtime/layouts.js");
+const { splitBeforeAfter } = __require("scene/layouts/split-before-after.js");
+const { fanOut } = __require("scene/layouts/fan-out.js");
+const { stack } = __require("scene/layouts/stack.js");
+const { fullBleed } = __require("scene/layouts/full-bleed.js");
+const { sideNote } = __require("scene/layouts/side-note.js");
+const { systemMap } = __require("scene/layouts/system-map.js");
+const { quoteCard } = __require("scene/layouts/quote-card.js");
+const { contentsIndex } = __require("scene/layouts/contents-index.js");
+
+/** @type {Record<string, (ctx: any) => any>} */
+const LAYOUT_FUNCTIONS = {
+  splitBeforeAfter,
+  fanOut,
+  stack,
+  fullBleed,
+  sideNote,
+  systemMap,
+  quoteCard,
+  contentsIndex,
+};
+
+/**
+ * Register all eight with the runtime registry (§4's closed set).
+ * @returns {() => void} unregister every one of them
+ */
+function registerAllLayouts() {
+  const offs = Object.keys(LAYOUT_FUNCTIONS).map((name) =>
+    registerLayout(/** @type {any} */ (name), LAYOUT_FUNCTIONS[name]));
+  return () => offs.forEach((off) => off());
+}
+
+/**
+ * The layout function for a scene layout name.
+ * @param {string} name
+ * @returns {(ctx: any) => any}
+ */
+function layoutFunction(name) {
+  const fn = LAYOUT_FUNCTIONS[name];
+  if (!fn) throw new Error(`scene/layouts: "${String(name)}" is not one of the eight §4 layouts`);
+  return fn;
+}
+
+__exports["LAYOUT_FUNCTIONS"] = LAYOUT_FUNCTIONS;
+__exports["registerAllLayouts"] = registerAllLayouts;
+__exports["layoutFunction"] = layoutFunction;
+};
+__modules["scene/measure.js"] = function (__exports, __require) {
+/**
+ * `measureScene` — every text box a layout renders, with the style and the
+ * container the CSS will actually give it (§14, §22.2).
+ *
+ * This is the input the overflow detector runs on, and the one property that
+ * matters is completeness: **if a layout renders text this does not report, the
+ * detector cannot see it.** So the box list is not a parallel description of
+ * the layouts maintained by hand — it is produced by rendering the layout and
+ * walking the tree it returned. A layout can only render text inside an element
+ * carrying `data-pp-tx`, that attribute is what `scenes.css` styles, and
+ * test/scene/measure.test.mjs walks the rendered tree independently and fails
+ * on any text run that did not come back in the measurement.
+ *
+ * Three attributes carry container information down the tree, so a box's inner
+ * width is derived rather than assumed:
+ *
+ *   data-pp-box="<slot>"    the named geometry slot (see geometry.js)
+ *   data-pp-frac="<k>"      this element is one of k equal columns of its box
+ *   data-pp-inset="a,b"     subtract these geometry tokens from the width
+ *
+ * and three describe the CSS the run is subject to, read straight back off the
+ * element the stylesheet matched on:
+ *
+ *   data-pp-ws="nowrap"     white-space
+ *   data-pp-ow="break-word" overflow-wrap
+ *   data-pp-clamp="3"       -webkit-line-clamp
+ *
+ * @module scene/measure
+ */
+
+const { elementId } = __require("core/ids.js");
+const { boxGeometry, breakpointId, mapScale } = __require("scene/geometry.js");
+const { geom, TYPE_ROLES } = __require("scene/tokens.js");
+const { styleForRole } = __require("scene/type-scale.js");
+const { neutralBrand } = __require("scene/brand-access.js");
+const { layoutFunction } = __require("scene/layouts/all.js");
+
+/**
+ * @typedef {object} MeasuredBox
+ * @property {string|null} elementId          the nearest revealable ancestor's id
+ * @property {string} role                    the `data-pp-tx` role
+ * @property {string} text
+ * @property {import('../core/text-metrics.js').TextStyle} style
+ * @property {number} containerWidthPx
+ * @property {number} containerHeightPx
+ * @property {string} [whiteSpace]
+ * @property {string} [overflowWrap]
+ * @property {number} [maxLines]
+ * @property {string[]} [fontStack]           extension: the stack `style.family` heads
+ * @property {string} [containerId]           extension: boxes sharing one container
+ * @property {string} [slot]                  extension: the geometry slot's name
+ */
+
+/**
+ * @typedef {object} SceneMeasurement
+ * @property {string} sceneId
+ * @property {'sm'|'md'|'lg'} breakpoint
+ * @property {MeasuredBox[]} boxes
+ */
+
+/**
+ * Fill in whatever a caller left out of the layout context, without inventing
+ * anything a layout would render as content.
+ * @param {import('../core/contracts.d.ts').Scene} scene
+ * @param {Partial<import('../runtime/layouts.js').LayoutContext>} ctx
+ * @returns {import('../runtime/layouts.js').LayoutContext}
+ */
+function normalizeContext(scene, ctx = {}) {
+  const target = scene || ctx.scene;
+  if (!target || !target.id) throw new Error('scene/measure: a scene with an id is required');
+  return {
+    scene: target,
+    brand: ctx.brand || neutralBrand(),
+    specimen: ctx.specimen === undefined ? null : ctx.specimen,
+    renditions: Array.isArray(ctx.renditions) ? ctx.renditions : [],
+    media: ctx.media instanceof Map ? ctx.media : new Map(),
+    el: typeof ctx.el === 'function' ? ctx.el : (path) => elementId(target.id, path),
+    labelIllustrative: ctx.labelIllustrative !== false,
+    mode: ctx.mode === 'review' ? 'review' : 'presenter',
+  };
+}
+
+/**
+ * Render a scene through its layout — the same call the runtime makes, so the
+ * measured tree and the presented tree are the same tree.
+ * @param {import('../core/contracts.d.ts').Scene} scene
+ * @param {Partial<import('../runtime/layouts.js').LayoutContext>} [ctx]
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function renderSceneTree(scene, ctx = {}) {
+  const full = normalizeContext(scene, ctx);
+  return layoutFunction(full.scene.layout)(full);
+}
+
+/**
+ * Measure a scene at a breakpoint.
+ * @param {import('../core/contracts.d.ts').Scene} scene
+ * @param {Partial<import('../runtime/layouts.js').LayoutContext>} ctx
+ * @param {'sm'|'md'|'lg'|{id: string}} breakpoint
+ * @returns {SceneMeasurement}
+ */
+function measureScene(scene, ctx, breakpoint) {
+  const bp = breakpointId(breakpoint);
+  const full = normalizeContext(scene, ctx);
+  const tree = layoutFunction(full.scene.layout)(full);
+  return {
+    sceneId: full.scene.id,
+    breakpoint: bp,
+    boxes: collectTextBoxes(tree, { breakpoint: bp, brand: full.brand }),
+  };
+}
+
+/**
+ * Walk a rendered tree and report every text run in it.
+ * @param {import('../core/vdom.js').VNode} node
+ * @param {{breakpoint: 'sm'|'md'|'lg', brand: import('../core/contracts.d.ts').BrandSystem|null}} env
+ * @returns {MeasuredBox[]}
+ */
+function collectTextBoxes(node, env) {
+  const bp = breakpointId(env.breakpoint);
+  const brand = env.brand || null;
+  /** @type {MeasuredBox[]} */
+  const boxes = [];
+  /** @type {Map<string, number>} */
+  const slotCounts = new Map();
+
+  /**
+   * @param {import('../core/vdom.js').VNode} n
+   * @param {{elementId: string|null, slot: string|null, containerId: string|null, widthPx: number, heightPx: number}} state
+   */
+  const visit = (n, state) => {
+    if (n === null || n === undefined || n === false) return;
+    if (Array.isArray(n)) { n.forEach((child) => visit(child, state)); return; }
+    if (typeof n === 'string' || typeof n === 'number') return;   // handled by its tx ancestor
+    if (typeof n !== 'object' || 'raw' in n) return;
+
+    const attrs = n.a || {};
+    let next = state;
+
+    if (typeof attrs['data-pp-el'] === 'string') {
+      next = { ...next, elementId: attrs['data-pp-el'] };
+    }
+
+    if (typeof attrs['data-pp-box'] === 'string') {
+      const slot = attrs['data-pp-box'];
+      const params = {
+        n: attrs['data-pp-n'] !== undefined ? Number(attrs['data-pp-n']) : undefined,
+        unitWidth: attrs['data-pp-unit-w'] !== undefined ? Number(attrs['data-pp-unit-w']) : undefined,
+        unitHeight: attrs['data-pp-unit-h'] !== undefined ? Number(attrs['data-pp-unit-h']) : undefined,
+        variant: typeof attrs['data-pp-variant'] === 'string' ? attrs['data-pp-variant'] : undefined,
+      };
+      const size = boxGeometry(slot, bp, params);
+      const ordinal = (slotCounts.get(slot) || 0) + 1;
+      slotCounts.set(slot, ordinal);
+      next = {
+        ...next,
+        slot,
+        containerId: `${slot}#${ordinal}`,
+        widthPx: size.widthPx,
+        heightPx: size.heightPx,
+      };
+    }
+
+    if (attrs['data-pp-frac'] !== undefined) {
+      const k = Math.max(1, Number(attrs['data-pp-frac']) || 1);
+      next = { ...next, widthPx: next.widthPx / k };
+    }
+    if (typeof attrs['data-pp-inset'] === 'string') {
+      const total = attrs['data-pp-inset'].split(',')
+        .map((t) => t.trim()).filter(Boolean)
+        .reduce((sum, token) => sum + geom(bp, token), 0);
+      next = { ...next, widthPx: Math.max(0, next.widthPx - total) };
+    }
+
+    const role = attrs['data-pp-tx'];
+    if (typeof role === 'string') {
+      const text = plainText(n);
+      if (text.trim()) {
+        const spec = TYPE_ROLES[role];
+        if (!spec) throw new Error(`scene/measure: element declares unknown text role "${role}"`);
+        const resolved = styleForRole(role, bp, brand, { scale: spec.svg ? mapScale(bp) : 1 });
+        /** @type {MeasuredBox} */
+        const box = {
+          elementId: next.elementId,
+          role,
+          text,
+          style: resolved.style,
+          containerWidthPx: round3(next.widthPx),
+          containerHeightPx: round3(next.heightPx),
+        };
+        if (typeof attrs['data-pp-ws'] === 'string') box.whiteSpace = attrs['data-pp-ws'];
+        if (typeof attrs['data-pp-ow'] === 'string') box.overflowWrap = attrs['data-pp-ow'];
+        if (attrs['data-pp-clamp'] !== undefined && attrs['data-pp-clamp'] !== null) {
+          box.maxLines = Number(attrs['data-pp-clamp']);
+        }
+        box.fontStack = resolved.fontStack;
+        box.containerId = next.containerId;
+        box.slot = next.slot;
+        boxes.push(box);
+      }
+      // A text role never nests inside another; the coverage test asserts it,
+      // so there is nothing below this node that is not already in `text`.
+      return;
+    }
+
+    (n.c || []).forEach((child) => visit(child, next));
+  };
+
+  const root = boxGeometry('stage', bp);
+  visit(node, {
+    elementId: null,
+    slot: 'stage',
+    containerId: 'stage#0',
+    widthPx: root.widthPx,
+    heightPx: root.heightPx,
+  });
+  return boxes;
+}
+
+/**
+ * The text of a subtree, as one run. Adjacent string children are joined
+ * without inserted whitespace — the tree has no whitespace the layout did not
+ * put there (core/vdom.js).
+ * @param {import('../core/vdom.js').VNode} node
+ * @returns {string}
+ */
+function plainText(node) {
+  if (node === null || node === undefined || node === false) return '';
+  if (Array.isArray(node)) return node.map(plainText).join('');
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (typeof node !== 'object' || 'raw' in node) return '';
+  return (node.c || []).map(plainText).join('');
+}
+
+/** @param {number} n @returns {number} */
+function round3(n) {
+  return Math.round(n * 1000) / 1000;
+}
+
+__exports["normalizeContext"] = normalizeContext;
+__exports["renderSceneTree"] = renderSceneTree;
+__exports["measureScene"] = measureScene;
+__exports["collectTextBoxes"] = collectTextBoxes;
+__exports["plainText"] = plainText;
+};
+__modules["scene/plan.js"] = function (__exports, __require) {
+/**
+ * `buildScene` and `sceneTemplates` — turning a specimen and its renditions
+ * into a contract-valid `Scene` with a beat plan a presenter can actually walk.
+ *
+ * The beat plan is **derived from the render**, not written alongside it. The
+ * layout is rendered once, the tree is walked, and every revealable element it
+ * produced is collected with the `data-pp-group` its layout gave it. Beats are
+ * those groups in document order. Two things follow, and both are properties
+ * §17 asks for rather than promises:
+ *
+ *   - every id in `beats[n].reveals` names an element the layout actually
+ *     renders, because it was read off the rendered tree;
+ *   - the reveal order is the reading order, because document order is what the
+ *     walk returns.
+ *
+ * The grouping — a column at a time in `splitBeforeAfter`, a wave of cards in
+ * `fanOut`, a state at a time in `stack` — is the layout's own judgement about
+ * how its content is talked through, expressed where the content is built.
+ *
+ * @module scene/plan
+ */
+
+const { contentId } = __require("core/ids.js");
+const { renderSceneTree } = __require("scene/measure.js");
+const { neutralBrand } = __require("scene/brand-access.js");
+
+/**
+ * @typedef {object} BuildSceneArgs
+ * @property {import('../core/contracts.d.ts').SceneLayout} layout
+ * @property {import('../core/contracts.d.ts').Specimen|null} [specimen]
+ * @property {import('../core/contracts.d.ts').Rendition[]} [renditions]
+ * @property {string|null} [headline]
+ * @property {string|null} [subhead]
+ * @property {import('../core/ids.js').IdMinter} [idMinter]
+ * @property {import('../core/contracts.d.ts').BrandSystem} [brand]
+ * @property {string[]} [branchAnchors]
+ * @property {string} [id]                     an explicit scene id, for a rebuild in place
+ */
+
+/**
+ * Build a scene.
+ * @param {BuildSceneArgs} args
+ * @returns {import('../core/contracts.d.ts').Scene}
+ */
+function buildScene(args) {
+  const layout = args && args.layout;
+  if (!layout) throw new Error('scene/plan: buildScene needs a layout');
+
+  const specimen = args.specimen || null;
+  const renditions = (args.renditions || []).filter(Boolean);
+  const headline = args.headline === undefined ? null : args.headline;
+  const subhead = args.subhead === undefined ? null : args.subhead;
+
+  const id = args.id || (args.idMinter
+    ? args.idMinter.next('scene')
+    : contentId('scene', {
+      layout,
+      specimenId: specimen ? specimen.id : null,
+      renditionIds: renditions.map((r) => r.id),
+      headline,
+      subhead,
+    }));
+
+  /** @type {import('../core/contracts.d.ts').Scene} */
+  const scene = {
+    id,
+    layout,
+    headline,
+    subhead,
+    specimenId: specimen ? specimen.id : null,
+    renditionIds: renditions.map((r) => r.id),
+    beats: [],
+    branchAnchors: Array.isArray(args.branchAnchors) ? args.branchAnchors.slice() : [],
+  };
+
+  const tree = renderSceneTree(scene, {
+    specimen,
+    renditions,
+    brand: args.brand || neutralBrand(),
+    media: mediaMap(specimen, renditions),
+    labelIllustrative: true,
+    mode: 'presenter',
+  });
+
+  const groups = collectGroups(tree);
+  scene.beats = groups.length === 0
+    ? [beat(scene, args.idMinter, 'still', [], 0)]
+    : groups.map((group, index) => beat(scene, args.idMinter, group.key, group.ids, index, layout));
+
+  return scene;
+}
+
+/**
+ * Every revealable element in a rendered tree, bucketed by its beat group, in
+ * document order.
+ * @param {import('../core/vdom.js').VNode} node
+ * @returns {{key: string, ids: string[]}[]}
+ */
+function collectGroups(node) {
+  /** @type {Map<string, string[]>} */
+  const groups = new Map();
+  /** @type {string[]} */
+  const order = [];
+  /** @type {Set<string>} */
+  const seen = new Set();
+
+  const visit = (n) => {
+    if (n === null || n === undefined || n === false) return;
+    if (Array.isArray(n)) { n.forEach(visit); return; }
+    if (typeof n !== 'object' || 'raw' in n) return;
+    const attrs = n.a || {};
+    const id = attrs['data-pp-el'];
+    if (typeof id === 'string' && !seen.has(id)) {
+      seen.add(id);
+      const key = typeof attrs['data-pp-group'] === 'string' ? attrs['data-pp-group'] : id;
+      if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+      groups.get(key).push(id);
+    }
+    (n.c || []).forEach(visit);
+  };
+  visit(node);
+  return order.map((key) => ({ key, ids: groups.get(key) }));
+}
+
+/**
+ * @param {import('../core/contracts.d.ts').Scene} scene
+ * @param {import('../core/ids.js').IdMinter|undefined} minter
+ * @param {string} key
+ * @param {string[]} ids
+ * @param {number} index
+ * @param {string} [layout]
+ * @returns {import('../core/contracts.d.ts').Beat}
+ */
+function beat(scene, minter, key, ids, index, layout) {
+  return {
+    id: minter ? minter.next('beat') : contentId('beat', { scene: scene.id, key, index }),
+    reveals: ids.slice(),
+    presenterNote: presenterNote(layout || scene.layout, key, index),
+    dwellHintMs: dwellHint(key),
+  };
+}
+
+/**
+ * The note the presenter view shows for a beat.
+ *
+ * These are coaching prompts about *delivery* — how to hold the room while the
+ * beat is on screen. They say nothing about the client's business, quote no
+ * numbers and name no outcomes, because §18.2 forbids the tool inventing any of
+ * that and a presenter note that shipped a fabricated claim would be exactly
+ * that violation with a friendlier name.
+ * @param {string} layout
+ * @param {string} key
+ * @param {number} index
+ * @returns {string|null}
+ */
+function presenterNote(layout, key, index) {
+  const prefix = String(key).split('/')[0];
+  const exact = NOTES[`${layout}:${key}`] || NOTES[`${layout}:${prefix}`] || NOTES[prefix] || null;
+  if (exact) return exact;
+  return index === 0 ? NOTES.head : null;
+}
+
+/** Delivery prompts, keyed by `layout:group`, then by `layout:prefix`, then by prefix. */
+const NOTES = {
+  head: 'Say the point of this scene in one sentence, then stop talking and let them read it.',
+  still: 'Nothing staged here — say the point and move when the room is ready.',
+
+  'splitBeforeAfter:before': 'Read one line of their own page aloud. It is theirs; give them a second to recognise it.',
+  'splitBeforeAfter:after': 'Point at the same block on the right. Name what changed — not how it was made.',
+  before: 'Start on their side. The proof is that it is theirs.',
+  after: 'Move across one block at a time. Same row, same claim, different execution.',
+
+  'fanOut:source': 'Hold on the source for a beat, so what follows reads as a multiple of something real.',
+  fan: 'Let the count land on its own. Do not narrate every card — name the pattern and stop.',
+  source: 'Establish what everything else came from before you show what it became.',
+
+  stack: 'Walk the states in order and name the thing that held constant across all of them.',
+
+  media: 'Say nothing for two seconds. Let them look first.',
+
+  main: 'Their content, unedited. Read a line from it before you annotate anything.',
+  notes: 'Take the margin notes in order. Each one should answer a question they already had.',
+
+  'systemMap:map/source': 'Start at the input. Name where it comes from in their own stack.',
+  'systemMap:map/transform': 'One sentence on what happens here. Resist the architecture tour.',
+  'systemMap:map/outputs': 'Trace one path end to end, then let the fan speak for the rest.',
+  map: 'Trace the flow: in, through, out. One pass, then stop.',
+
+  quote: 'Read it once, slowly, and then wait. The silence is doing the work.',
+  attribution: 'Name the source. Whose words these are is the whole point of the scene.',
+
+  index: 'Say what you are going to cover and roughly how long it takes. Then move.',
+};
+
+/** Pacing hints for the presenter view. Never a timer (§10). */
+function dwellHint(key) {
+  const prefix = String(key).split('/')[0];
+  return DWELL[prefix] ?? DWELL[key] ?? 20000;
+}
+
+const DWELL = {
+  head: 15000,
+  still: 15000,
+  before: 25000,
+  after: 30000,
+  source: 15000,
+  fan: 20000,
+  stack: 25000,
+  media: 12000,
+  main: 30000,
+  notes: 25000,
+  map: 25000,
+  quote: 12000,
+  attribution: 8000,
+  index: 20000,
+};
+
+/**
+ * Every media reference a scene can resolve, keyed by id — the same map the
+ * runtime builds for `LayoutContext.media`.
+ * @param {import('../core/contracts.d.ts').Specimen|null} specimen
+ * @param {import('../core/contracts.d.ts').Rendition[]} renditions
+ * @returns {Map<string, import('../core/contracts.d.ts').MediaRef>}
+ */
+function mediaMap(specimen, renditions) {
+  /** @type {Map<string, import('../core/contracts.d.ts').MediaRef>} */
+  const map = new Map();
+  for (const m of (specimen && Array.isArray(specimen.media) ? specimen.media : [])) map.set(m.id, m);
+  for (const r of renditions || []) for (const m of (Array.isArray(r.media) ? r.media : [])) map.set(m.id, m);
+  return map;
+}
+
+/**
+ * The layouts the studio offers, in the order they are offered: the ones that
+ * carry a proof first, the ones that frame it after.
+ * @returns {{layout: import('../core/contracts.d.ts').SceneLayout, name: string, describe: string}[]}
+ */
+function sceneTemplates() {
+  return [
+    {
+      layout: 'splitBeforeAfter',
+      name: 'Before and after',
+      describe: 'Their page on the left, the rendition on the right, aligned block to block so the comparison needs no narration.',
+    },
+    {
+      layout: 'fanOut',
+      name: 'Fan out',
+      describe: 'One source and every variant it produced, sized so the count is felt rather than claimed.',
+    },
+    {
+      layout: 'stack',
+      name: 'State by state',
+      describe: 'The same asset at each state it passes through, stacked so what held constant is visible.',
+    },
+    {
+      layout: 'fullBleed',
+      name: 'Full bleed',
+      describe: 'One visual filling the frame, with the headline over it — for the moment the picture is the argument.',
+    },
+    {
+      layout: 'sideNote',
+      name: 'Annotated content',
+      describe: 'Their content down the middle with your notes in the margin, each note anchored to the block it is about.',
+    },
+    {
+      layout: 'systemMap',
+      name: 'System map',
+      describe: 'The flow drawn as a diagram: what comes in, what acts on it, what comes out.',
+    },
+    {
+      layout: 'quoteCard',
+      name: 'Quote card',
+      describe: 'One line, given the whole screen, with its attribution — for their words, never invented ones.',
+    },
+    {
+      layout: 'contentsIndex',
+      name: 'Contents',
+      describe: 'A numbered index of what the proof covers — the scene a forwarded recipient opens on.',
+    },
+  ];
+}
+
+__exports["buildScene"] = buildScene;
+__exports["collectGroups"] = collectGroups;
+__exports["presenterNote"] = presenterNote;
+__exports["mediaMap"] = mediaMap;
+__exports["sceneTemplates"] = sceneTemplates;
+};
+__modules["scene/index.js"] = function (__exports, __require) {
+/**
+ * L8 Scenes — the public surface (API.md Part 3).
+ *
+ * Eight layouts, the reveal plan that drives them, and the measurement surface
+ * §22.2's overflow detector runs on. Everything else in this directory is an
+ * implementation detail of these five exports; the extras below them are
+ * additions, not replacements, and exist because L11 and L12 need to reach the
+ * same geometry the layouts were drawn with rather than re-derive it.
+ *
+ * @module scene/index
+ */
+
+
+
+
+
+
+// -- extensions ------------------------------------------------------------
+// Geometry, tokens and the type scale, so L11 can reason about a box it was
+// handed and L12 can lay the studio's preview out at true aspect without
+// guessing at the artifact's numbers.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+__exports["registerAllLayouts"] = __require("scene/layouts/all.js").registerAllLayouts;
+__exports["LAYOUT_FUNCTIONS"] = __require("scene/layouts/all.js").LAYOUT_FUNCTIONS;
+__exports["layoutFunction"] = __require("scene/layouts/all.js").layoutFunction;
+__exports["sceneTemplates"] = __require("scene/plan.js").sceneTemplates;
+__exports["buildScene"] = __require("scene/plan.js").buildScene;
+__exports["collectGroups"] = __require("scene/plan.js").collectGroups;
+__exports["presenterNote"] = __require("scene/plan.js").presenterNote;
+__exports["mediaMap"] = __require("scene/plan.js").mediaMap;
+__exports["measureScene"] = __require("scene/measure.js").measureScene;
+__exports["collectTextBoxes"] = __require("scene/measure.js").collectTextBoxes;
+__exports["renderSceneTree"] = __require("scene/measure.js").renderSceneTree;
+__exports["normalizeContext"] = __require("scene/measure.js").normalizeContext;
+__exports["plainText"] = __require("scene/measure.js").plainText;
+__exports["PROVENANCE_LABEL_CLASS"] = __require("scene/parts.js").PROVENANCE_LABEL_CLASS;
+__exports["PROVENANCE_LABEL_TEXT"] = __require("scene/parts.js").PROVENANCE_LABEL_TEXT;
+__exports["needsProvenanceLabel"] = __require("scene/parts.js").needsProvenanceLabel;
+__exports["provenanceLabel"] = __require("scene/parts.js").provenanceLabel;
+__exports["stageBox"] = __require("scene/geometry.js").stageBox;
+__exports["boxGeometry"] = __require("scene/geometry.js").boxGeometry;
+__exports["breakpointId"] = __require("scene/geometry.js").breakpointId;
+__exports["mapScale"] = __require("scene/geometry.js").mapScale;
+__exports["fanColumns"] = __require("scene/geometry.js").fanColumns;
+__exports["stagePadPx"] = __require("scene/geometry.js").stagePadPx;
+__exports["trackWidth"] = __require("scene/geometry.js").trackWidth;
+__exports["MAP_DESIGN"] = __require("scene/geometry.js").MAP_DESIGN;
+__exports["PANEL_BORDER_PX"] = __require("scene/geometry.js").PANEL_BORDER_PX;
+__exports["SLOTS"] = __require("scene/geometry.js").SLOTS;
+__exports["sceneVars"] = __require("scene/tokens.js").sceneVars;
+__exports["GEOM"] = __require("scene/tokens.js").GEOM;
+__exports["TYPE_ROLES"] = __require("scene/tokens.js").TYPE_ROLES;
+__exports["BP_IDS"] = __require("scene/tokens.js").BP_IDS;
+__exports["BP_QUERY"] = __require("scene/tokens.js").BP_QUERY;
+__exports["geom"] = __require("scene/tokens.js").geom;
+__exports["cssRoleName"] = __require("scene/tokens.js").cssRoleName;
+__exports["scenesCssRoles"] = __require("scene/tokens.js").scenesCssRoles;
+__exports["styleForRole"] = __require("scene/type-scale.js").styleForRole;
+__exports["textRoles"] = __require("scene/type-scale.js").textRoles;
+__exports["alignColumns"] = __require("scene/align.js").alignColumns;
+__exports["alignPair"] = __require("scene/align.js").alignPair;
+__exports["signatureOf"] = __require("scene/align.js").signatureOf;
+__exports["renderBlock"] = __require("scene/blocks.js").renderBlock;
+__exports["renderBlocks"] = __require("scene/blocks.js").renderBlocks;
+__exports["blockBody"] = __require("scene/blocks.js").blockBody;
+__exports["summarize"] = __require("scene/blocks.js").summarize;
+__exports["firstOfType"] = __require("scene/blocks.js").firstOfType;
+__exports["headingRole"] = __require("scene/blocks.js").headingRole;
+__exports["faceFor"] = __require("scene/brand-access.js").faceFor;
+__exports["colorFor"] = __require("scene/brand-access.js").colorFor;
+__exports["logoFor"] = __require("scene/brand-access.js").logoFor;
+__exports["neutralBrand"] = __require("scene/brand-access.js").neutralBrand;
+__exports["DEFAULT_STACKS"] = __require("scene/brand-access.js").DEFAULT_STACKS;
+__exports["splitBeforeAfter"] = __require("scene/layouts/split-before-after.js").splitBeforeAfter;
+__exports["fanOut"] = __require("scene/layouts/fan-out.js").fanOut;
+__exports["stack"] = __require("scene/layouts/stack.js").stack;
+__exports["fullBleed"] = __require("scene/layouts/full-bleed.js").fullBleed;
+__exports["sideNote"] = __require("scene/layouts/side-note.js").sideNote;
+__exports["systemMap"] = __require("scene/layouts/system-map.js").systemMap;
+__exports["quoteCard"] = __require("scene/layouts/quote-card.js").quoteCard;
+__exports["contentsIndex"] = __require("scene/layouts/contents-index.js").contentsIndex;
+};
+__modules["branch/text.js"] = function (__exports, __require) {
+/**
+ * The text primitives the jump index is built out of (§11).
+ *
+ * A presenter searching the jump index is standing in front of a room, mid
+ * sentence, with a client's objection still in the air. The search has to land
+ * on three characters, tolerate a typo made at speed, and never make them look
+ * at the keyboard. That is only possible if every expensive thing — folding,
+ * tokenizing, n-grams, the acronym form — happens once at emit and the
+ * keystroke path is pure comparison.
+ *
+ * Two properties matter here and are tested directly:
+ *
+ *   - **Offsets survive folding.** Matching happens on a folded string
+ *     (diacritics stripped, lower-cased) but highlighting happens on the text
+ *     the presenter reads, so every folded index carries a map back to the
+ *     original one.
+ *   - **Everything is pure.** No clock, no randomness, no document: the same
+ *     index and query always produce the same ranking (§5).
+ *
+ * @module branch/text
+ */
+
+/** Text that needs no Unicode decomposition. */
+const ASCII_ONLY = /^[\x00-\x7f]*$/;
+
+/** Characters that make up a token: any letter or number, in any script. */
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+/**
+ * Words that carry no discriminating power in an objection, so the acronym
+ * form ignores them: "our approvals process would never allow this" is best
+ * remembered as "apa", not "oapwnat".
+ */
+const STOPWORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'can', 'do', 'does',
+  'every', 'for', 'from', 'had', 'has', 'have', 'how', 'i', 'if', 'in', 'is',
+  'it', 'its', 'just', 'me', 'my', 'no', 'not', 'of', 'on', 'or', 'our', 'out',
+  'over', 'own', 're', 's', 'so', 't', 'than', 'that', 'the', 'their', 'them',
+  'then', 'there', 'these', 'they', 'this', 'to', 'too', 'up', 'us', 've',
+  'was', 'we', 'were', 'what', 'when', 'which', 'who', 'will', 'with', 'would',
+  'you', 'your',
+]);
+
+/**
+ * Fold one character for matching: decomposed, combining marks dropped,
+ * lower-cased. Returns a string because a single character can fold to more
+ * than one (and to none, for a bare combining mark).
+ * @param {string} ch
+ * @returns {string}
+ */
+function foldChar(ch) {
+  const code = ch.charCodeAt(0);
+  // ASCII is the overwhelmingly common case and `String.prototype.normalize`
+  // is expensive enough per character to show up in an index build, so it is
+  // only reached by text that could actually decompose.
+  if (code < 128) return code >= 65 && code <= 90 ? ch.toLowerCase() : ch;
+  return ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+/**
+ * @typedef {object} Folded
+ * @property {string} text     the folded string, matched against
+ * @property {number[]} map    folded index → index in the source string
+ * @property {string} source   the original text, highlighted against
+ */
+
+/**
+ * Fold a string while keeping a map back to the original indices.
+ * @param {string} input
+ * @returns {Folded}
+ */
+function fold(input) {
+  const source = String(input == null ? '' : input);
+  // Pure-ASCII text folds one-to-one, so the index map is the identity and the
+  // whole string can be lower-cased in one call.
+  if (ASCII_ONLY.test(source)) {
+    const text = source.toLowerCase();
+    const map = new Array(text.length);
+    for (let i = 0; i < text.length; i++) map[i] = i;
+    return { text, map, source };
+  }
+  let text = '';
+  /** @type {number[]} */
+  const map = [];
+  for (let i = 0; i < source.length; i++) {
+    const folded = foldChar(source[i]);
+    for (let k = 0; k < folded.length; k++) {
+      text += folded[k];
+      map.push(i);
+    }
+  }
+  return { text, map, source };
+}
+
+/**
+ * Translate a half-open range in folded coordinates into a half-open range in
+ * the source string, so a highlight lands on the characters the presenter sees.
+ * @param {Folded} folded
+ * @param {number} start
+ * @param {number} end
+ * @returns {{start: number, end: number}}
+ */
+function sourceRange(folded, start, end) {
+  if (end <= start || folded.map.length === 0) return { start: 0, end: 0 };
+  const s = folded.map[Math.max(0, Math.min(folded.map.length - 1, start))];
+  const e = folded.map[Math.max(0, Math.min(folded.map.length - 1, end - 1))] + 1;
+  return { start: s, end: Math.max(s + 1, e) };
+}
+
+/**
+ * @typedef {object} Token
+ * @property {string} text    folded
+ * @property {number} start   index into the folded string
+ * @property {number} end     exclusive
+ * @property {boolean} strong not a stopword
+ */
+
+/**
+ * Split a folded string into tokens with their offsets.
+ * @param {string} foldedText
+ * @returns {Token[]}
+ */
+function tokenize(foldedText) {
+  /** @type {Token[]} */
+  const out = [];
+  let start = -1;
+  for (let i = 0; i <= foldedText.length; i++) {
+    const isWord = i < foldedText.length && WORD_CHAR.test(foldedText[i]);
+    if (isWord && start < 0) start = i;
+    else if (!isWord && start >= 0) {
+      const text = foldedText.slice(start, i);
+      out.push({ text, start, end: i, strong: !STOPWORDS.has(text) });
+      start = -1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Character n-grams over a folded string, used only as a cheap prefilter in
+ * front of edit distance. Padded so short terms still produce grams.
+ * @param {string} foldedText
+ * @param {number} [n]
+ * @returns {Set<string>}
+ */
+function charGrams(foldedText, n = 3) {
+  const padded = ` ${foldedText.replace(/\s+/g, ' ').trim()} `;
+  /** @type {Set<string>} */
+  const out = new Set();
+  if (padded.length < n) { if (padded.trim()) out.add(padded.trim()); return out; }
+  for (let i = 0; i + n <= padded.length; i++) out.add(padded.slice(i, i + n));
+  return out;
+}
+
+/**
+ * How many grams two sets share.
+ * @param {Set<string>} a
+ * @param {Set<string>} b
+ * @returns {number}
+ */
+function gramOverlap(a, b) {
+  let n = 0;
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+  for (const g of small) if (large.has(g)) n++;
+  return n;
+}
+
+/**
+ * The acronym forms of a tokenized string: every initial, and the initials of
+ * the words that carry meaning.
+ * @param {Token[]} tokens
+ * @returns {{all: string, strong: string, allTokens: Token[], strongTokens: Token[]}}
+ */
+function acronyms(tokens) {
+  const strongTokens = tokens.filter((t) => t.strong);
+  return {
+    all: tokens.map((t) => t.text[0]).join(''),
+    strong: strongTokens.map((t) => t.text[0]).join(''),
+    allTokens: tokens,
+    strongTokens,
+  };
+}
+
+/**
+ * Damerau–Levenshtein distance (optimal string alignment), bounded. Returns
+ * `max + 1` as soon as the distance is known to exceed `max`, which is what
+ * keeps a 200-branch index inside a millisecond: a typo search never pays for a
+ * full DP over a long objection.
+ *
+ * Transpositions count as one edit rather than two, because a transposition is
+ * the typo a presenter actually makes — "sacle" for "scale" — and treating it
+ * as two edits means the search fails exactly when it is needed most.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @param {number} max
+ * @returns {number}
+ */
+function boundedEditDistance(a, b, max) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  if (a.length === 0) return b.length <= max ? b.length : max + 1;
+  if (b.length === 0) return a.length <= max ? a.length : max + 1;
+
+  const width = b.length;
+  let prev2 = new Array(width + 1).fill(max + 1);
+  let prev = new Array(width + 1);
+  let curr = new Array(width + 1);
+  for (let j = 0; j <= width; j++) prev[j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    curr.fill(max + 1);
+    curr[0] = i;
+    const lo = Math.max(1, i - max);
+    const hi = Math.min(width, i + max);
+    let rowBest = curr[0] <= max ? curr[0] : max + 1;
+    for (let j = lo; j <= hi; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, prev2[j - 2] + 1);
+      }
+      curr[j] = v;
+      if (v < rowBest) rowBest = v;
+    }
+    if (rowBest > max) return max + 1;
+    const t = prev2; prev2 = prev; prev = curr; curr = t;
+  }
+  return prev[width] <= max ? prev[width] : max + 1;
+}
+
+/**
+ * Distance from `query` to the best *prefix* of `text`, bounded, with the same
+ * transposition rule. This is the typo-tolerant form the jump index actually
+ * needs: a presenter typing "aprovals" is typing the front of "approvals
+ * process", not the whole of it, so the suffix must be free.
+ * @param {string} query
+ * @param {string} text
+ * @param {number} max
+ * @returns {{distance: number, end: number}}   `end` is the prefix length matched
+ */
+function boundedPrefixDistance(query, text, max) {
+  if (query.length === 0) return { distance: 0, end: 0 };
+  if (text.length === 0) return { distance: query.length <= max ? query.length : max + 1, end: 0 };
+
+  const width = Math.min(text.length, query.length + max);
+  let prev2 = new Array(width + 1).fill(max + 1);
+  let prev = new Array(width + 1);
+  let curr = new Array(width + 1);
+  for (let j = 0; j <= width; j++) prev[j] = j;
+
+  for (let i = 1; i <= query.length; i++) {
+    curr[0] = i;
+    let rowBest = i;
+    for (let j = 1; j <= width; j++) {
+      const cost = query[i - 1] === text[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && query[i - 1] === text[j - 2] && query[i - 2] === text[j - 1]) {
+        v = Math.min(v, prev2[j - 2] + 1);
+      }
+      curr[j] = v;
+      if (v < rowBest) rowBest = v;
+    }
+    if (rowBest > max) return { distance: max + 1, end: 0 };
+    const t = prev2; prev2 = prev; prev = curr; curr = t;
+  }
+
+  let best = max + 1;
+  let end = 0;
+  for (let j = Math.max(0, query.length - max); j <= width; j++) {
+    if (prev[j] < best) { best = prev[j]; end = j; }
+  }
+  return best <= max ? { distance: best, end } : { distance: max + 1, end: 0 };
+}
+
+/**
+ * Match every character of `query` in order inside `text`, greedily and as
+ * early as possible. Returns the matched positions, or null.
+ * @param {string} query
+ * @param {string} text
+ * @returns {number[]|null}
+ */
+function subsequenceMatch(query, text) {
+  /** @type {number[]} */
+  const hits = [];
+  let at = 0;
+  for (let i = 0; i < query.length; i++) {
+    const ch = query[i];
+    if (ch === ' ') continue;
+    const found = text.indexOf(ch, at);
+    if (found < 0) return null;
+    hits.push(found);
+    at = found + 1;
+  }
+  return hits.length ? hits : null;
+}
+
+/**
+ * Collapse a sorted list of positions into contiguous half-open ranges.
+ * @param {number[]} positions
+ * @returns {{start: number, end: number}[]}
+ */
+function positionsToRanges(positions) {
+  /** @type {{start: number, end: number}[]} */
+  const out = [];
+  for (const p of positions) {
+    const last = out[out.length - 1];
+    if (last && last.end === p) last.end = p + 1;
+    else out.push({ start: p, end: p + 1 });
+  }
+  return out;
+}
+
+/**
+ * How far a typo search may reach. Three characters is the §11 acceptance
+ * case and must stay exact — at that length every objection in a deck is
+ * within one edit of every other, and a fuzzy hit would be noise, not help.
+ * @param {string} query   folded
+ * @returns {number}
+ */
+function typoBudget(query) {
+  const n = query.replace(/\s+/g, '').length;
+  if (n < 4) return 0;
+  if (n < 7) return 1;
+  return 2;
+}
+
+__exports["foldChar"] = foldChar;
+__exports["fold"] = fold;
+__exports["sourceRange"] = sourceRange;
+__exports["tokenize"] = tokenize;
+__exports["charGrams"] = charGrams;
+__exports["gramOverlap"] = gramOverlap;
+__exports["acronyms"] = acronyms;
+__exports["boundedEditDistance"] = boundedEditDistance;
+__exports["boundedPrefixDistance"] = boundedPrefixDistance;
+__exports["subsequenceMatch"] = subsequenceMatch;
+__exports["positionsToRanges"] = positionsToRanges;
+__exports["typoBudget"] = typoBudget;
+};
+__modules["branch/jump-index.js"] = function (__exports, __require) {
+/**
+ * The jump index and its search (§11).
+ *
+ * §11 states the acceptance case in one sentence: "The presenter types three
+ * characters of 'approvals' and lands in the approval-chain branch in under a
+ * second." Everything in this file is built backwards from that sentence.
+ *
+ * The index is built once, at emit, over every branch's objection and aliases.
+ * A query then costs comparisons only: prefix, token-prefix, substring,
+ * acronym, all-tokens, subsequence, and — last, and only when nothing better
+ * was found — a bounded edit distance for the typo a presenter makes while
+ * talking. Every strategy returns the ranges it matched, because a result list
+ * that does not show *why* it matched makes a presenter read instead of press
+ * Enter.
+ *
+ * Ranking rules, in order:
+ *   1. exact and prefix matches always outrank fuzzy ones;
+ *   2. the objection outranks an alias at equal quality (it is the wording the
+ *      client actually used);
+ *   3. ties break deterministically — deck order, then branch id — so the same
+ *      query always produces the same list, which is what makes muscle memory
+ *      possible (§5).
+ *
+ * @module branch/jump-index
+ */
+
+const { allBranches } = __require("runtime/deck.js");
+const { fold, tokenize, charGrams, gramOverlap, acronyms, sourceRange, boundedEditDistance, boundedPrefixDistance, subsequenceMatch, positionsToRanges, typoBudget } = __require("branch/text.js");
+
+
+
+
+/** Field weights. The objection is the client's own words; an alias is ours. */
+const FIELD_WEIGHT = { objection: 1, alias: 0.94 };
+
+/** Base scores per strategy. Tiers are far enough apart that no coverage bonus can cross one. */
+const STRATEGY_SCORE = {
+  exact: 1000,
+  prefix: 900,
+  tokenPrefix: 800,
+  substring: 700,
+  acronym: 640,
+  allTokens: 600,
+  subsequence: 420,
+  fuzzy: 500,
+};
+
+/** Results at or below this score are noise and are not shown. */
+const MIN_SCORE = 1;
+
+/** Default result count: what fits on screen without scrolling under pressure. */
+const DEFAULT_LIMIT = 8;
+
+/**
+ * @typedef {object} JumpTerm
+ * @property {'objection'|'alias'} field
+ * @property {number} index            alias index, or 0 for the objection
+ * @property {string} text             the text as the presenter reads it
+ * @property {import('./text.js').Folded} folded
+ * @property {import('./text.js').Token[]} tokens
+ * @property {string} squeezed         folded text with whitespace removed
+ * @property {{all: string, strong: string, allTokens: any[], strongTokens: any[]}} acronym
+ * @property {Set<string>} grams
+ * @property {number} weight
+ */
+
+/**
+ * @typedef {object} JumpEntry
+ * @property {string} branchId
+ * @property {string} objection
+ * @property {string[]} aliases
+ * @property {number} order            deck order, the deterministic tie-break
+ * @property {boolean} anchored
+ * @property {string[]} anchorScenes
+ * @property {number} sceneCount
+ * @property {JumpTerm[]} terms
+ * @property {boolean} searchable      has at least one term with a token in it
+ */
+
+/**
+ * @typedef {object} JumpIndex
+ * @property {JumpEntry[]} entries
+ * @property {Map<string, JumpEntry>} byBranchId
+ * @property {Map<string, number[]>} postings
+ *   The candidate index: token prefixes (`p:`), character trigrams (`g:`) and
+ *   acronym prefixes (`a:`) to the entries that contain them. A query scores
+ *   the handful of branches that could possibly match instead of all of them,
+ *   which is the difference between a search that feels instant and one a
+ *   presenter notices.
+ * @property {number} termCount
+ * @property {number} postingCount
+ * @property {string} deckFingerprint
+ */
+
+/** How many leading characters of a token are indexed as prefixes. */
+const PREFIX_DEPTH = 5;
+
+/**
+ * Build the jump index over every branch in a deck.
+ *
+ * Branch ids are deliberately **not** indexed. A branch findable only by its
+ * minted id is not findable in a room, and counting an id as a search term
+ * would make `BRANCH_UNREACHABLE` unraisable (§11 coverage rule).
+ *
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @returns {JumpIndex}
+ */
+function buildJumpIndex(deck) {
+  /** @type {JumpEntry[]} */
+  const entries = [];
+  const branches = allBranches(deck);
+
+  branches.forEach((seq, order) => {
+    /** @type {JumpTerm[]} */
+    const terms = [];
+    const push = (field, index, text, weight) => {
+      const raw = typeof text === 'string' ? text.trim() : '';
+      if (!raw) return;
+      const folded = fold(raw);
+      const tokens = tokenize(folded.text);
+      if (tokens.length === 0) return;
+      terms.push({
+        field,
+        index,
+        text: raw,
+        folded,
+        tokens,
+        squeezed: folded.text.replace(/\s+/g, ''),
+        acronym: acronyms(tokens),
+        grams: charGrams(folded.text),
+        weight: FIELD_WEIGHT[field],
+      });
+    };
+
+    push('objection', 0, seq.objection, FIELD_WEIGHT.objection);
+    (seq.aliases || []).forEach((alias, i) => push('alias', i, alias, FIELD_WEIGHT.alias));
+
+    /** @type {string[]} */
+    const anchorScenes = [];
+    for (const [sceneId, branchIds] of deck.anchorsByScene) {
+      if (branchIds.includes(seq.id)) anchorScenes.push(sceneId);
+    }
+
+    entries.push({
+      branchId: seq.id,
+      objection: seq.objection || '',
+      aliases: (seq.aliases || []).slice(),
+      order,
+      anchored: anchorScenes.length > 0,
+      anchorScenes,
+      sceneCount: seq.scenes.length,
+      terms,
+      searchable: terms.length > 0,
+    });
+  });
+
+  const postings = buildPostings(entries);
+  let postingCount = 0;
+  for (const list of postings.values()) postingCount += list.length;
+
+  return {
+    entries,
+    byBranchId: new Map(entries.map((e) => [e.branchId, e])),
+    postings,
+    termCount: entries.reduce((n, e) => n + e.terms.length, 0),
+    postingCount,
+    deckFingerprint: deck.fingerprint,
+  };
+}
+
+/**
+ * The candidate index. Every key an entry could be found by, mapped to the
+ * entries that carry it, built once so a keystroke never scans the deck.
+ * @param {JumpEntry[]} entries
+ * @returns {Map<string, number[]>}
+ */
+function buildPostings(entries) {
+  /** @type {Map<string, number[]>} */
+  const postings = new Map();
+  entries.forEach((entry, i) => {
+    /** @type {Set<string>} */
+    const keys = new Set();
+    for (const term of entry.terms) {
+      for (const token of term.tokens) {
+        const depth = Math.min(PREFIX_DEPTH, token.text.length);
+        for (let n = 1; n <= depth; n++) keys.add(`p:${token.text.slice(0, n)}`);
+      }
+      for (const gram of term.grams) keys.add(`g:${gram}`);
+      for (const form of [term.acronym.strong, term.acronym.all]) {
+        const depth = Math.min(PREFIX_DEPTH, form.length);
+        for (let n = 2; n <= depth; n++) keys.add(`a:${form.slice(0, n)}`);
+      }
+    }
+    for (const key of keys) {
+      const list = postings.get(key);
+      if (list) list.push(i);
+      else postings.set(key, [i]);
+    }
+  });
+  return postings;
+}
+
+/**
+ * The entries a query could possibly match, in index order.
+ *
+ * Anything reachable by a solid strategy — exact, prefix, word prefix, acronym,
+ * every-word — is reachable through a token-prefix or acronym posting. Anything
+ * reachable by substring or bounded edit distance shares a character trigram
+ * with the query by construction. What this filter does drop is a *subsequence*
+ * hit with no trigram in common with the query — the loosest signal the scorer
+ * has, and the one whose absence a presenter reads as "it didn't match" rather
+ * than "it matched the wrong thing".
+ *
+ * @param {JumpIndex} index
+ * @param {string} q          folded query
+ * @param {import('./text.js').Token[]} qTokens
+ * @param {string} qSqueezed
+ * @param {Set<string>} qGrams
+ * @returns {number[]}
+ */
+function candidateEntries(index, q, qTokens, qSqueezed, qGrams) {
+  const seen = new Uint8Array(index.entries.length);
+  /** @type {number[]} */
+  const out = [];
+  const take = (key) => {
+    const list = index.postings.get(key);
+    if (!list) return;
+    for (const i of list) {
+      if (seen[i]) continue;
+      seen[i] = 1;
+      out.push(i);
+    }
+  };
+
+  // A prefix or acronym posting is a promise of a solid match, so it is always
+  // a candidate.
+  for (const token of qTokens) take(`p:${token.text.slice(0, PREFIX_DEPTH)}`);
+  if (qSqueezed.length >= 2) take(`a:${qSqueezed.slice(0, PREFIX_DEPTH)}`);
+
+  // Trigrams are the loose path, and one shared trigram between a long query
+  // and a long objection means almost nothing. Asking long queries for two
+  // shared grams cuts the candidate set hard — but the threshold has to be
+  // provably safe, not merely fast: the worst edit this file's typo budget
+  // allows is two transpositions, each of which can destroy four grams, so the
+  // threshold only applies once a query carries ten grams and two typos
+  // therefore cannot exhaust the overlap. Shorter queries — where the typo
+  // tolerance actually earns its keep — keep full recall.
+  const threshold = qGrams.size >= 10 ? 2 : 1;
+  if (threshold === 1) {
+    for (const gram of qGrams) take(`g:${gram}`);
+  } else {
+    const counts = new Uint16Array(index.entries.length);
+    for (const gram of qGrams) {
+      const list = index.postings.get(`g:${gram}`);
+      if (!list) continue;
+      for (const i of list) {
+        if (seen[i]) continue;
+        if (++counts[i] === threshold) { seen[i] = 1; out.push(i); }
+      }
+    }
+  }
+
+  // A one- or two-character query has no trigram of its own; the prefix
+  // postings above are the whole candidate set, which is exactly right — at
+  // that length anything looser is noise.
+  out.sort((a, b) => a - b);
+  return out;
+}
+
+/**
+ * @typedef {object} JumpMatch
+ * @property {string} branchId
+ * @property {string} objection
+ * @property {number} score
+ * @property {{start: number, end: number, field: string, text: string}[]} matched
+ *   Highlight ranges in the text of the field that matched, in source (not
+ *   folded) coordinates.
+ * @property {'objection'|'alias'|null} matchedField
+ * @property {string} matchedText
+ * @property {string} kind      which strategy produced the match
+ * @property {boolean} anchored
+ * @property {number} sceneCount
+ */
+
+/**
+ * Search the index.
+ *
+ * An empty query lists every branch in deck order — opening `/` and seeing the
+ * whole objection set is how a presenter remembers what they wired.
+ *
+ * @param {JumpIndex} index
+ * @param {string} query
+ * @param {{limit?: number}} [options]
+ * @returns {JumpMatch[]}
+ */
+function searchJump(index, query, options = {}) {
+  const limit = options.limit === undefined ? DEFAULT_LIMIT : Math.max(0, options.limit | 0);
+  if (!index || !index.entries) return [];
+  const folded = fold(typeof query === 'string' ? query : '');
+  const q = folded.text.trim().replace(/\s+/g, ' ');
+
+  if (!q) {
+    return index.entries.slice(0, limit).map((entry) => ({
+      branchId: entry.branchId,
+      objection: entry.objection,
+      score: 0,
+      matched: [],
+      matchedField: null,
+      matchedText: entry.objection,
+      kind: 'all',
+      anchored: entry.anchored,
+      sceneCount: entry.sceneCount,
+    }));
+  }
+
+  const qTokens = tokenize(q);
+  const qSqueezed = q.replace(/\s+/g, '');
+  const qGrams = charGrams(q);
+  const budget = typoBudget(q);
+
+  /** @type {JumpMatch[]} */
+  const hits = [];
+  for (const candidate of candidateEntries(index, q, qTokens, qSqueezed, qGrams)) {
+    const entry = index.entries[candidate];
+    let best = null;
+    for (const term of entry.terms) {
+      const scored = scoreTerm(term, { q, qTokens, qSqueezed, qGrams, budget });
+      if (!scored) continue;
+      const weighted = scored.score * term.weight;
+      if (!best || weighted > best.score
+        || (weighted === best.score && fieldRank(term.field) < fieldRank(best.field))) {
+        best = { score: weighted, kind: scored.kind, ranges: scored.ranges, term, field: term.field };
+      }
+    }
+    if (!best || best.score < MIN_SCORE) continue;
+    hits.push({
+      branchId: entry.branchId,
+      objection: entry.objection,
+      score: best.score,
+      matched: best.ranges.map((r) => ({
+        ...sourceRange(best.term.folded, r.start, r.end),
+        field: best.term.field,
+        text: best.term.text,
+      })),
+      matchedField: best.term.field,
+      matchedText: best.term.text,
+      kind: best.kind,
+      anchored: entry.anchored,
+      sceneCount: entry.sceneCount,
+      order: entry.order,
+    });
+  }
+
+  hits.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const fr = fieldRank(a.matchedField) - fieldRank(b.matchedField);
+    if (fr !== 0) return fr;
+    if (a.order !== b.order) return a.order - b.order;
+    return a.branchId < b.branchId ? -1 : a.branchId > b.branchId ? 1 : 0;
+  });
+
+  return hits.slice(0, limit).map(({ order, ...rest }) => rest);
+}
+
+/**
+ * @param {string|null} field
+ * @returns {number}
+ */
+function fieldRank(field) {
+  return field === 'objection' ? 0 : 1;
+}
+
+/**
+ * Score one term against one query, taking the best strategy that fires.
+ * @param {JumpTerm} term
+ * @param {{q: string, qTokens: any[], qSqueezed: string, qGrams: Set<string>, budget: number}} ctx
+ * @returns {{score: number, kind: string, ranges: {start: number, end: number}[]}|null}
+ */
+function scoreTerm(term, ctx) {
+  const { q, qTokens, qSqueezed, qGrams, budget } = ctx;
+  const text = term.folded.text;
+
+  // 1. Exact.
+  if (text === q) {
+    return { score: STRATEGY_SCORE.exact, kind: 'exact', ranges: [{ start: 0, end: text.length }] };
+  }
+
+  // 2. The whole term starts with the whole query.
+  if (text.startsWith(q)) {
+    const coverage = q.length / text.length;
+    return {
+      score: STRATEGY_SCORE.prefix + 60 * coverage,
+      kind: 'prefix',
+      ranges: [{ start: 0, end: q.length }],
+    };
+  }
+
+  /** @type {{score: number, kind: string, ranges: {start: number, end: number}[]}|null} */
+  let best = null;
+  const consider = (candidate) => {
+    if (candidate && (!best || candidate.score > best.score)) best = candidate;
+  };
+
+  // 3. A word in the term starts with the query. This is the §11 case: three
+  //    characters of "approvals" against "Our approvals process…".
+  if (qTokens.length === 1) {
+    const qt = qTokens[0].text;
+    for (let i = 0; i < term.tokens.length; i++) {
+      const tok = term.tokens[i];
+      if (!tok.text.startsWith(qt)) continue;
+      const coverage = qt.length / tok.text.length;
+      consider({
+        score: STRATEGY_SCORE.tokenPrefix + 60 * coverage - Math.min(i, 8) * 6,
+        kind: 'token-prefix',
+        ranges: [{ start: tok.start, end: tok.start + qt.length }],
+      });
+      break;
+    }
+  }
+
+  // 4. The query appears inside the term but not at a word boundary.
+  if (!best || best.score < STRATEGY_SCORE.tokenPrefix) {
+    const at = text.indexOf(q);
+    if (at > 0) {
+      const coverage = q.length / text.length;
+      consider({
+        score: STRATEGY_SCORE.substring + 40 * coverage - Math.min(at, 60) * 0.5,
+        kind: 'substring',
+        ranges: [{ start: at, end: at + q.length }],
+      });
+    }
+  }
+
+  // 5. Initials — how a presenter remembers a long objection they wrote.
+  if (qSqueezed.length >= 2) {
+    const acro = term.acronym;
+    for (const [form, tokens] of [[acro.strong, acro.strongTokens], [acro.all, acro.allTokens]]) {
+      if (!form.startsWith(qSqueezed)) continue;
+      const coverage = qSqueezed.length / form.length;
+      consider({
+        score: STRATEGY_SCORE.acronym + 40 * coverage,
+        kind: 'acronym',
+        ranges: tokens.slice(0, qSqueezed.length).map((t) => ({ start: t.start, end: t.start + 1 })),
+      });
+      break;
+    }
+  }
+
+  // 6. Every word of the query is the start of some word of the term, in any
+  //    order: "legal claim" finds "Legal has to see every claim".
+  if (qTokens.length > 1) {
+    const used = new Set();
+    /** @type {{start: number, end: number}[]} */
+    const ranges = [];
+    let coverage = 0;
+    let inOrder = true;
+    let lastIndex = -1;
+    let all = true;
+    for (const qt of qTokens) {
+      let found = -1;
+      for (let i = 0; i < term.tokens.length; i++) {
+        if (used.has(i)) continue;
+        if (term.tokens[i].text.startsWith(qt.text)) { found = i; break; }
+      }
+      if (found < 0) { all = false; break; }
+      used.add(found);
+      const tok = term.tokens[found];
+      ranges.push({ start: tok.start, end: tok.start + qt.text.length });
+      coverage += qt.text.length / tok.text.length;
+      if (found < lastIndex) inOrder = false;
+      lastIndex = found;
+    }
+    if (all) {
+      ranges.sort((a, b) => a.start - b.start);
+      consider({
+        score: STRATEGY_SCORE.allTokens + 50 * (coverage / qTokens.length) - (inOrder ? 0 : 15),
+        kind: 'all-tokens',
+        ranges,
+      });
+    }
+  }
+
+  // 7. The letters appear in order. Loose, and scored well below anything above.
+  if (!best || best.score < STRATEGY_SCORE.allTokens) {
+    const hits = subsequenceMatch(qSqueezed, text);
+    if (hits) {
+      const span = hits[hits.length - 1] - hits[0] + 1;
+      const density = qSqueezed.length / Math.max(1, span);
+      consider({
+        score: STRATEGY_SCORE.subsequence + 60 * density,
+        kind: 'subsequence',
+        ranges: positionsToRanges(hits),
+      });
+    }
+  }
+
+  // 8. The typo path, gated: only when nothing solid fired, only when the query
+  //    is long enough for an edit to be meaningful, and only when the term
+  //    shares character n-grams with it. That gate is why a 200-branch index
+  //    still answers in microseconds.
+  if (budget > 0 && (!best || best.score < STRATEGY_SCORE.allTokens) && gramOverlap(qGrams, term.grams) > 0) {
+    let bestDist = budget + 1;
+    /** @type {{start: number, end: number}[]} */
+    let bestRanges = [];
+    let bestCoverage = 0;
+    if (qTokens.length === 1) {
+      const qt = qTokens[0].text;
+      for (const tok of term.tokens) {
+        if (Math.abs(tok.text.length - qt.length) > budget && tok.text.length < qt.length) continue;
+        const { distance, end } = boundedPrefixDistance(qt, tok.text, budget);
+        if (distance < bestDist && distance > 0) {
+          bestDist = distance;
+          bestRanges = [{ start: tok.start, end: tok.start + Math.max(1, end) }];
+          bestCoverage = Math.max(1, end) / tok.text.length;
+        }
+      }
+    }
+    if (bestDist > budget) {
+      const distance = boundedEditDistance(q, text, budget);
+      if (distance > 0 && distance <= budget) {
+        bestDist = distance;
+        bestRanges = [{ start: 0, end: text.length }];
+        bestCoverage = 1;
+      }
+    }
+    if (bestDist <= budget) {
+      consider({
+        score: STRATEGY_SCORE.fuzzy - 100 * (bestDist - 1) + 40 * bestCoverage,
+        kind: `fuzzy-${bestDist}`,
+        ranges: bestRanges,
+      });
+    }
+  }
+
+  return best;
+}
+
+/**
+ * Split a string into highlighted and plain runs, for a renderer that cannot
+ * hand out DOM. Pure string work: the overlay stays a VNode function.
+ * @param {string} text
+ * @param {{start: number, end: number}[]} ranges
+ * @returns {{text: string, hit: boolean}[]}
+ */
+function highlightRuns(text, ranges) {
+  const src = String(text == null ? '' : text);
+  const sorted = (ranges || [])
+    .filter((r) => r && r.end > r.start)
+    .map((r) => ({ start: Math.max(0, r.start), end: Math.min(src.length, r.end) }))
+    .sort((a, b) => a.start - b.start);
+  /** @type {{text: string, hit: boolean}[]} */
+  const out = [];
+  let at = 0;
+  for (const r of sorted) {
+    if (r.start < at) {
+      if (r.end > at) { // overlapping ranges merge rather than duplicating text
+        const last = out[out.length - 1];
+        if (last && last.hit) last.text += src.slice(at, r.end);
+        else out.push({ text: src.slice(at, r.end), hit: true });
+        at = r.end;
+      }
+      continue;
+    }
+    if (r.start > at) out.push({ text: src.slice(at, r.start), hit: false });
+    out.push({ text: src.slice(r.start, r.end), hit: true });
+    at = r.end;
+  }
+  if (at < src.length) out.push({ text: src.slice(at), hit: false });
+  return out.filter((run) => run.text.length > 0);
+}
+
+__exports["FIELD_WEIGHT"] = FIELD_WEIGHT;
+__exports["STRATEGY_SCORE"] = STRATEGY_SCORE;
+__exports["DEFAULT_LIMIT"] = DEFAULT_LIMIT;
+__exports["PREFIX_DEPTH"] = PREFIX_DEPTH;
+__exports["buildJumpIndex"] = buildJumpIndex;
+__exports["searchJump"] = searchJump;
+__exports["highlightRuns"] = highlightRuns;
+};
+__modules["branch/graph.js"] = function (__exports, __require) {
+/**
+ * The branch graph: anchors, resolved return targets, and coverage (§11, §14).
+ *
+ * The runtime's return stack is dynamic — it remembers where a jump came from.
+ * This file is the *static* view of the same thing: what the authored proof
+ * declares about where each branch goes when it ends. Rehearsal needs the
+ * static view, because a presenter finds out about an unreachable branch or a
+ * branch with nowhere to return the moment they need it, and by then it is a
+ * room full of people watching them press keys.
+ *
+ * The two findings §11 names come straight out of here:
+ *   - `BRANCH_UNREACHABLE` — no anchor and no jump-index entry: nothing in the
+ *     artifact can reach it, so it is dead weight in the file;
+ *   - `BRANCH_NO_RETURN` — the last scene has no resolved return target.
+ *
+ * @module branch/graph
+ */
+
+const { SPINE, allBranches } = __require("runtime/deck.js");
+const { buildJumpIndex } = __require("branch/jump-index.js");
+
+/**
+ * @typedef {object} AnchorSite
+ * @property {string} sceneId
+ * @property {string} sequenceId   the sequence the anchoring scene lives in
+ * @property {number} sceneIndex
+ * @property {boolean} onSpine
+ */
+
+/**
+ * Every scene that offers a branch, in the order a pitch would meet them:
+ * spine anchors first by spine position, then branch anchors in deck order.
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {string} branchId
+ * @returns {AnchorSite[]}
+ */
+function anchorsOf(deck, branchId) {
+  const order = new Map();
+  [deck.spine, ...allBranches(deck)].forEach((seq, i) => order.set(seq.id, i));
+  /** @type {AnchorSite[]} */
+  const sites = [];
+  for (const seq of deck.sequences.values()) {
+    seq.scenes.forEach((scene, sceneIndex) => {
+      const anchors = deck.anchorsByScene.get(scene.id) || [];
+      if (!anchors.includes(branchId)) return;
+      // A scene id can appear in more than one sequence in a defective proof
+      // (DUPLICATE_SCENE); the locator decides which occurrence is navigable,
+      // so the anchor site follows the locator rather than the raw scan.
+      const loc = deck.sceneLocator.get(scene.id);
+      if (!loc || loc.sequenceId !== seq.id || loc.sceneIndex !== sceneIndex) return;
+      sites.push({ sceneId: scene.id, sequenceId: seq.id, sceneIndex, onSpine: seq.id === SPINE });
+    });
+  }
+  return sites.sort((a, b) => {
+    if (a.onSpine !== b.onSpine) return a.onSpine ? -1 : 1;
+    const ao = order.has(a.sequenceId) ? order.get(a.sequenceId) : Number.MAX_SAFE_INTEGER;
+    const bo = order.has(b.sequenceId) ? order.get(b.sequenceId) : Number.MAX_SAFE_INTEGER;
+    if (ao !== bo) return ao - bo;
+    if (a.sceneIndex !== b.sceneIndex) return a.sceneIndex - b.sceneIndex;
+    return a.sceneId < b.sceneId ? -1 : a.sceneId > b.sceneId ? 1 : 0;
+  });
+}
+
+/**
+ * The anchor a branch returns to when its policy is `anchor`: the first one.
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {string} branchId
+ * @returns {AnchorSite|null}
+ */
+function primaryAnchor(deck, branchId) {
+  const sites = anchorsOf(deck, branchId);
+  return sites.length ? sites[0] : null;
+}
+
+/**
+ * The resolved return target for a branch, or null when the proof declares
+ * none.
+ *
+ * `anchor` resolves to the scene that offers the branch — which may itself be
+ * a branch scene, and that is exactly the nesting §22.4 warns about.
+ * `nextSpineScene` walks the anchor chain up to the spine and takes the scene
+ * after it, mirroring what the reducer does when it unwinds
+ * (`unwindToNextSpineScene`), including the clamp at the end of the spine: a
+ * proof that runs off its own end in front of a client is worse than one that
+ * holds on its last scene.
+ *
+ * A branch with no anchor at all resolves to null. Its return works at runtime
+ * — the stack remembers the jump — but the *proof* declares no exit, and that
+ * is what `BRANCH_NO_RETURN` is for.
+ *
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {string} branchId
+ * @returns {{sequenceId: string, sceneIndex: number}|null}
+ */
+function returnTargetFor(deck, branchId) {
+  const seq = deck.sequences.get(branchId);
+  if (!seq || seq.kind !== 'branch') return null;
+  if (seq.scenes.length === 0) return null;
+
+  const anchor = primaryAnchor(deck, branchId);
+  if (!anchor) return null;
+
+  const policy = seq.returnPolicy === 'nextSpineScene' ? 'nextSpineScene' : 'anchor';
+  if (policy === 'anchor') {
+    return { sequenceId: anchor.sequenceId, sceneIndex: anchor.sceneIndex };
+  }
+
+  const spineLength = deck.spine.scenes.length;
+  if (spineLength === 0) return null;
+
+  // Walk up the anchor chain to the spine: a branch nested two deep still
+  // means "move the pitch on" relative to the spine scene the detour left.
+  let site = anchor;
+  const seen = new Set([branchId]);
+  while (!site.onSpine) {
+    if (seen.has(site.sequenceId)) return null;   // an anchor cycle resolves to nothing
+    seen.add(site.sequenceId);
+    const up = primaryAnchor(deck, site.sequenceId);
+    if (!up) return null;
+    site = up;
+  }
+  return { sequenceId: SPINE, sceneIndex: Math.min(spineLength - 1, site.sceneIndex + 1) };
+}
+
+/**
+ * @typedef {object} BranchCoverageDetail
+ * @property {string} branchId
+ * @property {string} objection
+ * @property {boolean} anchored
+ * @property {string[]} anchorScenes
+ * @property {boolean} searchable        has an objection or alias to find it by
+ * @property {'anchor'|'nextSpineScene'} returnPolicy
+ * @property {{sequenceId: string, sceneIndex: number}|null} returnTarget
+ * @property {number} sceneCount
+ * @property {number} depth              anchor nesting depth, 1 = hangs off the spine
+ * @property {string[]} reasons          machine-readable causes, for L11's messages
+ */
+
+/**
+ * The §11 coverage rule, as data.
+ *
+ * `unreachable` and `noReturn` are the two id lists L11 turns into
+ * `BRANCH_UNREACHABLE` and `BRANCH_NO_RETURN`. `details` carries the reason for
+ * each, so a finding can say *why* rather than just naming a branch — a branch
+ * with no anchor and no objection text is a different problem from one whose
+ * anchor chain never reaches the spine, and the fix is different too.
+ *
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @returns {{unreachable: string[], noReturn: string[], details: BranchCoverageDetail[], depthByBranch: Map<string, number>, maxNestingDepth: number}}
+ */
+function branchCoverage(deck) {
+  const index = buildJumpIndex(deck);
+  const depths = nestingDepths(deck);
+  /** @type {string[]} */
+  const unreachable = [];
+  /** @type {string[]} */
+  const noReturn = [];
+  /** @type {BranchCoverageDetail[]} */
+  const details = [];
+
+  for (const seq of allBranches(deck)) {
+    const entry = index.byBranchId.get(seq.id);
+    const sites = anchorsOf(deck, seq.id);
+    const searchable = !!(entry && entry.searchable);
+    const returnPolicy = seq.returnPolicy === 'nextSpineScene' ? 'nextSpineScene' : 'anchor';
+    const returnTarget = returnTargetFor(deck, seq.id);
+    /** @type {string[]} */
+    const reasons = [];
+
+    if (sites.length === 0 && !searchable) reasons.push('no-anchor-and-no-jump-entry');
+    if (seq.scenes.length === 0) reasons.push('no-scenes');
+    if (!returnTarget) {
+      if (seq.scenes.length === 0) reasons.push('nothing-to-return-from');
+      else if (sites.length === 0) reasons.push('unanchored');
+      else if (returnPolicy === 'nextSpineScene' && deck.spine.scenes.length === 0) reasons.push('empty-spine');
+      else if (returnPolicy === 'nextSpineScene') reasons.push('anchor-chain-never-reaches-spine');
+    }
+
+    if (sites.length === 0 && !searchable) unreachable.push(seq.id);
+    if (!returnTarget) noReturn.push(seq.id);
+
+    details.push({
+      branchId: seq.id,
+      objection: seq.objection || '',
+      anchored: sites.length > 0,
+      anchorScenes: sites.map((s) => s.sceneId),
+      searchable,
+      returnPolicy,
+      returnTarget,
+      sceneCount: seq.scenes.length,
+      depth: depths.get(seq.id) || 1,
+      reasons,
+    });
+  }
+
+  let maxNestingDepth = 0;
+  for (const d of depths.values()) if (d > maxNestingDepth) maxNestingDepth = d;
+
+  return { unreachable, noReturn, details, depthByBranch: depths, maxNestingDepth };
+}
+
+/**
+ * How deep each branch hangs: 1 when it is offered from a spine scene or from
+ * nowhere at all, n+1 when it is offered from inside a branch of depth n.
+ *
+ * This is the bound the §17.8 property test checks the return stack against
+ * when the walk only takes anchored jumps: a presenter who only ever jumps to
+ * what the scene in front of them offers can never nest deeper than the deck
+ * was authored to nest.
+ *
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @returns {Map<string, number>}
+ */
+function nestingDepths(deck) {
+  /** @type {Map<string, number>} */
+  const memo = new Map();
+  const resolve = (branchId, trail) => {
+    if (memo.has(branchId)) return memo.get(branchId);
+    if (trail.has(branchId)) return 1;               // a cycle contributes no depth
+    trail.add(branchId);
+    const sites = anchorsOf(deck, branchId);
+    let depth = 1;
+    for (const site of sites) {
+      if (site.onSpine) { depth = Math.max(depth, 1); continue; }
+      depth = Math.max(depth, resolve(site.sequenceId, trail) + 1);
+    }
+    trail.delete(branchId);
+    memo.set(branchId, depth);
+    return depth;
+  };
+  for (const seq of allBranches(deck)) resolve(seq.id, new Set());
+  return memo;
+}
+
+/**
+ * The branch graph as nodes and edges, for the branch map overlay and for any
+ * lane that wants to draw or reason about the structure.
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @returns {{nodes: {id: string, kind: 'spine'|'branch', objection: string|null, sceneCount: number, depth: number}[],
+ *            edges: {from: string, to: string, sceneId: string, onSpine: boolean}[],
+ *            maxNestingDepth: number}}
+ */
+function branchGraph(deck) {
+  const depths = nestingDepths(deck);
+  const nodes = [
+    { id: SPINE, kind: /** @type {'spine'} */ ('spine'), objection: null, sceneCount: deck.spine.scenes.length, depth: 0 },
+    ...allBranches(deck).map((seq) => ({
+      id: seq.id,
+      kind: /** @type {'branch'} */ ('branch'),
+      objection: seq.objection,
+      sceneCount: seq.scenes.length,
+      depth: depths.get(seq.id) || 1,
+    })),
+  ];
+  /** @type {{from: string, to: string, sceneId: string, onSpine: boolean}[]} */
+  const edges = [];
+  for (const seq of allBranches(deck)) {
+    for (const site of anchorsOf(deck, seq.id)) {
+      edges.push({ from: site.sequenceId, to: seq.id, sceneId: site.sceneId, onSpine: site.onSpine });
+    }
+  }
+  let maxNestingDepth = 0;
+  for (const d of depths.values()) if (d > maxNestingDepth) maxNestingDepth = d;
+  return { nodes, edges, maxNestingDepth };
+}
+
+/**
+ * Where `return` would actually land from the live state — the dynamic twin of
+ * `returnTargetFor`. The branch map shows this rather than the declared target,
+ * because a presenter three levels deep needs to know where the next Escape
+ * from the detour puts them, not what the author intended in the abstract.
+ *
+ * It mirrors the reducer exactly, including the `nextSpineScene` unwind of the
+ * whole stack and the clamp at the end of the spine.
+ *
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {import('../runtime/nav.js').NavState} nav
+ * @returns {{sequenceId: string, sceneIndex: number, policy: 'anchor'|'nextSpineScene', unwindsAll: boolean}|null}
+ */
+function liveReturnTarget(deck, nav) {
+  if (!nav || !nav.stack || nav.stack.length === 0) return null;
+  const frame = nav.stack[nav.stack.length - 1];
+  if (frame.returnPolicy === 'nextSpineScene') {
+    const bottom = nav.stack[0];
+    const spineLength = deck.spine.scenes.length;
+    if (spineLength === 0) return { sequenceId: SPINE, sceneIndex: 0, policy: 'nextSpineScene', unwindsAll: true };
+    const sceneIndex = bottom.sequenceId === SPINE
+      ? Math.min(spineLength - 1, bottom.sceneIndex + 1)
+      : Math.min(spineLength - 1, bottom.sceneIndex);
+    return { sequenceId: SPINE, sceneIndex, policy: 'nextSpineScene', unwindsAll: true };
+  }
+  return {
+    sequenceId: frame.sequenceId,
+    sceneIndex: frame.sceneIndex,
+    policy: 'anchor',
+    unwindsAll: false,
+  };
+}
+
+__exports["anchorsOf"] = anchorsOf;
+__exports["primaryAnchor"] = primaryAnchor;
+__exports["returnTargetFor"] = returnTargetFor;
+__exports["branchCoverage"] = branchCoverage;
+__exports["nestingDepths"] = nestingDepths;
+__exports["branchGraph"] = branchGraph;
+__exports["liveReturnTarget"] = liveReturnTarget;
+};
+__modules["branch/overlays.js"] = function (__exports, __require) {
+/**
+ * The three branch overlays (§2, §11, §12).
+ *
+ *   `/`  jump      — search the objections, arrow through the results, Enter jumps.
+ *   `m`  map       — where you are, what you have shown, what is still in the bag.
+ *   `c`  contents  — the §2 Review-mode index of the spine, self-paced and jumpable.
+ *
+ * Every renderer here is a pure function from the overlay context to a VNode.
+ * None of them touches `document`: the same tree is asserted in `node --test`,
+ * serialized by the emitter, and mounted by the host, and that is the only
+ * reason a rehearsal pass over these overlays means anything (§14).
+ *
+ * The interactive state of the jump index — the query and the highlighted row —
+ * lives in a `JumpController`, not in the DOM. The overlay renders the
+ * controller; a keystroke updates the controller and the host repaints. A
+ * search field whose state lived in the input element would lose its place on
+ * every repaint, and would be unreachable from a test.
+ *
+ * @module branch/overlays
+ */
+
+const { h } = __require("core/vdom.js");
+const { OVERLAY } = __require("runtime/overlays.js");
+const { SPINE, allBranches, sequenceOf } = __require("runtime/deck.js");
+const { beatsOf } = __require("runtime/nav.js");
+const { buildJumpIndex, searchJump, highlightRuns, DEFAULT_LIMIT } = __require("branch/jump-index.js");
+const { anchorsOf, liveReturnTarget, returnTargetFor } = __require("branch/graph.js");
+
+/** Attribute the input bridge looks for. */
+const JUMP_INPUT_ATTR = 'data-pp-jump-input';
+/** Attribute a clickable overlay control carries: a runtime command and its payload. */
+const COMMAND_ATTR = 'data-pp-command';
+/** Attribute carrying the payload for `COMMAND_ATTR`. */
+const PAYLOAD_ATTR = 'data-pp-payload';
+
+/**
+ * The jump index's live state.
+ *
+ * Deliberately tiny and deliberately synchronous: a keystroke in a live room
+ * must produce a new result list in the same tick it was typed.
+ */
+class JumpController {
+  /**
+   * @param {import('../runtime/runtime.js').Runtime} runtime
+   * @param {{limit?: number}} [options]
+   */
+  constructor(runtime, options = {}) {
+    this.runtime = runtime;
+    /** @type {import('./jump-index.js').JumpIndex|null} */
+    this.builtIndex = null;
+    this.limit = options.limit === undefined ? DEFAULT_LIMIT : options.limit;
+    this.query = '';
+    this.selection = 0;
+    /** @type {{query: string, results: import('./jump-index.js').JumpMatch[]}|null} */
+    this.cache = null;
+  }
+
+  /**
+   * The index, built on first use rather than at registration.
+   *
+   * Registration happens during boot, and §12 gives the artifact 1.5s to first
+   * meaningful paint from a local file. Nothing about the opening beat needs the
+   * jump index, and a deck large enough for the build to cost anything is
+   * exactly the deck that can least afford it before first paint. The first `/`
+   * pays instead — single-digit milliseconds on a real deck, once per session.
+   * @returns {import('./jump-index.js').JumpIndex}
+   */
+  get index() {
+    if (!this.builtIndex) this.builtIndex = buildJumpIndex(this.runtime.deck);
+    return this.builtIndex;
+  }
+
+  /** @returns {import('./jump-index.js').JumpMatch[]} */
+  get results() {
+    if (!this.cache || this.cache.query !== this.query) {
+      this.cache = { query: this.query, results: searchJump(this.index, this.query, { limit: this.limit }) };
+    }
+    return this.cache.results;
+  }
+
+  /** @returns {import('./jump-index.js').JumpMatch|null} */
+  get active() {
+    const rows = this.results;
+    if (rows.length === 0) return null;
+    return rows[Math.max(0, Math.min(rows.length - 1, this.selection))] || null;
+  }
+
+  /**
+   * @param {string} value
+   * @returns {boolean} whether anything changed
+   */
+  setQuery(value) {
+    const next = typeof value === 'string' ? value : '';
+    if (next === this.query) return false;
+    this.query = next;
+    // A new query means a new list; keeping the old row index would jump the
+    // presenter to whatever happened to land in that position.
+    this.selection = 0;
+    this.notify();
+    return true;
+  }
+
+  /**
+   * Move the highlighted row. Clamps rather than wrapping: wrapping past the
+   * end of a short list is disorienting when you are not looking at the screen.
+   * @param {number} delta
+   * @returns {boolean}
+   */
+  move(delta) {
+    const rows = this.results;
+    if (rows.length === 0) return false;
+    const next = Math.max(0, Math.min(rows.length - 1, this.selection + delta));
+    if (next === this.selection) return false;
+    this.selection = next;
+    this.notify();
+    return true;
+  }
+
+  /**
+   * Jump to the highlighted branch and close the overlay.
+   * @returns {boolean}
+   */
+  commit() {
+    const row = this.active;
+    if (!row) return false;
+    const moved = this.runtime.run('jump', row.branchId);
+    // Navigation closes the overlay through `handleNavigation`; a jump that
+    // changed nothing (already inside that branch) still has to close, or the
+    // presenter is left staring at a search field they already used.
+    if (this.runtime.overlays.has(OVERLAY.jump)) this.runtime.overlays.close(OVERLAY.jump);
+    this.reset();
+    return moved;
+  }
+
+  /** Clear the query and the selection, without repainting. */
+  reset() {
+    this.query = '';
+    this.selection = 0;
+    this.cache = null;
+  }
+
+  /**
+   * Handle a key pressed while the search field has focus. The runtime's keymap
+   * hands arrows to the deck, which is right everywhere except here.
+   * @param {{key: string}} event
+   * @returns {boolean} whether the key was consumed
+   */
+  handleKey(event) {
+    if (!event || typeof event.key !== 'string') return false;
+    switch (event.key) {
+      case 'ArrowDown': this.move(1); return true;
+      case 'ArrowUp': this.move(-1); return true;
+      case 'PageDown': this.move(5); return true;
+      case 'PageUp': this.move(-5); return true;
+      case 'Home': this.move(-this.results.length); return true;
+      case 'End': this.move(this.results.length); return true;
+      case 'Enter': this.commit(); return true;
+      default: return false;
+    }
+  }
+
+  /** Ask the host for a repaint. The overlay is a projection of this object. */
+  notify() {
+    if (this.runtime && typeof this.runtime.emit === 'function') {
+      this.runtime.emit('change', { reason: 'branch:jump', state: this.runtime.snapshot() });
+    }
+  }
+}
+
+/**
+ * Register the jump index, the branch map and the contents index on a runtime.
+ *
+ * The controller is exposed as `runtime.branchJump` so the DOM bridge, the
+ * studio's rehearsal panel and the tests all drive the same object rather than
+ * three copies of the same state.
+ *
+ * @param {import('../runtime/runtime.js').Runtime} runtime
+ * @returns {() => void} unregister
+ */
+function registerBranchOverlays(runtime) {
+  const controller = new JumpController(runtime);
+  runtime.branchJump = controller;
+
+  /** @type {(() => void)[]} */
+  const offs = [];
+
+  offs.push(runtime.overlays.register({
+    id: OVERLAY.jump,
+    title: 'Jump to an objection',
+    takesFocus: true,
+    render: (ctx) => renderJumpOverlay(ctx, controller),
+  }));
+
+  offs.push(runtime.overlays.register({
+    id: OVERLAY.map,
+    title: 'Branch map',
+    takesFocus: false,
+    render: (ctx) => renderMapOverlay(ctx),
+  }));
+
+  offs.push(runtime.overlays.register({
+    id: OVERLAY.contents,
+    title: 'Contents',
+    takesFocus: false,
+    render: (ctx) => renderContentsOverlay(ctx),
+  }));
+
+  // Reopening `/` always starts from an empty field: the last search is a
+  // record of the last objection, and the room has moved on.
+  offs.push(runtime.overlays.on('change', (e) => {
+    if (!e.open.includes(OVERLAY.jump) && (controller.query || controller.selection)) controller.reset();
+  }));
+
+  return () => {
+    for (const off of offs.splice(0)) {
+      try { off(); } catch { /* an already-removed registration is not an error */ }
+    }
+    if (runtime.branchJump === controller) delete runtime.branchJump;
+  };
+}
+
+// -- jump -------------------------------------------------------------------
+
+/**
+ * The jump index overlay: a search field and an arrow-navigable result list.
+ * @param {any} ctx      the runtime's overlay context
+ * @param {JumpController} controller
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function renderJumpOverlay(ctx, controller) {
+  const rows = controller.results;
+  const total = controller.index.entries.length;
+  const selection = rows.length ? Math.max(0, Math.min(rows.length - 1, controller.selection)) : -1;
+  const visited = new Set(ctx.visited || []);
+
+  return h('div', { class: 'pp-overlay pp-overlay--jump', 'data-pp-overlay': OVERLAY.jump },
+    h('h2', { class: 'pp-overlay-title', id: 'pp-jump-title' }, 'Jump to an objection'),
+    h('div', { class: 'pp-jump-field' },
+      h('input', {
+        class: 'pp-jump-input',
+        type: 'text',
+        value: controller.query,
+        placeholder: total ? 'Type the objection — three letters is usually enough' : 'This proof has no branches',
+        autocomplete: 'off',
+        autocapitalize: 'off',
+        spellcheck: 'false',
+        role: 'combobox',
+        'aria-expanded': rows.length ? 'true' : 'false',
+        'aria-controls': 'pp-jump-results',
+        'aria-activedescendant': selection >= 0 ? `pp-jump-option-${selection}` : null,
+        'aria-label': 'Search objections',
+        [JUMP_INPUT_ATTR]: 'true',
+      }),
+      h('span', { class: 'pp-jump-count' }, `${rows.length}/${total}`)),
+    rows.length
+      ? h('ul', { class: 'pp-jump-results', id: 'pp-jump-results', role: 'listbox', 'aria-labelledby': 'pp-jump-title' },
+        rows.map((row, i) => renderJumpRow(ctx, row, i, i === selection, visited)))
+      : h('p', { class: 'pp-jump-empty' },
+        total ? `Nothing matches “${controller.query}”.` : 'No objection branches are wired into this proof.'),
+    h('p', { class: 'pp-overlay-foot' }, '↑↓ choose · Enter jumps · Esc closes'));
+}
+
+/**
+ * One result row.
+ * @param {any} ctx
+ * @param {import('./jump-index.js').JumpMatch} row
+ * @param {number} i
+ * @param {boolean} selected
+ * @param {Set<string>} visited
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function renderJumpRow(ctx, row, i, selected, visited) {
+  const seq = ctx.deck.sequences.get(row.branchId);
+  const shown = !!(seq && seq.scenes.some((s) => visited.has(s.id)));
+  const objectionRanges = row.matchedField === 'objection' ? row.matched : [];
+  const aliasHit = row.matchedField === 'alias' ? row : null;
+
+  return h('li', {
+    class: `pp-jump-result${selected ? ' pp-jump-result--active' : ''}${shown ? ' pp-jump-result--shown' : ''}`,
+    id: `pp-jump-option-${i}`,
+    role: 'option',
+    'aria-selected': selected ? 'true' : 'false',
+    'data-pp-branch': row.branchId,
+    [COMMAND_ATTR]: 'jump',
+    [PAYLOAD_ATTR]: row.branchId,
+    tabindex: '-1',
+  },
+  h('span', { class: 'pp-jump-objection' },
+    marked(row.objection || row.branchId, objectionRanges)),
+  aliasHit
+    ? h('span', { class: 'pp-jump-alias' }, 'also: ', marked(aliasHit.matchedText, aliasHit.matched))
+    : null,
+  h('span', { class: 'pp-jump-meta' },
+    `${row.sceneCount} ${row.sceneCount === 1 ? 'scene' : 'scenes'}`,
+    shown ? ' · shown' : '',
+    row.anchored ? '' : ' · jump only'));
+}
+
+/**
+ * Wrap the matched ranges of a string in `<mark>`, leaving the rest as text.
+ * @param {string} text
+ * @param {{start: number, end: number}[]} ranges
+ * @returns {import('../core/vdom.js').VNode[]}
+ */
+function marked(text, ranges) {
+  return highlightRuns(text, ranges)
+    .map((run) => (run.hit ? h('mark', { class: 'pp-jump-hit' }, run.text) : run.text));
+}
+
+// -- map --------------------------------------------------------------------
+
+/**
+ * The branch map (§11): where the presenter is, what has been shown, and what
+ * is still available.
+ *
+ * "Knowing what you haven't shown yet is the difference between closing cleanly
+ * and rambling" — so the unshown branches are the loudest thing on this panel,
+ * and the count is stated in words rather than left to be counted.
+ *
+ * @param {any} ctx
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function renderMapOverlay(ctx) {
+  const { deck, nav } = ctx;
+  const visited = new Set(ctx.visited || []);
+  const branches = allBranches(deck);
+  const shownOf = (seq) => seq.scenes.some((s) => visited.has(s.id));
+  const shownCount = branches.filter(shownOf).length;
+  const anchoredIds = new Set();
+  for (const seq of branches) if (anchorsOf(deck, seq.id).length) anchoredIds.add(seq.id);
+
+  return h('div', { class: 'pp-overlay pp-overlay--map', 'data-pp-overlay': OVERLAY.map },
+    h('h2', { class: 'pp-overlay-title' }, 'Branch map'),
+    renderHere(ctx),
+    h('section', { class: 'pp-map-section' },
+      h('h3', { class: 'pp-map-heading' }, 'The spine'),
+      h('ol', { class: 'pp-map-spine' }, deck.spine.scenes.map((scene, i) => {
+        const current = nav.sequenceId === SPINE && nav.sceneIndex === i;
+        const anchorHere = (deck.anchorsByScene.get(scene.id) || [])
+          .map((id) => deck.sequences.get(id)).filter(Boolean);
+        return h('li', {
+          class: `pp-map-scene${current ? ' pp-map-scene--current' : ''}${visited.has(scene.id) ? ' pp-map-scene--shown' : ''}`,
+          'data-pp-scene': scene.id,
+          [COMMAND_ATTR]: 'goToScene',
+          [PAYLOAD_ATTR]: scene.id,
+        },
+        h('span', { class: 'pp-map-index' }, String(i + 1)),
+        h('span', { class: 'pp-map-title' }, sceneTitle(scene, i)),
+        h('span', { class: 'pp-map-state' }, current ? 'here' : visited.has(scene.id) ? 'shown' : 'ahead'),
+        anchorHere.length
+          ? h('ul', { class: 'pp-map-anchors' },
+            anchorHere.map((seq) => renderBranchItem(deck, seq, visited, shownOf, new Set(), 0)))
+          : null);
+      }))),
+    renderUnanchored(ctx, branches.filter((seq) => !anchoredIds.has(seq.id)), shownOf),
+    h('p', { class: 'pp-map-summary' },
+      branches.length === 0
+        ? 'No objection branches are wired into this proof.'
+        : `${shownCount} of ${branches.length} ${branches.length === 1 ? 'branch' : 'branches'} shown · ${branches.length - shownCount} still in reserve`),
+    h('p', { class: 'pp-overlay-foot' }, '/ jumps · R returns to the spine · Esc closes'));
+}
+
+/**
+ * One branch in the map, with the branches *it* offers nested underneath.
+ *
+ * A branch anchored from inside another branch is invisible on the spine, and
+ * an available branch a presenter cannot see is an available branch they will
+ * not use — so the map draws the anchor tree, not just its first level. Depth is
+ * capped and the trail is tracked, because a proof may declare an anchor cycle
+ * and a validation finding is a better answer than a hung overlay.
+ *
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {import('../runtime/deck.js').Sequence} seq
+ * @param {Set<string>} visited
+ * @param {(seq: import('../runtime/deck.js').Sequence) => boolean} shownOf
+ * @param {Set<string>} trail
+ * @param {number} depth
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function renderBranchItem(deck, seq, visited, shownOf, trail, depth) {
+  const shown = shownOf(seq);
+  const children = depth < 4 && !trail.has(seq.id) ? childBranches(deck, seq) : [];
+  const nextTrail = new Set(trail).add(seq.id);
+
+  return h('li', {
+    class: `pp-map-anchor${shown ? ' pp-map-anchor--shown' : ''}`,
+    'data-pp-branch': seq.id,
+    [COMMAND_ATTR]: 'jump',
+    [PAYLOAD_ATTR]: seq.id,
+  },
+  h('span', { class: 'pp-map-anchor-label' }, seq.objection || seq.id),
+  h('span', { class: 'pp-map-state' }, shown ? 'shown' : 'ready'),
+  children.length
+    ? h('ul', { class: 'pp-map-anchors pp-map-anchors--nested' },
+      children.map((child) => renderBranchItem(deck, child, visited, shownOf, nextTrail, depth + 1)))
+    : null);
+}
+
+/**
+ * The branches a branch's own scenes offer, in scene order.
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {import('../runtime/deck.js').Sequence} seq
+ * @returns {import('../runtime/deck.js').Sequence[]}
+ */
+function childBranches(deck, seq) {
+  /** @type {import('../runtime/deck.js').Sequence[]} */
+  const out = [];
+  const seen = new Set();
+  for (const scene of seq.scenes) {
+    for (const id of deck.anchorsByScene.get(scene.id) || []) {
+      if (seen.has(id) || id === seq.id) continue;
+      seen.add(id);
+      const child = deck.sequences.get(id);
+      if (child) out.push(child);
+    }
+  }
+  return out;
+}
+
+/**
+ * The "you are here" block, including where a return would land.
+ * @param {any} ctx
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function renderHere(ctx) {
+  const { deck, nav, scene } = ctx;
+  const seq = sequenceOf(deck, nav.sequenceId);
+  const beats = scene ? beatsOf(scene) : 1;
+  const back = liveReturnTarget(deck, nav);
+  const backScene = back ? (deck.sequences.get(back.sequenceId) || { scenes: [] }).scenes[back.sceneIndex] : null;
+
+  return h('section', { class: 'pp-map-here' },
+    h('h3', { class: 'pp-map-heading' }, 'You are here'),
+    h('p', { class: 'pp-map-here-line' },
+      h('span', { class: 'pp-map-here-seq' }, seq.kind === 'spine' ? 'Spine' : (seq.objection || seq.id)),
+      h('span', { class: 'pp-map-here-scene' },
+        ` · scene ${nav.sceneIndex + 1} of ${seq.scenes.length} · beat ${nav.beatIndex + 1} of ${beats}`)),
+    scene ? h('p', { class: 'pp-map-here-title' }, sceneTitle(scene, nav.sceneIndex)) : null,
+    back
+      ? h('p', { class: 'pp-map-here-return' },
+        `Return → ${backScene ? sceneTitle(backScene, back.sceneIndex) : 'the spine'}`,
+        h('span', { class: 'pp-map-here-policy' },
+          back.unwindsAll ? ' (unwinds the whole detour)' : ` (depth ${nav.stack.length})`))
+      : null);
+}
+
+/**
+ * Branches with no anchor: reachable only from the jump index. They are listed
+ * separately because a presenter cannot stumble into them — they have to be
+ * remembered.
+ * @param {any} ctx
+ * @param {import('../runtime/deck.js').Sequence[]} loose
+ * @param {(seq: import('../runtime/deck.js').Sequence) => boolean} shownOf
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function renderUnanchored(ctx, loose, shownOf) {
+  if (loose.length === 0) return null;
+  return h('section', { class: 'pp-map-section' },
+    h('h3', { class: 'pp-map-heading' }, 'Reachable only from the jump index'),
+    h('ul', { class: 'pp-map-loose' }, loose.map((seq) => h('li', {
+      class: `pp-map-anchor${shownOf(seq) ? ' pp-map-anchor--shown' : ''}`,
+      'data-pp-branch': seq.id,
+      [COMMAND_ATTR]: 'jump',
+      [PAYLOAD_ATTR]: seq.id,
+    },
+    h('span', { class: 'pp-map-anchor-label' }, seq.objection || seq.id),
+    h('span', { class: 'pp-map-state' },
+      returnTargetFor(ctx.deck, seq.id) ? (shownOf(seq) ? 'shown' : 'ready') : 'no declared return')))));
+}
+
+// -- contents ---------------------------------------------------------------
+
+/**
+ * The §2 contents index: the spine, numbered, jumpable, self-paced.
+ *
+ * Review mode is a document someone reads on their own after the meeting, so
+ * this panel names scenes and nothing else — no presenter notes, no branch
+ * inventory, no sense that they are missing a performance.
+ *
+ * @param {any} ctx
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function renderContentsOverlay(ctx) {
+  const { deck, nav } = ctx;
+  const visited = new Set(ctx.visited || []);
+  const scenes = deck.spine.scenes;
+
+  return h('div', { class: 'pp-overlay pp-overlay--contents', 'data-pp-overlay': OVERLAY.contents },
+    h('h2', { class: 'pp-overlay-title' }, 'Contents'),
+    scenes.length
+      ? h('ol', { class: 'pp-contents-list' }, scenes.map((scene, i) => {
+        const current = nav.sequenceId === SPINE && nav.sceneIndex === i;
+        return h('li', {
+          class: `pp-contents-item${current ? ' pp-contents-item--current' : ''}${visited.has(scene.id) ? ' pp-contents-item--seen' : ''}`,
+          'data-pp-scene': scene.id,
+          [COMMAND_ATTR]: 'goToScene',
+          [PAYLOAD_ATTR]: scene.id,
+          tabindex: '0',
+          role: 'link',
+        },
+        h('span', { class: 'pp-contents-index' }, String(i + 1)),
+        h('span', { class: 'pp-contents-title' }, sceneTitle(scene, i)),
+        scene.subhead ? h('span', { class: 'pp-contents-sub' }, scene.subhead) : null,
+        h('span', { class: 'pp-contents-beats' },
+          `${beatsOf(scene)} ${beatsOf(scene) === 1 ? 'step' : 'steps'}`));
+      }))
+      : h('p', { class: 'pp-jump-empty' }, 'This proof has no scenes.'),
+    h('p', { class: 'pp-overlay-foot' },
+      ctx.mode === 'review' ? 'Pick a section · Esc closes' : 'C closes this · / jumps to an objection'));
+}
+
+/**
+ * A scene's display name, never empty — an untitled scene in a contents index
+ * is worse than a numbered one.
+ * @param {import('../core/contracts.d.ts').Scene} scene
+ * @param {number} index
+ * @returns {string}
+ */
+function sceneTitle(scene, index) {
+  if (!scene) return `Scene ${index + 1}`;
+  const text = (scene.headline || scene.subhead || '').trim();
+  return text || `Scene ${index + 1}`;
+}
+
+__exports["JUMP_INPUT_ATTR"] = JUMP_INPUT_ATTR;
+__exports["COMMAND_ATTR"] = COMMAND_ATTR;
+__exports["PAYLOAD_ATTR"] = PAYLOAD_ATTR;
+__exports["JumpController"] = JumpController;
+__exports["registerBranchOverlays"] = registerBranchOverlays;
+__exports["renderJumpOverlay"] = renderJumpOverlay;
+__exports["marked"] = marked;
+__exports["renderMapOverlay"] = renderMapOverlay;
+__exports["renderContentsOverlay"] = renderContentsOverlay;
+__exports["sceneTitle"] = sceneTitle;
+};
+__modules["branch/bridge.js"] = function (__exports, __require) {
+/**
+ * The one place in this lane that knows a document exists.
+ *
+ * The overlays are pure VNode renderers, and the vdom substrate carries no
+ * event handlers by design (§5: the same tree has to serialize to static HTML
+ * for the emitter's first paint). So the jump index needs a thin bridge that
+ * turns real events into calls on the `JumpController`: typing into the search
+ * field, arrowing through the results, Enter, and clicks on any overlay row
+ * that declares a runtime command.
+ *
+ * Two details make it correct rather than merely working:
+ *
+ *   - **It listens in the capture phase.** The host binds `keydown` on the
+ *     document, and the keymap maps `ArrowDown` to "next scene". While the jump
+ *     field has focus, that arrow belongs to the result list, so the bridge has
+ *     to see it first and stop it.
+ *   - **The document is injected**, never read from a global, so the studio, a
+ *     test harness and the artifact all drive the same code path.
+ *
+ * Nothing here reaches the network, and nothing here is required for the
+ * overlays to render — a proof opened without the bridge still shows the jump
+ * index; it just cannot type into it.
+ *
+ * @module branch/bridge
+ */
+
+const { JUMP_INPUT_ATTR, COMMAND_ATTR, PAYLOAD_ATTR } = __require("branch/overlays.js");
+
+/**
+ * Wire a runtime's branch overlays to a document.
+ * @param {import('../runtime/runtime.js').Runtime} runtime
+ * @param {{document: Document, root?: Element|Document}} env
+ * @returns {() => void} detach
+ */
+function installBranchInputBridge(runtime, env) {
+  const doc = env && env.document;
+  if (!doc || typeof doc.addEventListener !== 'function') return () => {};
+  const root = env.root || doc;
+
+  const controller = () => runtime.branchJump || null;
+
+  const onInput = (event) => {
+    if (event.isComposing) return;
+    const target = event.target;
+    if (!isJumpInput(target)) return;
+    const c = controller();
+    if (!c) return;
+    c.setQuery(target.value === undefined ? '' : String(target.value));
+  };
+
+  const onKeyDown = (event) => {
+    const c = controller();
+    if (!c) return;
+    if (!isJumpInput(event.target)) return;
+    if (event.isComposing) return;
+    // Escape belongs to the overlay stack, not to us: it closes the panel and
+    // hands focus back to wherever it came from.
+    if (event.key === 'Escape' || event.key === 'Esc') return;
+    if (!c.handleKey(event)) return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    if (typeof event.stopPropagation === 'function') event.stopPropagation();
+  };
+
+  const onClick = (event) => {
+    const target = event.target;
+    const el = target && typeof target.closest === 'function' ? target.closest(`[${COMMAND_ATTR}]`) : null;
+    if (!el) return;
+    const command = el.getAttribute(COMMAND_ATTR);
+    const payload = el.getAttribute(PAYLOAD_ATTR);
+    if (!command) return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    const c = controller();
+    if (c) c.reset();
+    runtime.run(command, payload === null ? undefined : payload);
+    if (runtime.overlays.isOpen) runtime.overlays.closeAll();
+  };
+
+  root.addEventListener('input', onInput, true);
+  root.addEventListener('keydown', onKeyDown, true);
+  root.addEventListener('click', onClick, false);
+
+  return () => {
+    root.removeEventListener('input', onInput, true);
+    root.removeEventListener('keydown', onKeyDown, true);
+    root.removeEventListener('click', onClick, false);
+  };
+}
+
+/**
+ * @param {any} el
+ * @returns {boolean}
+ */
+function isJumpInput(el) {
+  return !!(el && typeof el.hasAttribute === 'function' && el.hasAttribute(JUMP_INPUT_ATTR));
+}
+
+__exports["installBranchInputBridge"] = installBranchInputBridge;
+};
+__modules["branch/walk.js"] = function (__exports, __require) {
+/**
+ * Seeded random walks over the navigation reducer (§17.8, §22.4).
+ *
+ * §22.4 says the return stack is one of the six things most likely to be wrong,
+ * and §17.8 says the answer is a property test: "random walks of jumps and
+ * returns always terminate on the spine, never on an orphan". This file is the
+ * engine of that test — and it is in `src/`, not in the test tree, because the
+ * studio's rehearsal mode drives the same walks to shake a deck out before
+ * anybody stands in front of a room with it.
+ *
+ * Every draw comes from a named PCG32 substream (`branch/walk/*`), so a failing
+ * walk is reproducible from its seed alone: the seed is the bug report.
+ *
+ * @module branch/walk
+ */
+
+const { SeedBook } = __require("core/prng.js");
+const { SPINE, allBranches, branchesFrom, sceneAt } = __require("runtime/deck.js");
+const { initialState, navigate, currentScene, beatsOf } = __require("runtime/nav.js");
+
+/**
+ * The action mix. Weighted towards forward motion because that is what a
+ * presentation is: mostly `space`, with detours. A uniform mix would spend the
+ * walk thrashing the stack and would never test a long forward run through a
+ * branch, which is where the automatic exit (D15) lives.
+ */
+const WALK_WEIGHTS = [
+  { kind: 'nextBeat', weight: 38 },
+  { kind: 'prevBeat', weight: 12 },
+  { kind: 'nextScene', weight: 8 },
+  { kind: 'prevScene', weight: 5 },
+  { kind: 'jumpAnchored', weight: 15 },
+  { kind: 'jumpAny', weight: 6 },
+  { kind: 'return', weight: 8 },
+  { kind: 'returnToSpine', weight: 3 },
+  { kind: 'goToScene', weight: 3 },
+  { kind: 'firstScene', weight: 1 },
+  { kind: 'lastScene', weight: 1 },
+];
+
+const TOTAL_WEIGHT = WALK_WEIGHTS.reduce((n, w) => n + w.weight, 0);
+
+/**
+ * @typedef {object} WalkOptions
+ * @property {string|number|bigint} [seed]
+ * @property {number} [steps]
+ * @property {boolean} [anchoredOnly]  only jump to branches the current scene offers
+ * @property {string} [stream]         substream name suffix, for independent walks off one seed
+ * @property {(state: import('../runtime/nav.js').NavState, action: object, previous: import('../runtime/nav.js').NavState) => boolean} [haltOn]
+ *   Stop the walk the moment a produced state satisfies this predicate. The
+ *   offending state is reported in `halted` rather than appended, so everything
+ *   in `states` is a state the caller has already accepted. Rehearsal uses it to
+ *   stop at the first anomaly instead of walking on through the wreckage; the
+ *   §17.8 property test uses it to fence a known reducer defect without
+ *   loosening a single assertion about everything else.
+ */
+
+/**
+ * A seeded walk, with the action taken at every step.
+ *
+ * `states[0]` is the opening state and `states[i]` is the state after
+ * `actions[i - 1]`, so a failure can be replayed exactly.
+ *
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {WalkOptions} [options]
+ * @returns {{states: import('../runtime/nav.js').NavState[], actions: object[], maxDepth: number, sequencesVisited: Set<string>, scenesVisited: Set<string>, halted: {step: number, state: import('../runtime/nav.js').NavState, action: object, previous: import('../runtime/nav.js').NavState}|null}}
+ */
+function randomWalkTrace(deck, options = {}) {
+  const steps = Math.max(0, options.steps === undefined ? 200 : options.steps | 0);
+  const seed = options.seed === undefined ? 'branch/walk' : options.seed;
+  const rng = new SeedBook(seed).stream(`branch/walk/${options.stream || 'default'}`);
+  const branches = allBranches(deck).filter((b) => b.scenes.length > 0);
+  const sceneIds = [...deck.sceneLocator.keys()];
+
+  let state = initialState(deck);
+  /** @type {import('../runtime/nav.js').NavState[]} */
+  const states = [state];
+  /** @type {object[]} */
+  const actions = [];
+  let maxDepth = 0;
+  const sequencesVisited = new Set([state.sequenceId]);
+  const scenesVisited = new Set();
+  const first = currentScene(deck, state);
+  if (first) scenesVisited.add(first.id);
+
+  /** @type {{step: number, state: import('../runtime/nav.js').NavState, action: object, previous: import('../runtime/nav.js').NavState}|null} */
+  let halted = null;
+
+  for (let i = 0; i < steps; i++) {
+    const action = pickAction(deck, state, rng, branches, sceneIds, !!options.anchoredOnly);
+    const previous = state;
+    state = navigate(deck, state, action);
+    if (options.haltOn && options.haltOn(state, action, previous)) {
+      halted = { step: i + 1, state, action, previous };
+      break;
+    }
+    actions.push(action);
+    states.push(state);
+    if (state.stack.length > maxDepth) maxDepth = state.stack.length;
+    sequencesVisited.add(state.sequenceId);
+    const scene = currentScene(deck, state);
+    if (scene) scenesVisited.add(scene.id);
+  }
+
+  return { states, actions, maxDepth, sequencesVisited, scenesVisited, halted };
+}
+
+/**
+ * The §17.8 walk: the state after every step, opening state first.
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {WalkOptions} [options]
+ * @returns {import('../runtime/nav.js').NavState[]}
+ */
+function randomWalk(deck, options = {}) {
+  return randomWalkTrace(deck, options).states;
+}
+
+/**
+ * Choose one action for the current state.
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {import('../runtime/nav.js').NavState} state
+ * @param {import('../core/prng.js').Pcg32} rng
+ * @param {import('../runtime/deck.js').Sequence[]} branches
+ * @param {string[]} sceneIds
+ * @param {boolean} anchoredOnly
+ * @returns {import('../runtime/nav.js').NavAction}
+ */
+function pickAction(deck, state, rng, branches, sceneIds, anchoredOnly) {
+  let roll = rng.nextInt(TOTAL_WEIGHT);
+  let kind = WALK_WEIGHTS[WALK_WEIGHTS.length - 1].kind;
+  for (const w of WALK_WEIGHTS) {
+    if (roll < w.weight) { kind = w.kind; break; }
+    roll -= w.weight;
+  }
+
+  switch (kind) {
+    case 'jumpAnchored': {
+      const scene = currentScene(deck, state);
+      const here = scene ? branchesFrom(deck, scene.id).filter((b) => b.scenes.length > 0) : [];
+      if (here.length === 0) return anchoredOnly ? { type: 'nextBeat' } : anyJump(rng, branches, state);
+      return { type: 'jump', branchId: rng.pick(here).id };
+    }
+    case 'jumpAny': {
+      // The jump index reaches any branch from any scene (§11), which is
+      // precisely how a stack gets deep in a real room.
+      if (anchoredOnly) return { type: 'nextBeat' };
+      return anyJump(rng, branches, state);
+    }
+    case 'goToScene': {
+      // `goToScene` into another branch is a jump in disguise (the reducer
+      // pushes a frame for it), so an anchored-only walk may only address the
+      // spine — otherwise the walk could nest deeper than the deck was
+      // authored to nest, and the depth bound it exists to check would be
+      // measuring the walk rather than the reducer.
+      const pool = anchoredOnly ? deck.spine.scenes.map((s) => s.id) : sceneIds;
+      if (pool.length === 0) return { type: 'nextBeat' };
+      return { type: 'goToScene', sceneId: rng.pick(pool) };
+    }
+    default:
+      return /** @type {import('../runtime/nav.js').NavAction} */ ({ type: kind });
+  }
+}
+
+/**
+ * @param {import('../core/prng.js').Pcg32} rng
+ * @param {import('../runtime/deck.js').Sequence[]} branches
+ * @param {import('../runtime/nav.js').NavState} state
+ * @returns {import('../runtime/nav.js').NavAction}
+ */
+function anyJump(rng, branches, state) {
+  if (branches.length === 0) return { type: 'nextBeat' };
+  const target = rng.pick(branches);
+  if (target.id === state.sequenceId) return { type: 'nextBeat' };
+  return { type: 'jump', branchId: target.id };
+}
+
+/**
+ * Drive a state to the end of the pitch the way a presenter would when the
+ * detour is over: back to the spine, then forward until the deck holds.
+ *
+ * Returns the terminal state and the path taken. §17.8 asserts the terminal
+ * state is always the last beat of the last spine scene with an empty stack —
+ * which is the formal statement of "the presenter is never stranded".
+ *
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {import('../runtime/nav.js').NavState} start
+ * @param {{maxSteps?: number}} [options]
+ * @returns {{state: import('../runtime/nav.js').NavState, steps: number, states: import('../runtime/nav.js').NavState[]}}
+ */
+function driveToSpineEnd(deck, start, options = {}) {
+  const positions = [...deck.sequences.values()]
+    .reduce((n, seq) => n + seq.scenes.reduce((m, sc) => m + beatsOf(sc), 0), 0);
+  const cap = options.maxSteps === undefined ? Math.max(16, positions * 4 + 16) : options.maxSteps;
+
+  let state = start;
+  /** @type {import('../runtime/nav.js').NavState[]} */
+  const states = [];
+  let steps = 0;
+
+  // `r` unwinds the whole stack in one step, however deep the nesting went.
+  while (state.stack.length > 0 && steps < cap) {
+    state = navigate(deck, state, { type: 'returnToSpine' });
+    states.push(state);
+    steps++;
+  }
+
+  for (; steps < cap; steps++) {
+    const next = navigate(deck, state, { type: 'nextBeat' });
+    if (samePosition(next, state)) break;
+    state = next;
+    states.push(state);
+  }
+
+  return { state, steps, states };
+}
+
+/**
+ * @param {import('../runtime/nav.js').NavState} a
+ * @param {import('../runtime/nav.js').NavState} b
+ * @returns {boolean}
+ */
+function samePosition(a, b) {
+  return a.sequenceId === b.sequenceId && a.sceneIndex === b.sceneIndex && a.beatIndex === b.beatIndex
+    && a.stack.length === b.stack.length;
+}
+
+/**
+ * Is this state a legal, non-orphan position in the deck? The property test
+ * calls it on every step: the position must name a real scene and a real beat,
+ * the stack must be empty exactly when the spine is active, and every frame
+ * must name a real position too.
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {import('../runtime/nav.js').NavState} state
+ * @returns {string[]}  empty when the state is sound
+ */
+function orphanReasons(deck, state) {
+  /** @type {string[]} */
+  const bad = [];
+  const seq = deck.sequences.get(state.sequenceId);
+  if (!seq) { bad.push(`unknown sequence ${state.sequenceId}`); return bad; }
+  const scene = sceneAt(deck, state.sequenceId, state.sceneIndex);
+  if (!scene) bad.push(`no scene at ${state.sequenceId}[${state.sceneIndex}]`);
+  else if (state.beatIndex < 0 || state.beatIndex >= beatsOf(scene)) {
+    bad.push(`beat ${state.beatIndex} outside scene ${scene.id}`);
+  }
+  if (state.stack.length < 0) bad.push('negative stack depth');
+  if ((state.stack.length === 0) !== (state.sequenceId === SPINE)) {
+    bad.push(`stack depth ${state.stack.length} with sequence ${state.sequenceId}`);
+  }
+  state.stack.forEach((frame, i) => {
+    const frameScene = sceneAt(deck, frame.sequenceId, frame.sceneIndex);
+    if (!frameScene) bad.push(`frame ${i} points at ${frame.sequenceId}[${frame.sceneIndex}] which is not a scene`);
+    else if (frame.beatIndex < 0 || frame.beatIndex >= beatsOf(frameScene)) {
+      bad.push(`frame ${i} beat ${frame.beatIndex} outside ${frameScene.id}`);
+    }
+    if (frame.returnPolicy !== 'anchor' && frame.returnPolicy !== 'nextSpineScene') {
+      bad.push(`frame ${i} carries return policy ${frame.returnPolicy}`);
+    }
+  });
+  if (state.stack.length > 0 && state.stack[0].sequenceId !== SPINE) {
+    bad.push('the bottom frame is not on the spine');
+  }
+  return bad;
+}
+
+__exports["WALK_WEIGHTS"] = WALK_WEIGHTS;
+__exports["randomWalkTrace"] = randomWalkTrace;
+__exports["randomWalk"] = randomWalk;
+__exports["driveToSpineEnd"] = driveToSpineEnd;
+__exports["samePosition"] = samePosition;
+__exports["orphanReasons"] = orphanReasons;
+};
+__modules["branch/index.js"] = function (__exports, __require) {
+/**
+ * L9 Branches — the branch graph, the jump index, the return stack and the
+ * three overlays that make a branchable pitch navigable in a live room
+ * (§2, §11, §12, §17.8, §22.4).
+ *
+ * The surface below is the one `API.md` declares. Everything else in this
+ * directory is an implementation detail no other lane may reach into.
+ *
+ * @module branch
+ */
+
+
+
+
+
+
+
+
+__exports["buildJumpIndex"] = __require("branch/jump-index.js").buildJumpIndex;
+__exports["searchJump"] = __require("branch/jump-index.js").searchJump;
+__exports["highlightRuns"] = __require("branch/jump-index.js").highlightRuns;
+__exports["FIELD_WEIGHT"] = __require("branch/jump-index.js").FIELD_WEIGHT;
+__exports["STRATEGY_SCORE"] = __require("branch/jump-index.js").STRATEGY_SCORE;
+__exports["DEFAULT_LIMIT"] = __require("branch/jump-index.js").DEFAULT_LIMIT;
+__exports["registerBranchOverlays"] = __require("branch/overlays.js").registerBranchOverlays;
+__exports["JumpController"] = __require("branch/overlays.js").JumpController;
+__exports["renderJumpOverlay"] = __require("branch/overlays.js").renderJumpOverlay;
+__exports["renderMapOverlay"] = __require("branch/overlays.js").renderMapOverlay;
+__exports["renderContentsOverlay"] = __require("branch/overlays.js").renderContentsOverlay;
+__exports["sceneTitle"] = __require("branch/overlays.js").sceneTitle;
+__exports["JUMP_INPUT_ATTR"] = __require("branch/overlays.js").JUMP_INPUT_ATTR;
+__exports["COMMAND_ATTR"] = __require("branch/overlays.js").COMMAND_ATTR;
+__exports["PAYLOAD_ATTR"] = __require("branch/overlays.js").PAYLOAD_ATTR;
+__exports["installBranchInputBridge"] = __require("branch/bridge.js").installBranchInputBridge;
+__exports["returnTargetFor"] = __require("branch/graph.js").returnTargetFor;
+__exports["branchCoverage"] = __require("branch/graph.js").branchCoverage;
+__exports["anchorsOf"] = __require("branch/graph.js").anchorsOf;
+__exports["primaryAnchor"] = __require("branch/graph.js").primaryAnchor;
+__exports["nestingDepths"] = __require("branch/graph.js").nestingDepths;
+__exports["branchGraph"] = __require("branch/graph.js").branchGraph;
+__exports["liveReturnTarget"] = __require("branch/graph.js").liveReturnTarget;
+__exports["randomWalk"] = __require("branch/walk.js").randomWalk;
+__exports["randomWalkTrace"] = __require("branch/walk.js").randomWalkTrace;
+__exports["driveToSpineEnd"] = __require("branch/walk.js").driveToSpineEnd;
+__exports["orphanReasons"] = __require("branch/walk.js").orphanReasons;
+__exports["samePosition"] = __require("branch/walk.js").samePosition;
+__exports["WALK_WEIGHTS"] = __require("branch/walk.js").WALK_WEIGHTS;
+__exports["fold"] = __require("branch/text.js").fold;
+__exports["tokenize"] = __require("branch/text.js").tokenize;
+__exports["charGrams"] = __require("branch/text.js").charGrams;
+__exports["acronyms"] = __require("branch/text.js").acronyms;
+__exports["boundedEditDistance"] = __require("branch/text.js").boundedEditDistance;
+__exports["boundedPrefixDistance"] = __require("branch/text.js").boundedPrefixDistance;
+__exports["typoBudget"] = __require("branch/text.js").typoBudget;
+};
+__modules["artifact.js"] = function (__exports, __require) {
+/**
+ * The artifact composition root.
+ *
+ * `src/runtime/**` is deliberately layout-agnostic and branch-agnostic: L8
+ * registers layouts *into* the runtime's registry and L9 registers overlays
+ * *onto* a runtime instance, so both depend on the runtime and the runtime
+ * depends on neither. That is the right layering, and it leaves exactly one
+ * thing unowned — somebody has to put the three together before an artifact
+ * boots.
+ *
+ * This file is that somebody. It belongs to no lane; it is the integration
+ * seam, and it is the entry `scripts/build.mjs` bundles into
+ * `dist/pitchproof-runtime.js`.
+ *
+ * It exists because of a defect that only appears at the seam and is invisible
+ * to every lane's own tests: an emitted artifact painted correctly on open,
+ * because the emitter pre-renders the opening beat as static HTML — and then
+ * the presenter's first keypress made the runtime re-render, found no layout
+ * registered, and replaced the client's own content with "Layout not
+ * registered". `/` and `m` opened nothing. Each lane was green.
+ *
+ * The public surface is identical to `src/runtime/index.js`, so the emitter's
+ * `PitchProofRuntime.boot(...)` call is unchanged; `boot` here just wires the
+ * branch overlays onto the runtime it creates.
+ *
+ * @module artifact
+ */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const { Runtime } = __require("runtime/runtime.js");
+const { RuntimeHost, STAGE_ROOT_ID } = __require("runtime/host.js");
+const { openPresenterWindow } = __require("runtime/presenter.js");
+const { registerAllLayouts } = __require("scene/index.js");
+const { registerBranchOverlays } = __require("branch/index.js");
+const { installBranchInputBridge } = __require("branch/bridge.js");
+
+// Layouts are registered into a module-level registry, so this runs once, at
+// module evaluation, before anything can render.
+registerAllLayouts();
+
+/**
+ * Boot an emitted artifact.
+ *
+ * The emitted document already contains the opening beat as static HTML, so by
+ * the time this runs the client is already looking at the first scene. All this
+ * does is make the keyboard work — including `/`, `m` and `c`, which need the
+ * branch overlays registered onto this particular runtime.
+ *
+ * @param {object} args
+ * @param {import('./core/contracts.d.ts').Proof} args.proof
+ * @param {Document} args.document
+ * @param {Window} [args.window]
+ * @param {Element} [args.root]
+ * @param {() => number} [args.nowMs]  clock for the presenter's manual timer
+ * @returns {{runtime: Runtime, host: RuntimeHost, presenter: {close: () => void}|null, dispose: () => void}}
+ */
+function boot({ proof, document: doc, window: win, root, nowMs }) {
+  const view = win || doc.defaultView;
+  const reducedMotion = !!(view && view.matchMedia && view.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+  const runtime = new Runtime(proof, { reducedMotion });
+  const host = new RuntimeHost(runtime, {
+    document: doc,
+    window: view,
+    root: root || doc.getElementById(STAGE_ROOT_ID) || doc.body,
+  }).attach();
+
+  // Overlays are per-runtime, and the input bridge listens on the document, so
+  // both are wired after the host has attached and painted.
+  const offOverlays = registerBranchOverlays(runtime);
+  const offBridge = installBranchInputBridge(runtime, { document: doc, root: host.root });
+
+  /** @type {{close: () => void}|null} */
+  let presenter = null;
+  runtime.on('presenter', ({ open }) => {
+    if (open && !presenter) {
+      const clock = nowMs || (view && view.performance
+        ? () => view.performance.now()   // determinism-quarantine: presenter stopwatch display only
+        : () => 0);
+      const opened = openPresenterWindow(runtime, { window: view, nowMs: clock });
+      presenter = opened.opened ? opened : null;
+      if (!opened.opened) runtime.presenterOpen = false;
+    } else if (!open && presenter) {
+      presenter.close();
+      presenter = null;
+    }
+  });
+
+  const dispose = () => {
+    if (presenter) { presenter.close(); presenter = null; }
+    offBridge();
+    offOverlays();
+    host.detach();
+  };
+
+  return { runtime, host, presenter, dispose };
+}
+
+__exports["buildDeck"] = __require("runtime/index.js").buildDeck;
+__exports["SPINE"] = __require("runtime/index.js").SPINE;
+__exports["sequenceOf"] = __require("runtime/index.js").sequenceOf;
+__exports["sceneAt"] = __require("runtime/index.js").sceneAt;
+__exports["branchesFrom"] = __require("runtime/index.js").branchesFrom;
+__exports["allBranches"] = __require("runtime/index.js").allBranches;
+__exports["beatCount"] = __require("runtime/index.js").beatCount;
+__exports["initialState"] = __require("runtime/index.js").initialState;
+__exports["navigate"] = __require("runtime/index.js").navigate;
+__exports["checkInvariants"] = __require("runtime/index.js").checkInvariants;
+__exports["NavInvariantError"] = __require("runtime/index.js").NavInvariantError;
+__exports["beatsOf"] = __require("runtime/index.js").beatsOf;
+__exports["offSpine"] = __require("runtime/index.js").offSpine;
+__exports["currentScene"] = __require("runtime/index.js").currentScene;
+__exports["peekNext"] = __require("runtime/index.js").peekNext;
+__exports["stateHash"] = __require("runtime/index.js").stateHash;
+__exports["allPositions"] = __require("runtime/index.js").allPositions;
+__exports["revealedAt"] = __require("runtime/index.js").revealedAt;
+__exports["newlyRevealedAt"] = __require("runtime/index.js").newlyRevealedAt;
+__exports["sceneRevealsNothing"] = __require("runtime/index.js").sceneRevealsNothing;
+__exports["visibilityOf"] = __require("runtime/index.js").visibilityOf;
+__exports["scrollTargetFor"] = __require("runtime/index.js").scrollTargetFor;
+__exports["beatFrame"] = __require("runtime/index.js").beatFrame;
+__exports["beatSignature"] = __require("runtime/index.js").beatSignature;
+__exports["transitionMs"] = __require("runtime/index.js").transitionMs;
+__exports["dwellHintLabel"] = __require("runtime/index.js").dwellHintLabel;
+__exports["REVEAL_ATTR"] = __require("runtime/index.js").REVEAL_ATTR;
+__exports["REVEALED_CLASS"] = __require("runtime/index.js").REVEALED_CLASS;
+__exports["ENTERING_CLASS"] = __require("runtime/index.js").ENTERING_CLASS;
+__exports["EXIT_TRANSITION_MS"] = __require("runtime/index.js").EXIT_TRANSITION_MS;
+__exports["BINDINGS"] = __require("runtime/index.js").BINDINGS;
+__exports["resolveKey"] = __require("runtime/index.js").resolveKey;
+__exports["bindingGroups"] = __require("runtime/index.js").bindingGroups;
+__exports["keyLabel"] = __require("runtime/index.js").keyLabel;
+__exports["allCommands"] = __require("runtime/index.js").allCommands;
+__exports["OverlayStack"] = __require("runtime/index.js").OverlayStack;
+__exports["OVERLAY"] = __require("runtime/index.js").OVERLAY;
+__exports["trapFocus"] = __require("runtime/index.js").trapFocus;
+__exports["focusableWithin"] = __require("runtime/index.js").focusableWithin;
+__exports["FOCUSABLE_SELECTOR"] = __require("runtime/index.js").FOCUSABLE_SELECTOR;
+__exports["registerLayout"] = __require("runtime/index.js").registerLayout;
+__exports["getLayout"] = __require("runtime/index.js").getLayout;
+__exports["registeredLayouts"] = __require("runtime/index.js").registeredLayouts;
+__exports["missingLayouts"] = __require("runtime/index.js").missingLayouts;
+__exports["resetLayouts"] = __require("runtime/index.js").resetLayouts;
+__exports["renderLayout"] = __require("runtime/index.js").renderLayout;
+__exports["placeholderLayout"] = __require("runtime/index.js").placeholderLayout;
+__exports["Runtime"] = __require("runtime/index.js").Runtime;
+__exports["applyBeat"] = __require("runtime/index.js").applyBeat;
+__exports["renderHelpOverlay"] = __require("runtime/index.js").renderHelpOverlay;
+__exports["RuntimeHost"] = __require("runtime/index.js").RuntimeHost;
+__exports["STAGE_ROOT_ID"] = __require("runtime/index.js").STAGE_ROOT_ID;
+__exports["PRERENDERED_ATTR"] = __require("runtime/index.js").PRERENDERED_ATTR;
+__exports["isTextEntry"] = __require("runtime/index.js").isTextEntry;
+__exports["cssEscape"] = __require("runtime/index.js").cssEscape;
+__exports["firstPaintTree"] = __require("runtime/index.js").firstPaintTree;
+__exports["renderToNode"] = __require("runtime/index.js").renderToNode;
+__exports["ManualTimer"] = __require("runtime/index.js").ManualTimer;
+__exports["renderPresenterView"] = __require("runtime/index.js").renderPresenterView;
+__exports["openPresenterWindow"] = __require("runtime/index.js").openPresenterWindow;
+__exports["PRESENTER_CSS"] = __require("runtime/index.js").PRESENTER_CSS;
+__exports["PRESENTER_WINDOW_NAME"] = __require("runtime/index.js").PRESENTER_WINDOW_NAME;
+__exports["RUNTIME_VERSION"] = __require("runtime/index.js").RUNTIME_VERSION;
+__exports["registerAllLayouts"] = __require("scene/index.js").registerAllLayouts;
+__exports["sceneTemplates"] = __require("scene/index.js").sceneTemplates;
+__exports["buildScene"] = __require("scene/index.js").buildScene;
+__exports["measureScene"] = __require("scene/index.js").measureScene;
+__exports["PROVENANCE_LABEL_CLASS"] = __require("scene/index.js").PROVENANCE_LABEL_CLASS;
+__exports["buildJumpIndex"] = __require("branch/index.js").buildJumpIndex;
+__exports["searchJump"] = __require("branch/index.js").searchJump;
+__exports["registerBranchOverlays"] = __require("branch/index.js").registerBranchOverlays;
+__exports["returnTargetFor"] = __require("branch/index.js").returnTargetFor;
+__exports["branchCoverage"] = __require("branch/index.js").branchCoverage;
+__exports["boot"] = boot;
+};
+var __entry = __require("artifact.js");
 if (typeof globalThis !== "undefined") globalThis["PitchProofRuntime"] = __entry;
 return __entry;
 })();

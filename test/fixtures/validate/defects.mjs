@@ -221,7 +221,9 @@ export function defectProof(code) {
 
     case 'FONT_UNAVAILABLE':
       p.brand.faces[1].family = 'Recursive Display';
-      p.brand.faces[1].fallbackStack = ['Recursive Display', 'Arial', 'sans-serif'];
+      // No usable fallback declared: the artifact would land on whatever the
+      // machine's default sans happens to be.
+      p.brand.faces[1].fallbackStack = ['Recursive Display'];
       return p;
 
     case 'TEXT_OVERFLOW':

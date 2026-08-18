@@ -380,6 +380,7 @@ export function srcUrls(value) {
  * @property {number} occurrences       declarations naming this family
  * @property {number} stackPosition     lowest index the family took in a stack
  * @property {boolean} monoGeneric      appeared in a stack ending in a monospace generic
+ * @property {Set<string>} generics     every CSS generic that followed it in a stack
  * @property {boolean} webfontLinked    named by a webfont host
  * @property {string[]} hosts
  * @property {Record<string, number>} spellings
@@ -396,8 +397,8 @@ function evidenceFor(index, family) {
   if (!ev) {
     ev = {
       family, key, weights: new Set(), sources: new Set(), selectors: [], sizesPx: [],
-      occurrences: 0, stackPosition: 99, monoGeneric: false, webfontLinked: false,
-      hosts: [], spellings: {},
+      occurrences: 0, stackPosition: 99, monoGeneric: false, generics: new Set(),
+      webfontLinked: false, hosts: [], spellings: {},
     };
     index.set(key, ev);
   }
@@ -529,7 +530,7 @@ function recordDeclarations(index, decl, selector, rootFontSizePx, source, onDec
   const weights = parseFontWeight(decl['font-weight'] || '');
   const sizePx = decl['font-size'] !== undefined ? parseFontSize(decl['font-size'], { rootFontSizePx }) : null;
 
-  /** @param {{families: string[], monoGeneric: boolean}} parsed @param {number[]} w @param {number|null} size */
+  /** @param {{families: string[], generics: string[], monoGeneric: boolean}} parsed @param {number[]} w @param {number|null} size */
   const apply = (parsed, w, size) => {
     parsed.families.forEach((family, i) => {
       const ev = evidenceFor(index, family);
@@ -538,6 +539,7 @@ function recordDeclarations(index, decl, selector, rootFontSizePx, source, onDec
       ev.selectors.push(selector);
       ev.stackPosition = Math.min(ev.stackPosition, i);
       if (parsed.monoGeneric) ev.monoGeneric = true;
+      for (const generic of parsed.generics) ev.generics.add(generic);
       for (const weight of w) ev.weights.add(weight);
       if (size !== null && size > 0) ev.sizesPx.push(size);
       onDeclaration();
@@ -555,6 +557,86 @@ function recordDeclarations(index, decl, selector, rootFontSizePx, source, onDec
   // A `font-weight` or `font-size` on a rule that does not name a family still
   // belongs to whatever family the selector inherits, which this module cannot
   // resolve — so it is deliberately not attributed to anyone.
+}
+
+/**
+ * The concrete family whose published metrics stand in for an unknown family of
+ * each category. These are the same representatives `core/text-metrics.js`
+ * falls back to, so a declared generic and a guessed category never disagree
+ * about which table they mean.
+ */
+export const CATEGORY_PROXY = { sans: 'Arial', serif: 'Times New Roman', mono: 'Courier New' };
+
+/** CSS generics, mapped to the category they declare. */
+const GENERIC_CATEGORY = {
+  serif: 'serif', 'ui-serif': 'serif',
+  'sans-serif': 'sans', 'ui-sans-serif': 'sans', 'system-ui': 'sans', 'ui-rounded': 'sans',
+  monospace: 'mono', 'ui-monospace': 'mono',
+};
+
+/**
+ * The category a page's own stacks declare for a family, or null when they
+ * declare none. `font-family: "Canela", Georgia, serif` is the designer stating
+ * that Canela is a serif, and that statement is better evidence than any guess
+ * made from the name.
+ * @param {FaceEvidence} ev
+ * @returns {'sans'|'serif'|'mono'|null}
+ */
+export function declaredCategory(ev) {
+  /** @type {Record<string, number>} */
+  const votes = { sans: 0, serif: 0, mono: 0 };
+  for (const generic of ev.generics || []) {
+    const category = GENERIC_CATEGORY[generic];
+    if (category) votes[category] += 1;
+  }
+  const ranked = Object.entries(votes).filter(([, n]) => n > 0).sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]));
+  return ranked.length ? /** @type {any} */ (ranked[0][0]) : null;
+}
+
+/**
+ * Resolve a face, preferring the category the page declared over the category
+ * guessed from the family's name — but only when this build has no published
+ * metrics for the family. A known family's own metrics always win.
+ *
+ * When the declared category is used, the family's metrics are assumed to be
+ * `CATEGORY_PROXY[category]`'s, which is exactly what `metricsFor` already does
+ * for an unknown family; the only thing that changes is *which* category's model
+ * it borrows, and therefore which families the fallback stack offers. A display
+ * serif that would otherwise fall back to Arial falls back to a serif instead,
+ * which is the §22.2 defect avoided rather than measured.
+ *
+ * @param {string} family
+ * @param {FaceEvidence} ev
+ * @param {string[]} available
+ * @param {number} weight
+ * @returns {{resolution: any, assumedFamily: string, category: string, categorySource: 'metrics'|'declared-generic'|'name'}}
+ */
+export function resolveWithDeclaredCategory(family, ev, available, weight) {
+  const base = resolveFace(family, { available, weight });
+  const metrics = metricsFor(family, weight);
+  const declared = declaredCategory(ev);
+  if (metrics.known) return { resolution: base, assumedFamily: family, category: metrics.category, categorySource: 'metrics' };
+  if (declared === null || declared === metrics.category) {
+    return { resolution: base, assumedFamily: family, category: metrics.category, categorySource: 'name' };
+  }
+
+  const proxy = CATEGORY_PROXY[declared];
+  const proxyResolution = resolveFace(proxy, { available, weight });
+  /** @type {string[]} */
+  const stack = [family];
+  for (const entry of proxyResolution.stack) {
+    if (normalizeFamily(entry) !== normalizeFamily(family)) stack.push(entry);
+  }
+  const resolved = base.available ? family : proxyResolution.resolved;
+  const delta = base.available
+    ? { capHeight: 1, xHeight: 1, avgAdvance: 1 }
+    : metricDelta(proxy, resolved, weight);
+  return {
+    resolution: { ...base, stack, resolved, metricDelta: delta },
+    assumedFamily: proxy,
+    category: declared,
+    categorySource: 'declared-generic',
+  };
 }
 
 // ---------------------------------------------------------------- role solve
@@ -575,7 +657,7 @@ function recordDeclarations(index, decl, selector, rootFontSizePx, source, onDec
  */
 export function scoreRole(ev) {
   const model = lookupFamily(ev.family);
-  const category = model ? model.category : guessCategory(ev.family);
+  const category = model ? model.category : (declaredCategory(ev) || guessCategory(ev.family));
   /** @type {RoleScores} */
   const scores = { display: 0, body: 0, mono: 0 };
 
@@ -698,16 +780,16 @@ export function faceFromEvidence(ev, available) {
 
   const weightsSeen = [...ev.weights].sort((a, b) => a - b);
   const primaryWeight = representativeWeight(weightsSeen);
-  const resolution = resolveFace(family, { available, weight: primaryWeight });
+  const resolved = resolveWithDeclaredCategory(family, ev, available, primaryWeight);
+  const resolution = resolved.resolution;
   const { role, scores, margin } = scoreRole({ ...ev, family });
-  const metrics = metricsFor(family, primaryWeight);
 
   return {
     family,
     fallbackStack: resolution.stack,
     weightsSeen: weightsSeen.length ? weightsSeen : [400],
     role,
-    metricDelta: metricDelta(family, resolution.resolved, primaryWeight),
+    metricDelta: resolution.metricDelta,
     // §7/§18: detection never makes a face embeddable. Only `attachUserFont`
     // does, and only against a recorded rights assertion.
     embeddable: false,
@@ -715,7 +797,9 @@ export function faceFromEvidence(ev, available) {
     resolved: resolution.resolved,
     available: resolution.available,
     known: resolution.known,
-    category: metrics.category,
+    category: resolved.category,
+    categorySource: resolved.categorySource,
+    assumedFamily: resolved.assumedFamily,
     primaryWeight,
     confidence: faceConfidence(ev, resolution),
     roleScores: scores,

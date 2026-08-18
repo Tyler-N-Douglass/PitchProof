@@ -158,6 +158,7 @@ export function collectTextBoxes(node, env) {
         containerId: `${slot}#${ordinal}`,
         widthPx: size.widthPx,
         heightPx: size.heightPx,
+        scaleN: params.n || next.scaleN,
       };
     }
 
@@ -178,7 +179,12 @@ export function collectTextBoxes(node, env) {
       if (text.trim()) {
         const spec = TYPE_ROLES[role];
         if (!spec) throw new Error(`scene/measure: element declares unknown text role "${role}"`);
-        const resolved = styleForRole(role, bp, brand, { scale: spec.svg ? mapScale(bp) : 1 });
+        // SVG roles are drawn in design units and scale with the drawing, whose
+        // scale depends on how many legend chips sit under it — the count the
+        // element carries as `data-pp-n`.
+        const resolved = styleForRole(role, bp, brand, {
+          scale: spec.svg ? mapScale(bp, next.scaleN) : 1,
+        });
         /** @type {MeasuredBox} */
         const box = {
           elementId: next.elementId,
@@ -213,6 +219,7 @@ export function collectTextBoxes(node, env) {
     containerId: 'stage#0',
     widthPx: root.widthPx,
     heightPx: root.heightPx,
+    scaleN: 1,
   });
   return boxes;
 }

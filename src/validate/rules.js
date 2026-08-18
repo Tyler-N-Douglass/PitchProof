@@ -29,7 +29,7 @@ import { utf8Length, parseDataUri } from '../core/bytes.js';
 import { sceneRevealsNothing } from '../runtime/beats.js';
 import { makeFinding, sortFindings } from './finding.js';
 import { severityOf } from './severity.js';
-import { detectOverflow, faceResolutions } from './overflow.js';
+import { detectOverflow, faceResolutions, resolveBoxFace } from './overflow.js';
 import { checkContrast } from './contrast.js';
 import {
   hasPromotionRecord, reviewReachable, renderedRenditionIds, scenesShowing,
@@ -295,19 +295,27 @@ const fontUnavailable = {
     const out = [];
     for (const { face, resolution } of faceResolutions(proof.brand || { faces: [] })) {
       if (resolution.available) continue;
+      // A fix is only offered when the recommended stack differs from the one
+      // the brand already declares. A face that is simply absent, with a
+      // fallback stack that is already the best available, has nothing to fix —
+      // and offering a no-op fix is how an auto-fix panel loses its meaning.
+      const recommended = resolution.stack;
+      const declared = face.fallbackStack || [];
+      const improvable = recommended.length !== declared.length
+        || recommended.some((name, i) => name !== declared[i]);
       const delta = resolution.metricDelta.avgAdvance;
       const drift = `${delta > 1 ? '+' : ''}${((delta - 1) * 100).toFixed(1)}%`;
       const confidence = `${Math.round(resolution.confidence * 100)}%`;
       out.push(makeFinding({
         code: 'FONT_UNAVAILABLE',
         key: `face:${face.family}:${face.role}`,
-        autoFixAvailable: true,
+        autoFixAvailable: improvable,
         message: `The ${face.role} face "${face.family}" is not embeddable and is not a system family, so the artifact will render it in ${resolution.resolved} (${drift} average advance, ${confidence} confidence in the metrics). Every measurement in preflight already assumes that substitution; supply a licensed font file to embed, or accept the fallback and check the overflow findings.`,
         detail: {
           family: face.family, role: face.role, resolved: resolution.resolved,
           stack: resolution.stack, metricDelta: resolution.metricDelta,
           known: resolution.known, confidence: resolution.confidence,
-          embeddable: face.embeddable === true,
+          embeddable: face.embeddable === true, recommendedStack: recommended,
         },
       }));
     }

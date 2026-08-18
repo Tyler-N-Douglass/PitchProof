@@ -19,7 +19,7 @@ export { PROVENANCE_LABEL_CLASS, PROVENANCE_LABEL_TEXT, needsProvenanceLabel, pr
 // Geometry, tokens and the type scale, so L11 can reason about a box it was
 // handed and L12 can lay the studio's preview out at true aspect without
 // guessing at the artifact's numbers.
-export { stageBox, boxGeometry, breakpointId, mapScale, fanColumns, stagePadPx, trackWidth, MAP_DESIGN, PANEL_BORDER_PX, SLOTS } from './geometry.js';
+export { stageBox, boxGeometry, breakpointId, mapScale, mapLegendHeight, fanColumns, stagePadPx, trackWidth, MAP_DESIGN, PANEL_BORDER_PX, SLOTS } from './geometry.js';
 export { sceneVars, GEOM, TYPE_ROLES, BP_IDS, BP_QUERY, geom, cssRoleName, scenesCssRoles } from './tokens.js';
 export { styleForRole, textRoles } from './type-scale.js';
 export { alignColumns, alignPair, signatureOf } from './align.js';

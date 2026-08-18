@@ -103,6 +103,12 @@ const FIXERS = {
     const lower = nextQualityDown(quality);
     if (lower === null) return null;
     return {
+      // Resampling pixels needs an image codec, which belongs to L10's budgeter
+      // (`budgetAssets`) and to the studio's canvas — not to a pure function over
+      // a Proof. What this fix changes is the instruction the budgeter follows,
+      // which is a real, reversible edit; the bytes come down when the emitter
+      // acts on it, so the finding clears at emit rather than at preflight.
+      effect: 'plan',
       label: `Recompress images at quality ${lower} (from ${quality})`,
       apply(current) {
         const next = clone(current);
@@ -286,7 +292,15 @@ export function autoFixes(proof, findings) {
       fix = null;
     }
     if (!fix) continue;
-    out.push({ finding, label: fix.label, apply: fix.apply });
+    out.push({
+      finding,
+      label: fix.label,
+      apply: fix.apply,
+      // 'resolves' — re-running preflight on the fixed proof no longer reports
+      // this finding. 'plan' — the edit instructs the emitter, and the finding
+      // clears when the emitter acts on it. Nothing else is legal.
+      effect: fix.effect === 'plan' ? 'plan' : 'resolves',
+    });
   }
   return out;
 }
