@@ -47,32 +47,32 @@ integrator's document, not a frozen contract.
 
 | # | Lane | Surface | Objection | Resolution |
 |---|---|---|---|---|
-| 12 | L9 | `branchCoverage` | Returns ids without reasons, so L11 cannot grade them | Lane publishes `details[]` with machine-readable `reasons`; severity split agreed (`unanchored` 2, structural 1) |
-| 13 | L7 | `channelBudget` | Too flat a shape for a real channel, which has per-part budgets | Returns a superset; the declared fields are present and unchanged |
-| 14 | L7 | `runAdapter` | Declared as one rendition per call, but every seed recipe is a fan-out | Built as declared, with an optional `label` in config |
-| 15 | L6 | `stripChrome(doc, {siblings})` | `siblings` was never specified | Now accepts `DocNode` roots, `RawCapture` objects and `{root}` wrappers, mixed |
-| 16 | L4 | `solveRoles(clusters, {seed})` | No floor parameter | Optional `minRatio` added; the 4.5:1 post-condition is unconditional |
-| 17 | L9 | `OverlayDefinition` | An overlay cannot receive input through the surface it is given | Lane publishes `installBranchInputBridge`; the composition root calls it |
-| 18 | L8 | `measureScene(scene, ctx, breakpoint)` | Takes the scene twice (`scene` and `ctx.scene`) | Built as declared; the two are asserted equal |
-| 19 | L8 | `LayoutContext` | Cannot see the recipes that produced its renditions, nor the breakpoint it renders at | Built as declared — a layout that saw the breakpoint could not be a pure function of its context |
-| 20 | L8, L11 | `SceneMeasurement.boxes` | Cannot express cumulative overflow across sibling boxes, nor a box's position, so sibling-stack overflow is out of reach | L8 adds an optional `containerId`; L11 aggregates by it. Position remains unavailable — a documented gap, not a worked-around one |
-| 21 | L11 | `runPreflight` | The declared signature has no place for the rendered document, which the network and provenance rules need | Preflight renders scenes itself from L2's layout registry |
-| 22 | L11, L10, L7 | `hasPromotionRecord` | Used by three lanes and declared by none | Published by L7; now declared |
-| 23 | L3 | `RawCapture.assets` | Nowhere to put the alt text and intrinsic size the importer already knows and `MediaRef` wants two steps later | Optional `aliases`, plus namespaced `meta` |
-| 24 | L3 | `DocNode.parent` | The back-reference makes the tree cyclic and unserialisable | Exported `plainTree`/`serialize` produce an acyclic copy |
-| 25 | L3 | `importOoxml` | Returns one capture where a deck is arguably n specimens | One capture, with slides as sections |
-| 26 | L10 | D10's allowlist | Makes an outbound link in the prospect's **own content** a severity-1 refusal — right rule, arguably wrong section | Built as written; a rendered `cta` href is refused |
-| 27 | L10 | D10's allowlist | `mailto:` and `tel:` are refused, and probably should not be — neither reaches a network | Built as written |
-| 28 | L10 | — | The artifact composition root was unowned by any lane | Resolved: `src/artifact.js`, DECISIONS D19 |
+| 17 | L9 | `branchCoverage` | Returns ids without reasons, so L11 cannot grade them | Lane publishes `details[]` with machine-readable `reasons`; severity split agreed (`unanchored` 2, structural 1) |
+| 18 | L7 | `channelBudget` | Too flat a shape for a real channel, which has per-part budgets | Returns a superset; the declared fields are present and unchanged |
+| 19 | L7 | `runAdapter` | Declared as one rendition per call, but every seed recipe is a fan-out | Built as declared, with an optional `label` in config |
+| 20 | L6 | `stripChrome(doc, {siblings})` | `siblings` was never specified | Now accepts `DocNode` roots, `RawCapture` objects and `{root}` wrappers, mixed |
+| 21 | L4 | `solveRoles(clusters, {seed})` | No floor parameter | Optional `minRatio` added; the 4.5:1 post-condition is unconditional |
+| 22 | L9 | `OverlayDefinition` | An overlay cannot receive input through the surface it is given | Lane publishes `installBranchInputBridge`; the composition root calls it |
+| 23 | L8 | `measureScene(scene, ctx, breakpoint)` | Takes the scene twice (`scene` and `ctx.scene`) | Built as declared; the two are asserted equal |
+| 24 | L8 | `LayoutContext` | Cannot see the recipes that produced its renditions, nor the breakpoint it renders at | Built as declared — a layout that saw the breakpoint could not be a pure function of its context |
+| 25 | L8, L11 | `SceneMeasurement.boxes` | Cannot express cumulative overflow across sibling boxes, nor a box's position, so sibling-stack overflow is out of reach | L8 adds an optional `containerId`; L11 aggregates by it. Position remains unavailable — a documented gap, not a worked-around one |
+| 26 | L11 | `runPreflight` | The declared signature has no place for the rendered document, which the network and provenance rules need | Preflight renders scenes itself from L2's layout registry |
+| 27 | L11, L10, L7 | `hasPromotionRecord` | Used by three lanes and declared by none | Published by L7; now declared |
+| 28 | L3 | `RawCapture.assets` | Nowhere to put the alt text and intrinsic size the importer already knows and `MediaRef` wants two steps later | Optional `aliases`, plus namespaced `meta` |
+| 29 | L3 | `DocNode.parent` | The back-reference makes the tree cyclic and unserialisable | Exported `plainTree`/`serialize` produce an acyclic copy |
+| 30 | L3 | `importOoxml` | Returns one capture where a deck is arguably n specimens | One capture, with slides as sections |
+| 31 | L10 | D10's allowlist | Makes an outbound link in the prospect's **own content** a severity-1 refusal — right rule, arguably wrong section | Built as written; a rendered `cta` href is refused |
+| 32 | L10 | D10's allowlist | `mailto:` and `tel:` are refused, and probably should not be — neither reaches a network | Built as written |
+| 33 | L10 | — | The artifact composition root was unowned by any lane | Resolved: `src/artifact.js`, DECISIONS D19 |
 
 ## Defects found in already-frozen code, and closed
 
 | # | Found by | Where | What | Closed |
 |---|---|---|---|---|
 | D1 | L9's return-stack property test | `src/runtime/nav.js` (L2) | `exitedFrom` recorded one return frame where `returnPolicy: 'nextSpineScene'` unwinds the whole stack, so stepping back left the stack floored on a branch and the next return threw — the §22.4 stranding case | `ec1dd38`; DECISIONS D18. L9 removed its fence and replaced its pin with a regression test |
+| D2 | L9's overlay work | `src/runtime/keymap.js` (L2) | `ArrowUp`/`ArrowDown` resolved to `prevScene`/`nextScene` while a text field had focus, so arrowing through the jump results also walked the presentation behind the overlay | Fixed: while typing, only `whileTyping` bindings resolve, which is Escape alone. L9's capture-phase interception is now the outer of two defences rather than the only one |
 | D3 | L10's `verify-offline.mjs` | `src/core/vdom.js` (L1) and `src/runtime/host.js` (L2) | `value` was set with `setAttribute`, which sets a form control's *default*, and `mount` rebuilt the subtree on every repaint — so the jump index re-rendered per keystroke with its caret at 0 and a presenter typing `appr` got `rppa`, matching nothing. §11's named interaction did not work at all | `db31f4c`; DECISIONS D22 |
 | D4 | L11's real-lane bridge | `src/emit/provenance.js` (L10) | `assertProvenance` kept only the *last* subtree carrying a `data-pp-rendition`, and `splitBeforeAfter` marks three — so every illustrative rendition in a split scene was falsely reported unlabelled at severity 1, blocking the emit on a correct proof | Fixed by L10, unioning across scopes |
-| D2 | L9's overlay work | `src/runtime/keymap.js` (L2) | `ArrowUp`/`ArrowDown` resolved to `prevScene`/`nextScene` while a text field had focus, so arrowing through the jump results also walked the presentation behind the overlay | Fixed: while typing, only `whileTyping` bindings resolve, which is Escape alone. L9's capture-phase interception is now the outer of two defences rather than the only one |
 
 ## Recorded non-disputes
 

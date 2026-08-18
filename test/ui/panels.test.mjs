@@ -176,11 +176,12 @@ test('the paste surface aligns the pasted blocks to the source specimen block by
   const app = await makeApp();
   app.setDraft('rendition.paste', 'Erste Zeile.\n\nZweite Zeile.');
   const html = panel(app, 'recipes');
-  assert.match(html, /st-align-body/, 'the surface is side by side');
-  assert.match(html, /Alignment/, 'with an alignment score');
-  assert.match(html, /Industrial coatings that hold/, 'the source blocks on the left');
-  assert.match(html, /Erste Zeile\./, 'the pasted blocks on the right');
-  assert.match(html, /st-align-cell--unmatched/, 'and the blocks that did not pair are marked');
+  assert.match(html, /st-align-rows/, 'the surface is a row per pair, not two independent lists');
+  assert.match(html, /st-align-row/, 'with one row per aligned pair');
+  assert.match(html, /Aligned/, 'and an alignment score');
+  assert.match(html, /Industrial coatings that hold/, 'the source block on the left of its row');
+  assert.match(html, /Erste Zeile\./, 'the pasted block on the right of it');
+  assert.match(html, /st-align-cell--gap/, 'and a block with no counterpart is drawn as a gap rather than omitted');
 });
 
 test('the paste surface enforces and shows a channel budget', async () => {

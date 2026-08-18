@@ -221,14 +221,22 @@ html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  border: 1px solid var(--st-border-strong);
+  border: 1px dashed var(--st-border);
   border-radius: var(--st-radius);
-  background: #FFFFFF;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  /* Deliberately not white. The ground around the frame belongs to the studio;
+     a white surround would read as part of the artifact and make the preview
+     lie about where the proof's edges are. */
+  background: transparent;
 }
 
-.st-preview-frame { display: block; border: 0; }
-.st-preview-fallback { width: 100%; height: 100%; overflow: auto; }
+.st-preview-frame {
+  display: block;
+  border: 0;
+  background: #FFFFFF;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--st-border-strong);
+}
+
+.st-preview-fallback { width: 100%; height: 100%; overflow: auto; background: #FFFFFF; }
 
 .st-canvas-empty {
   position: absolute;
@@ -556,16 +564,17 @@ html, body {
 /* ---------------------------------------------------------------- recipes */
 
 .st-align { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--st-border); border-radius: var(--st-radius-sm); background: var(--st-ground); padding: 8px; }
-.st-align-head { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--st-text-faint); }
-.st-align-score { text-transform: none; letter-spacing: 0; color: var(--st-text-dim); }
-.st-align-body { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
-.st-align-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.st-align-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; max-height: 340px; overflow-y: auto; }
+.st-align-head { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: baseline; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--st-text-faint); }
+.st-align-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-align-score { grid-column: 1 / -1; text-transform: none; letter-spacing: 0; color: var(--st-text-dim); text-align: right; }
+.st-align-rows { display: flex; flex-direction: column; gap: 4px; max-height: 380px; overflow-y: auto; }
+.st-align-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: stretch; }
 .st-align-cell { display: flex; gap: 6px; align-items: flex-start; padding: 5px 7px; border: 1px solid var(--st-border); border-radius: var(--st-radius-sm); background: var(--st-surface); font-size: 11.5px; }
-.st-align-cell--unmatched { border-style: dashed; border-color: var(--st-warn); background: rgba(242, 193, 78, 0.06); }
+.st-align-cell--gap { border-style: dashed; border-color: var(--st-warn); background: rgba(242, 193, 78, 0.06); align-items: center; justify-content: center; }
+.st-align-gap { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--st-warn); }
 .st-align-text { min-width: 0; color: var(--st-text-dim); }
-.st-align-paste { min-height: 200px; font-family: var(--st-font-mono); font-size: 11.5px; }
-.st-align-empty { margin: 0; padding: 20px 8px; text-align: center; color: var(--st-text-faint); font-size: 11.5px; }
+.st-align-paste { min-height: 160px; font-family: var(--st-font-mono); font-size: 11.5px; }
+.st-align-empty { margin: 0; padding: 16px 8px; text-align: center; color: var(--st-text-faint); font-size: 11.5px; }
 
 .st-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .st-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--st-border-strong); border-radius: 999px; background: var(--st-ground); color: var(--st-text-dim); font: inherit; font-size: 11.5px; cursor: pointer; }
