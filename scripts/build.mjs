@@ -95,7 +95,14 @@ export function buildRuntime() {
     global: 'PitchProofRuntime',
     banner: BANNER,
   });
-  const css = concatCss(cssFiles(join(SRC, 'runtime')).concat(cssFiles(join(SRC, 'scene'))));
+  // Every stylesheet that ships inside an artifact, in a fixed order: the
+  // runtime's own chrome first, then the branch overlays, then the layouts, so
+  // a layout rule can override a chrome default and never the other way round.
+  const css = concatCss([
+    ...cssFiles(join(SRC, 'runtime')),
+    ...cssFiles(join(SRC, 'branch')),
+    ...cssFiles(join(SRC, 'scene')),
+  ]);
   return { js: code, css };
 }
 

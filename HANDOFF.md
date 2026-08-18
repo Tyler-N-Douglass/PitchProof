@@ -1,8 +1,8 @@
 # HANDOFF
 
 Everything a fresh session needs to pick up the PitchProof build cold. Read this,
-then `PITCHPROOF-BUILD-SPEC-v1.0.md` (authoritative), then `PLAN.md` and
-`DECISIONS.md`.
+then `PITCHPROOF-BUILD-SPEC-v1.0.md` (authoritative), then `PLAN.md`,
+`API.md` and `DECISIONS.md`.
 
 **Repo:** `Tyler-N-Douglass/PitchProof` · **Branch:** `claude/pitchproof-generator-pfla52`
 
@@ -10,130 +10,78 @@ then `PITCHPROOF-BUILD-SPEC-v1.0.md` (authoritative), then `PLAN.md` and
 
 ## 1. State of the build
 
-### Landed — L1 Core (partial), all verified against reference values
+### Landed and green
+
+**L1 Core** — `src/core/`
 
 | File | What it is | Verification |
 |---|---|---|
-| `src/core/contracts.d.ts` | The §4 interfaces, extracted byte-for-byte from the spec, inside `FROZEN REGION BEGIN/END` markers | Diffed against `test/fixtures/frozen-contracts.txt` |
-| `src/core/contracts.js` | Closed enumerations, the `ROLE_PAIR` table, emit-option normalisation, shape validator | `labelIllustrativeContent` forced true for review-reachable builds |
-| `src/core/prng.js` | PCG32 XSH-RR, named substreams, `SeedBook` | Matches canonical vectors for seed 42 / stream 54: `a15c02b7 7b47f409 ba1d3330 83d2f293 bfa4784b cbed606e` |
-| `src/core/hash.js` | Synchronous pure SHA-256, `stableStringify`, `contentHash` | Matches all four NIST vectors incl. the million-`a` case |
-| `src/core/deflate.js` | Raw DEFLATE, LZ77 + package-merge length-limited Huffman | Round-trips through `zlib.inflateRawSync`; beats zlib level 9 on JSON (1389 v 1450) and base64 (1272 v 1275) |
-| `src/core/inflate.js` | Raw INFLATE | Decodes `zlib` output at levels 0/1/6/9 |
-| `src/core/vdom.js` | `h()` / `raw()` / `toHtml()` / `toDom()` / `walk()` — the VNode substrate | — |
-| `src/core/bytes.js` | UTF-8, base64, hex, `parseDataUri` | — |
-| `src/core/ids.js` | `contentId()`, `IdMinter`, `elementId` | — |
-| `src/core/events.js`, `result.js` | Emitter, Result type | — |
+| `contracts.d.ts` | The §4 interfaces, byte-for-byte from the spec, inside `FROZEN REGION` markers | Diffed against `test/fixtures/frozen-contracts.txt`, which is itself diffed against the spec |
+| `contracts.js` | Closed enumerations, `ROLE_PAIR`, emit-option normalisation, shape validators | `labelIllustrativeContent` forced true for review-reachable builds |
+| `prng.js` | PCG32 XSH-RR, named substreams, `SeedBook` | Canonical vectors for seed 42 / stream 54 |
+| `hash.js` | Synchronous pure SHA-256, `stableStringify`, `contentHash`, FNV-1a | All four NIST vectors, plus every block-boundary length against `node:crypto` |
+| `deflate.js` / `inflate.js` | Raw DEFLATE with package-merge Huffman | Round-trips both ways against `zlib`; within 5% of level 9, ahead on large JSON |
+| `text-metrics.js` | Published Core-14 AFM tables, family scale models, greedy line breaking, metric-compatible fallback selection | Advance widths and vertical metrics against the published AFM values |
+| `zip.js` | ZIP + ZIP64 central directory, CRC-verified extraction, OOXML parts and relationships | Real archives built in-test |
+| `storage.js` | IndexedDB + memory fallback, versioned envelope with a migration walker, autosave that skips no-ops, 80% pressure warning | Failure paths asserted, never swallowed |
+| `command.js` | Undo/redo with coalescing and atomic transactions | §15 |
+| `vdom.js`, `bytes.js`, `ids.js`, `events.js`, `result.js` | The substrate | — |
 
-Documents in place: `PLAN.md`, `DECISIONS.md` (13 entries), `CONTRACTS-DISPUTES.md`
-(open, empty), `DEFERRED.md` (open, empty).
+**L2 Runtime** — `src/runtime/`: `deck.js`, `nav.js` (pure reducer + return stack
+with invariants), `beats.js`, `keymap.js`, `overlays.js`, `layouts.js` (registry),
+`runtime.js` (document-free state machine), `host.js` (DOM binding, hydrates the
+pre-rendered first paint), `presenter.js` (second window, manual stopwatch),
+`index.js` (`boot`), `runtime.css` (`--pp-*` only).
 
-### Not yet built
+**Build path** — `scripts/lib/bundler.mjs` (deterministic zero-dependency ESM
+bundler), `scripts/build.mjs` (three outputs, `--verify-repeat`),
+`scripts/lint-determinism.mjs`.
 
-**Rest of L1:** `storage.js` (IndexedDB + memory fallback, versioned schema,
-migration path from `schemaVersion: 1`), `command.js` (undo/redo stack),
-`text-metrics.js` (published AFM advance tables + greedy line breaking +
-metric-compatible fallback selection — see DECISIONS D7), `zip.js` (OOXML reader
-on `inflate.js`), `scripts/build.mjs` (deterministic bundler),
-`scripts/lint-determinism.mjs`, and the L1 test suite.
+### In flight
 
-**Everything else:** L2 through L12, and the §20 critic loop. No lane has been
-fanned out. No subagents are running.
+L3–L11 are being written in parallel as subagent lanes, each owning one
+directory and building against `API.md`. L12 Studio UI integrates last.
+
+### Documents
+
+`PLAN.md`, `API.md` (the frozen integration surface — **read this before writing
+any lane code**), `DECISIONS.md` (D1–D17), `CONTRACTS-DISPUTES.md`, `DEFERRED.md`.
+Lane-local decisions and disputes land in `docs/decisions/L<n>-*.md` and
+`docs/disputes/L<n>-*.md` and are merged into the top-level documents at
+integration.
 
 ---
 
 ## 2. Order of work
 
-1. Finish L1 Core. Gate: `node --test test/` green; `node scripts/build.mjs`
-   produces a byte-identical bundle twice.
-2. Land L2 Runtime skeleton — scene host, beat engine, keyboard model, overlay
-   system, presenter view. Write the frozen L1+L2 public API into `API.md`; that
-   document is the integration surface every other lane builds against.
-3. Only then fan out L3–L11 in parallel as subagents, one lane each.
-4. L12 Studio UI integrates last.
-5. Critic loop per §21 until clean on all eleven §20 axes twice consecutively,
+1. ~~Finish L1 Core.~~ Done.
+2. ~~Land L2 Runtime skeleton and freeze `API.md`.~~ Done.
+3. Fan out L3–L11 in parallel, one lane each. **In flight.**
+4. Integration pass A — wire the lanes together, full suite plus
+   `scripts/verify-offline.mjs`.
+5. L12 Studio UI integrates last.
+6. Critic loop per §21 until clean on all eleven §20 axes twice consecutively,
    the second pass against a freshly emitted artifact.
 
 ---
 
-## 3. Environment notes
+## 3. Verification gates
 
-Node 22. No `node_modules` is committed. Playwright is used **only** by
-`scripts/verify-offline.mjs` and the browser cross-check tests — never by the
-studio, the runtime, or the artifact.
-
-Chromium is preinstalled (`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`) and
-Playwright is installed globally, but ESM will not resolve it through `NODE_PATH`.
-Link it once:
-
-```bash
-mkdir -p node_modules && G=$(npm root -g) \
-  && ln -sfn $G/playwright node_modules/playwright \
-  && ln -sfn $G/playwright-core node_modules/playwright-core
+```
+node scripts/lint-determinism.mjs       # no unseeded randomness or clock reads in src/
+npm test                                # node --test over test/**/*.test.mjs
+node scripts/build.mjs --verify-repeat  # two builds, byte-identical
+node scripts/verify-offline.mjs         # headless, network blocked, keyboard walk, FCP budget
 ```
 
-Do **not** run `playwright install`.
-
-Commit signing occasionally returns a transient 503 — retry the commit.
-
 ---
 
-## 4. The laws that are not negotiable
+## 4. Environment notes
 
-- **Zero network in the emitted artifact.** No telemetry, beacons, tracking,
-  runtime font fetches, or CDN. The emitter scans and blocks; CI proves it with
-  network blocked in a headless browser.
-- **No backend, no accounts, no cloud.** Browser and local storage only.
-- **Determinism.** Seeded PRNG or content hashes only. Two emits of one project
-  are byte-identical, and a test asserts it.
-- **Provenance enforced at the emitter**, not the UI. Illustrative content is
-  labeled; the label cannot be hidden.
-- **Severity-1 findings block emit. There is no override flag.**
-- **Studio palette and artifact brand theming never share a variable**
-  (`--st-*` vs `--pp-*`, asserted by test).
-
-Golden tests that may not be weakened to make a build pass: colour science against
-published reference values, and the planted-defect corpora for overflow detection
-and chrome stripping. If a test is hard to satisfy, fix the implementation.
-
----
-
-## 5. Copy-paste prompt for a fresh thread
-
-The prompt used to seed a continuation session is reproduced verbatim below.
-
-> You are building **PitchProof** to the specification in
-> `PITCHPROOF-BUILD-SPEC-v1.0.md`, committed at the root of this repo. Read that
-> spec completely before doing anything else. It is authoritative. Where this
-> prompt and the spec disagree, the spec wins.
->
-> Read `HANDOFF.md` for the state of the build, then `PLAN.md` (module graph, lane
-> assignment, integration order, the six §22 risks and their mitigations) and
-> `DECISIONS.md` (thirteen judgment calls already made — append, do not reverse
-> without recording why).
->
-> Continue from where `HANDOFF.md` says the build stands: finish L1 Core, land L2
-> Runtime skeleton and freeze the L1+L2 API into `API.md`, then fan out L3–L11 in
-> parallel as subagents, then integrate L12 Studio UI last, then run the §20 critic
-> loop until it passes clean on all eleven axes twice consecutively with the second
-> pass against a freshly emitted artifact.
->
-> Each subagent owns exactly one lane directory and edits nothing outside it;
-> implements every behavior in its lane fully — no stubs, no `TODO`, no "left as an
-> exercise"; writes its own tests including the golden tests named for its lane in
-> §17; communicates across lanes only through the frozen contracts in §4 and
-> `API.md`; files any contract objection in `CONTRACTS-DISPUTES.md` and then builds
-> against the contract as written anyway; and records every judgment call the spec
-> didn't settle in `DECISIONS.md`. A lane that finishes early claims the next
-> unclaimed lane. No lane expands its own scope.
->
-> Honour the non-negotiables in `HANDOFF.md` §4 without exception. Run the full
-> suite plus `scripts/verify-offline.mjs` after every integration.
->
-> Commit and push to `claude/pitchproof-generator-pfla52` as each lane lands — the
-> container is ephemeral and unpushed work is lost. Do not open a pull request
-> unless asked. Apply maximum effort; think each lane through thoroughly before
-> writing its files. The target is a complete, working product that could be used
-> in a real client pitch the day it finishes, not a scaffold. Execute autonomously;
-> at any decision point the spec does not settle, build the stronger option and
-> record it in `DECISIONS.md` rather than pausing.
+- Node 22. Zero npm dependencies in `src/`; Playwright is the only dev
+  dependency, used by `verify-offline.mjs` and the browser cross-checks.
+- Chromium is preinstalled at `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers` and
+  Playwright is linked into `node_modules`. **Do not run `playwright install`.**
+  If the link is missing, restore it with:
+  `mkdir -p node_modules && G=$(npm root -g) && ln -sfn $G/playwright node_modules/playwright && ln -sfn $G/playwright-core node_modules/playwright-core`
+- The container is ephemeral. Commit and push as each lane lands.
