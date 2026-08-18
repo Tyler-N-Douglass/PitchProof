@@ -37,6 +37,10 @@ import {
   LUMA_R, LUMA_G, LUMA_B, WCAG_CONTRAST_OFFSET, SRGB_GAMMA, SRGB_OFFSET, SRGB_SLOPE,
   parseCssColor, hslToRgb, NAMED_COLORS,
 } from '../../src/brand/color.js';
+import {
+  invert3, LMS_TO_OKLAB, LSRGB_TO_LMS, XYZ_TO_LMS, SRGB_WHITE_L, SRGB_BLACK_L,
+  PUBLISHED_OKLAB_TO_LMS, PUBLISHED_LMS_TO_LSRGB, PUBLISHED_LMS_TO_XYZ,
+} from '../../src/brand/oklab.js';
 
 /** §17.1's stated tolerance. */
 const TOL = 1e-6;
@@ -75,7 +79,9 @@ test('the sRGB transfer function matches its published definition', () => {
   assert.equal(srgbToLinear(0), 0);
   assert.equal(srgbToLinear(1), 1);
   assert.equal(linearToSrgb(0), 0);
-  assert.equal(linearToSrgb(1), 1);
+  // `1.055 · 1^(1/2.4) − 0.055` is 1 in exact arithmetic and one ulp below it
+  // in IEEE-754 doubles; the identity is asserted at machine precision.
+  assert.ok(Math.abs(linearToSrgb(1) - 1) <= Number.EPSILON);
   // The two branches meet at the published breakpoint.
   assert.ok(Math.abs(srgbToLinear(0.04045) - 0.04045 / 12.92) < 1e-12);
   assert.ok(Math.abs(srgbToLinear(0.04045) - 0.0031308) < 1e-7);
@@ -116,6 +122,32 @@ test('XYZ → OKLab matches Ottosson\'s published test table', () => {
         `xyzToOklab(${row.xyz}) component ${i}: got ${got[i]}, published ${row.lab[i]}`);
     }
   }
+});
+
+test('the computed matrix inverses agree with Ottosson\'s published inverses', () => {
+  // The forward matrices are used verbatim; the inverses are computed from them
+  // exactly (a rounded inverse costs three orders of magnitude of round-trip
+  // accuracy). This asserts the computation lands on the published numbers, so
+  // both sets of published values constrain the implementation.
+  const pairs = [
+    [invert3(LMS_TO_OKLAB), PUBLISHED_OKLAB_TO_LMS, 'OKLab → LMS'],
+    [invert3(LSRGB_TO_LMS), PUBLISHED_LMS_TO_LSRGB, 'LMS → linear sRGB'],
+    [invert3(XYZ_TO_LMS), PUBLISHED_LMS_TO_XYZ, 'LMS → XYZ'],
+  ];
+  for (const [computed, published, what] of pairs) {
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        assert.ok(Math.abs(computed[r][c] - published[r][c]) < 1e-7,
+          `${what} [${r}][${c}]: computed ${computed[r][c]}, published ${published[r][c]}`);
+      }
+    }
+  }
+  // And the inverse really inverts, which the published rounding does not.
+  const round = invert3(invert3(LMS_TO_OKLAB));
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) assert.ok(Math.abs(round[r][c] - LMS_TO_OKLAB[r][c]) < 1e-12);
+  }
+  assert.throws(() => invert3([[1, 2, 3], [2, 4, 6], [1, 1, 1]]), /singular/);
 });
 
 test('OKLab → XYZ inverts the published forward transform to 1e-6', () => {
@@ -364,7 +396,14 @@ test('clampChromaToGamut lands inside the gamut, is idempotent, and holds hue', 
     for (let i = 0; i < 3; i++) assert.ok(Math.abs(clamped[i] - lch[i]) < 1e-12, `${hex} unchanged`);
   }
   // Out-of-range lightness is clamped rather than returned as a NaN colour.
-  assert.deepEqual(clampChromaToGamut([1.4, 0.2, 30]).slice(0, 2), [1, 0.2].slice(0, 2).map((v, i) => (i === 0 ? 1 : clampChromaToGamut([1.4, 0.2, 30])[1])));
+  // Lightness above white's own OKLab lightness is above the sRGB solid; the
+  // clamp maps it onto white rather than off the end of the gamut.
+  assert.equal(clampChromaToGamut([1.4, 0.2, 30])[0], SRGB_WHITE_L);
+  assert.equal(clampChromaToGamut([-0.4, 0.2, 30])[0], SRGB_BLACK_L);
+  assert.equal(SRGB_BLACK_L, 0);
+  assert.ok(Math.abs(SRGB_WHITE_L - 1) < 1e-8, `white's OKLab lightness is ${SRGB_WHITE_L}`);
+  assert.equal(oklchToHex([1, 0, 0]), '#ffffff');
+  assert.equal(oklchToHex([0, 0, 0]), '#000000');
   assert.ok(inGamut(clampChromaToGamut([1.4, 0.2, 30])));
   assert.ok(inGamut(clampChromaToGamut([-0.4, 0.2, 30])));
 });
@@ -377,8 +416,14 @@ test('maxChromaAt is the boundary of the in-gamut predicate', () => {
       assert.equal(inGamut([L, c + 1e-5, H]), false, `L=${L} H=${H} must be out just past C=${c}`);
     }
   }
-  assert.equal(maxChromaAt(0, 0), 0, 'black has no chroma available');
-  assert.equal(maxChromaAt(1, 0), 0, 'white has no chroma available');
+  // At the very ends of the lightness axis every channel collapses toward zero
+  // (or toward one), so the gamut tolerance — an absolute 1e-6 in 8-bit units —
+  // corresponds to a tiny but non-zero chroma. Assert it is negligible rather
+  // than exactly zero, which is the honest claim.
+  for (let H = 0; H < 360; H += 30) {
+    assert.ok(maxChromaAt(0, H) < 0.01, `black must have negligible chroma at hue ${H}`);
+    assert.ok(maxChromaAt(1, H) < 0.01, `white must have negligible chroma at hue ${H}`);
+  }
 });
 
 /* ------------------------------------------------------- other distances */

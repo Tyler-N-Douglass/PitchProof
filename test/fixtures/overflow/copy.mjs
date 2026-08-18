@@ -83,7 +83,14 @@ export const LABELS = [
 
 /** Long single tokens that are not words: URLs, ids, file names. */
 export const LONG_TOKENS = [
-  'campaign-assets/emea/de-DE/product-detail-page-hero-2400x1200.png',
-  'https-www-example-invalid-slash-market-launch-playbook-chapter-four',
   'PRODUCT_INFORMATION_MANAGEMENT_SYSTEM_EXPORT_20260218_FINAL_v7',
+  'campaignassetsEMEAdeDEproductdetailpageheroimage2400x1200',
 ];
+
+/**
+ * The same shape, but with hyphens and slashes in it. Every one of those is a
+ * break opportunity, so this token wraps and must *not* be reported — the
+ * negative control for the unbreakable-run cases.
+ */
+export const BREAKABLE_TOKEN =
+  'campaign-assets/emea/de-DE/product-detail-page-hero-2400x1200.png';

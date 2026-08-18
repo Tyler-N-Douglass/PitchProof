@@ -15,8 +15,8 @@
  * @module recipe/templates/channel-variants
  */
 
-import { enforceBudget, CHANNEL_BUDGETS } from '../budget.js';
-import { finish, leadHeadline, leadParagraph, leadCta, blocksOfType, cloneBlock, slot } from '../blocks.js';
+import { enforceBudget, CHANNEL_BUDGETS, SMS_SEGMENTS } from '../budget.js';
+import { finish, leadHeadline, leadParagraph, leadCta, blocksOfType, cloneBlock, slot, legalLine, bodyBlocks } from '../blocks.js';
 import { flatten, firstClause, splitAtChars } from '../text.js';
 
 /** @type {import('../../core/contracts.d.ts').Recipe} */
@@ -47,12 +47,15 @@ function draftFor(specimen, channelId) {
   const blocks = [];
 
   if (channelId === 'email') {
+    const legal = legalLine(specimen);
+    const body = bodyBlocks(specimen);
     blocks.push({ type: 'heading', level: 1, text: headline || flatten(specimen.title || '') });
     blocks.push({ type: 'paragraph', text: lead || flatten(specimen.title || '') });
     for (const l of lists.slice(0, 1)) blocks.push(cloneBlock(l));
-    const rest = blocksOfType(specimen, 'paragraph').slice(1, 3);
+    const rest = body.filter((b) => b.type === 'paragraph' && flatten(b.text) !== lead).slice(0, 2);
     for (const p of rest) blocks.push(cloneBlock(p));
     blocks.push(cta ? cloneBlock(cta) : slot('Email button label'));
+    if (legal) blocks.push(cloneBlock(legal.block));
     return blocks;
   }
 
@@ -99,8 +102,9 @@ export function render(specimen, options = {}) {
       result.over
         ? `Over budget by ${result.overBy} characters across ${overParts.length} part(s): ${overParts.map((p) => `${p.name} +${p.overBy}`).join(', ')}.`
         : 'Every part is within budget.',
+      smsNote(result),
       `[[pp-budget:1;channel=${budget.id};over=${result.overBy};parts=${result.parts.map((p) => `${p.role}:${p.chars}/${p.limit}`).join(',')}]]`,
-    ].join(' ');
+    ].filter(Boolean).join(' ');
 
     return finish({
       specimen,
@@ -111,6 +115,19 @@ export function render(specimen, options = {}) {
       notes,
     });
   });
+}
+
+/**
+ * A one-line explanation when SMS encoding, not copy length, is what bit.
+ * @param {{parts: {role: string, encoding?: string, segments?: number}[]}} result
+ * @returns {string}
+ */
+function smsNote(result) {
+  const message = result.parts.find((p) => p.role === 'message');
+  if (!message || !message.encoding) return '';
+  return message.encoding === 'GSM-7'
+    ? `Encoded GSM-7 in ${message.segments} segment(s).`
+    : `A character outside the GSM 03.38 alphabet forces UCS-2, which drops the single-segment budget from ${SMS_SEGMENTS.gsm7Single} to ${SMS_SEGMENTS.ucs2Single}; this message takes ${message.segments} segment(s).`;
 }
 
 /**

@@ -53,8 +53,31 @@ export const HEADLINE_THRESHOLD = 2.0;
  * Elements whose descendants are structural parts of one content block rather
  * than independent blocks. A `<footer>` inside a `<blockquote>` is the
  * attribution, not a page footer; a `<th>` is not a block that can be chrome.
+ *
+ * This is a contract boundary as much as a heuristic: `toBlocks` emits a list
+ * as **one** `ContentBlock`, so removing a single `<li>` could only ever
+ * produce a half-block that neither side of a before/after pair should show.
+ * The list is judged whole, or not at all.
  */
-export const ATOMIC_CONTAINERS = new Set(['blockquote', 'figure', 'table', 'pre', 'dl', 'p']);
+export const ATOMIC_CONTAINERS = new Set([
+  'blockquote', 'figure', 'table', 'pre', 'dl', 'p', 'ul', 'ol', 'menu',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+]);
+
+/**
+ * Blocks that are one run of text rather than a region of a page. The
+ * boilerplate lexicon describes *containers* — a consent banner, a subscribe
+ * shell — so for a long single text block with no other evidence against it,
+ * lexicon evidence is capped: an article that discusses cookie consent, quotes
+ * "accept all", and links to a privacy policy is prose, not a banner.
+ */
+export const LEAF_TEXT_TAGS = new Set([
+  'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'ul', 'ol', 'dl',
+  'blockquote', 'figure', 'table', 'pre', 'span', 'em', 'strong', 'code',
+]);
+
+/** Above this many characters a leaf text block is treated as prose. */
+export const PROSE_GUARD_CHARS = 200;
 
 /** Landmark tags that are chrome by definition when they are page-level. */
 const LANDMARK_TAGS = {
@@ -476,19 +499,28 @@ export function scoreBlock(node, ctx) {
   const repeat = repeatSignal(node, ctx.index || null, stats);
   const content = contentSignal(node, stats);
 
-  const score = landmark.score + link.score + boiler.score + repeat.score - content.score;
+  // Prose guard: lexicon evidence alone cannot condemn a long run of text.
+  const otherEvidence = landmark.score + link.score + repeat.score;
+  let boilerplateScore = boiler.score;
+  const guarded = LEAF_TEXT_TAGS.has(tagOf(node))
+    && stats.textChars >= PROSE_GUARD_CHARS
+    && otherEvidence < 0.5
+    && boilerplateScore > 0.4;
+  if (guarded) boilerplateScore = 0.4;
+
+  const score = landmark.score + link.score + boilerplateScore + repeat.score - content.score;
   /** @type {Record<string, number>} */
   const signals = {
     landmark: landmark.score,
     linkDensity: link.score,
-    boilerplate: boiler.score,
+    boilerplate: boilerplateScore,
     repeated: repeat.score,
     content: -content.score,
   };
   const ranked = [
     ['repeated-across-pages', repeat.score],
     ['landmark', landmark.score],
-    ['boilerplate', boiler.score],
+    ['boilerplate', boilerplateScore],
     ['link-density', link.score],
   ].sort((a, b) => b[1] - a[1]);
   const reason = ranked[0][1] > 0 ? String(ranked[0][0]) : 'low-content';
@@ -509,6 +541,7 @@ export function scoreBlock(node, ctx) {
     signals,
     threshold,
     detail: [...landmark.detail, ...link.detail, ...boiler.detail, ...repeat.detail,
+      ...(guarded ? ['prose-guard: lexicon capped for a long text block'] : []),
       ...(content.score > 0 ? content.detail.map((d) => `content:${d}`) : [])],
   };
 }

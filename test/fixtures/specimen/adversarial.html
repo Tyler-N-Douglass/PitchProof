@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cookie consent for plant operator portals | Northwind knowledge base</title>
+<meta name="description" content="What a plant operator portal must ask consent for, and what it may store without asking.">
+<meta property="og:type" content="article">
+<link rel="canonical" href="https://www.northwind-industrial.example/kb/portal-cookie-consent">
+</head>
+<body>
+  <a class="skip-link" href="#main" data-pp-truth="chrome">Skip to main content</a>
+  <header class="site-header" data-pp-truth="chrome">
+    <div class="utility-bar">
+      <ul class="utility-nav">
+        <li><a href="/support">Support</a></li>
+        <li><a href="/partners">Partner portal</a></li>
+        <li><a href="/investors">Investors</a></li>
+        <li><a href="/careers">Careers</a></li>
+        <li><a href="/contact">Contact sales</a></li>
+      </ul>
+      <div class="locale-picker"><button type="button">Global (English)</button></div>
+    </div>
+    <nav class="mega-nav" aria-label="Main">
+      <ul class="mega-nav__list">
+        <li class="mega-nav__item"><a href="/products">Products</a>
+          <div class="mega-nav__panel">
+            <ul><li><a href="/products/controllers">Controllers</a></li>
+                <li><a href="/products/drives">Variable speed drives</a></li>
+                <li><a href="/products/sensors">Sensors and instruments</a></li>
+                <li><a href="/products/safety">Safety systems</a></li></ul>
+            <ul><li><a href="/products/software">Plant software</a></li>
+                <li><a href="/products/services">Lifecycle services</a></li>
+                <li><a href="/products/spares">Spares and repairs</a></li></ul>
+          </div>
+        </li>
+        <li class="mega-nav__item"><a href="/solutions">Solutions</a>
+          <div class="mega-nav__panel">
+            <ul><li><a href="/solutions/uptime">Uptime assurance</a></li>
+                <li><a href="/solutions/energy">Energy optimisation</a></li>
+                <li><a href="/solutions/compliance">Compliance reporting</a></li>
+                <li><a href="/solutions/retrofit">Retrofit programmes</a></li></ul>
+          </div>
+        </li>
+        <li class="mega-nav__item"><a href="/industries">Industries</a>
+          <div class="mega-nav__panel">
+            <ul><li><a href="/industries/automotive">Automotive</a></li>
+                <li><a href="/industries/food">Food and beverage</a></li>
+                <li><a href="/industries/pharma">Pharmaceutical</a></li>
+                <li><a href="/industries/metals">Metals and mining</a></li></ul>
+          </div>
+        </li>
+        <li class="mega-nav__item"><a href="/resources">Resources</a></li>
+        <li class="mega-nav__item"><a href="/company">Company</a></li>
+      </ul>
+    </nav>
+  </header>
+  <div class="cookie-consent" role="dialog" aria-label="Cookie preferences" data-pp-truth="chrome">
+    <p>We use cookies to personalise content, to provide social media features and to analyse our traffic. Read our cookie policy for the full list.</p>
+    <button type="button">Accept all</button>
+    <button type="button">Reject all</button>
+    <button type="button">Manage preferences</button>
+  </div>
+  <main id="main">
+    <article class="kb-article">
+      <div class="article-body" data-pp-truth="content">
+        <h1>Cookie consent for plant operator portals</h1>
+        <p>Operator portals that reach outside the plant network fall under the same consent rules as any public website, and the exemption most integrators assume applies to them does not. This note sets out what a portal must ask for, what it may store without asking, and where the boundary sits for a session that spans a shift change.</p>
+        <h2>What counts as strictly necessary</h2>
+        <p>A cookie is strictly necessary when the service the operator asked for cannot be delivered without it. Authentication, load balancing and the CSRF token all qualify. Anything that measures how a page is used does not, however carefully it is anonymised, and a banner that says we use cookies to improve your experience is describing measurement rather than necessity.</p>
+        <p>The practical consequence is that a portal can keep an operator signed in across a shift change without asking, but cannot record which screens that operator visited without a positive choice. Our own privacy policy separates the two for exactly this reason, and the manage preferences screen in the portal shows the operator which category each cookie falls into.</p>
+        <h2>Where portals usually get it wrong</h2>
+        <ul>
+          <li>Loading the analytics tag before the choice is made, so the first page view is recorded whatever the operator then decides.</li>
+          <li>Treating an accept all click on the corporate website as consent for the portal, which is a different controller and a different purpose.</li>
+          <li>Storing the consent record itself for longer than the consent lasts, which turns a compliance artefact into a retention problem.</li>
+        </ul>
+        <h2>Further reading</h2>
+        <ul class="further-reading">
+          <li><a href="/docs/portal/consent">Portal consent configuration</a> — how to stage the tag loader behind the consent record, with the two settings that most deployments miss.</li>
+          <li><a href="/docs/portal/retention">Retention windows</a> — the default retention for each cookie category the portal sets, and how to shorten them per site.</li>
+          <li><a href="/docs/portal/audit">Consent audit export</a> — producing the evidence pack an auditor asks for without exporting operator identities.</li>
+        </ul>
+        <h2>Categories the portal sets</h2>
+        <table>
+          <thead><tr><th>Category</th><th>Asked for</th><th>Default retention</th></tr></thead>
+          <tbody>
+            <tr><td>Strictly necessary</td><td>No</td><td>Session</td></tr>
+            <tr><td>Preferences</td><td>Yes</td><td>6 months</td></tr>
+            <tr><td>Measurement</td><td>Yes</td><td>13 months</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+    <aside class="related-rail recirc" data-pp-truth="chrome">
+      <h3>Related articles</h3>
+      <ul><li><a href="/kb/portal-sso">Single sign-on for operator portals</a></li>
+          <li><a href="/kb/portal-offline">Running a portal offline</a></li>
+          <li><a href="/kb/portal-roles">Role design for shift teams</a></li></ul>
+    </aside>
+    <section class="boilerplate-blurb" data-pp-truth="chrome">
+      <p>Northwind Industrial Systems designs, builds and services control equipment for continuous-process plants in forty-one countries, and has done since 1948.</p>
+    </section>
+  </main>
+  <div class="support-widget chat-launcher" data-pp-truth="chrome">
+    <button type="button">Chat with us</button>
+    <p>How can we help today? An engineer is online.</p>
+  </div>
+  <footer class="site-footer" data-pp-truth="chrome">
+    <div class="footer-columns">
+      <div class="footer-column"><h4>Products</h4>
+        <ul><li><a href="/products/controllers">Controllers</a></li>
+            <li><a href="/products/drives">Variable speed drives</a></li>
+            <li><a href="/products/sensors">Sensors and instruments</a></li>
+            <li><a href="/products/software">Plant software</a></li></ul></div>
+      <div class="footer-column"><h4>Company</h4>
+        <ul><li><a href="/company/about">About Northwind</a></li>
+            <li><a href="/company/news">Newsroom</a></li>
+            <li><a href="/careers">Careers</a></li>
+            <li><a href="/investors">Investor relations</a></li></ul></div>
+      <div class="footer-column"><h4>Support</h4>
+        <ul><li><a href="/support/portal">Customer portal</a></li>
+            <li><a href="/support/downloads">Downloads</a></li>
+            <li><a href="/support/training">Training</a></li>
+            <li><a href="/support/contact">Contact support</a></li></ul></div>
+    </div>
+    <p class="legal">© 2026 Northwind Industrial Systems. All rights reserved. Privacy policy. Terms of use. Cookie notice.</p>
+  </footer>
+</body>
+</html>

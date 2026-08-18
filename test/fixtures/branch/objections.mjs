@@ -83,7 +83,7 @@ export function objectionProof() {
   const branches = OBJECTIONS.map((o, i) => branch(
     o.id,
     o.objection,
-    Array.from({ length: 1 + (i % 2) }, (_, k) => scene(`${o.id}_s${k}`, 2)),
+    Array.from({ length: 2 - (i % 2) }, (_, k) => scene(`${o.id}_s${k}`, 2)),
     o.returnPolicy,
     o.aliases,
   ));

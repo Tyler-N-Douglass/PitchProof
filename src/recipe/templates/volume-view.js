@@ -141,6 +141,11 @@ export function render(specimen, options = {}) {
         ordered: false,
         items: CHANNEL_CODES.map((c) => `${c.code} — ${c.channel}`),
       },
+      {
+        type: 'paragraph',
+        text: 'Each tile is one market crossed with one channel. Past the combination count the tiles repeat: '
+          + 'the grid shows volume, not a unique enumeration, and says so rather than implying more coverage than exists.',
+      },
     ];
 
     return finish({

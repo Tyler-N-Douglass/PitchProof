@@ -117,7 +117,7 @@ function firstHeading(blocks) {
  * @param {{kind?: string, imageQuality?: number, clock?: () => string,
  *          idMinter?: {next: (kind: string) => string}, siblings?: any[],
  *          maxEdge?: number, repairHeadings?: boolean, parseHtml?: (html: string) => any,
- *          strict?: boolean}} [options]
+ *          strip?: boolean, strict?: boolean}} [options]
  * @returns {import('../core/contracts.d.ts').Specimen}
  */
 export function buildSpecimen(capture, options = {}) {
@@ -160,7 +160,13 @@ export function buildSpecimen(capture, options = {}) {
     const clone = linkParents(cloneTree(doc));
     const body = bodyOf(clone);
     dropNonRendered(body);
-    const classified = classifyChrome(body, { siblings: options.siblings });
+    // `strip: false` builds the specimen with the whole page in it. It is how
+    // the studio shows "everything we found" beside "what we kept", and it is
+    // the reference the §17.5 reversibility test compares a fully restored
+    // specimen against.
+    const classified = options.strip === false
+      ? { root: body, how: 'unstripped', removed: [] }
+      : classifyChrome(body, { siblings: options.siblings });
     locator = classified.how;
     chromeRoot = selectorPath(classified.root, body);
 

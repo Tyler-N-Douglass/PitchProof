@@ -1,6 +1,7 @@
 /**
- * The §17.5 chrome-stripping corpus: six hand-labelled pages of one hostile
- * enterprise site.
+ * The §17.5 chrome-stripping corpus: seven hand-labelled pages of one hostile
+ * enterprise site — the six §17.5 asks for, plus an adversarial seventh whose
+ * *content* is written to look like chrome.
  *
  * Every fixture is ordinary HTML carrying hand-written ground-truth labels:
  * `data-pp-truth="content"` on the regions a human says are the page's own
@@ -57,37 +58,43 @@ export const FIXTURES = [
     name: 'home.html',
     label: 'enterprise home page — mega-nav, cookie banner, personalization shell',
     url: 'https://www.northwind-industrial.example/',
-    contentBlocks: 15,
+    contentBlocks: 13,
   },
   {
     name: 'product.html',
     label: 'product detail — personalization shell, sticky bar, breadcrumbs, related rail',
     url: 'https://www.northwind-industrial.example/products/controllers/nx-8400',
-    contentBlocks: 17,
+    contentBlocks: 11,
   },
   {
     name: 'article.html',
     label: 'news article — subscribe interstitial, social bar, related rail',
     url: 'https://www.northwind-industrial.example/news/retrofit-year-two',
-    contentBlocks: 14,
+    contentBlocks: 11,
   },
   {
     name: 'article-de.html',
     label: 'locale variant of the same article — translated shell, identical structure',
     url: 'https://www.northwind-industrial.example/de-de/news/retrofit-year-two',
-    contentBlocks: 11,
+    contentBlocks: 9,
   },
   {
     name: 'docs.html',
     label: 'documentation page — sidebar tree, breadcrumb, on-this-page rail',
     url: 'https://www.northwind-industrial.example/docs/studio/loops',
-    contentBlocks: 14,
+    contentBlocks: 11,
+  },
+  {
+    name: 'adversarial.html',
+    label: 'knowledge-base article about consent — content that reads like chrome',
+    url: 'https://www.northwind-industrial.example/kb/portal-cookie-consent',
+    contentBlocks: 11,
   },
   {
     name: 'landing.html',
     label: 'landing page that is almost all chrome, and has no <main>',
     url: 'https://www.northwind-industrial.example/lp/uptime-audit',
-    contentBlocks: 7,
+    contentBlocks: 6,
   },
 ];
 

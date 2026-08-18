@@ -136,6 +136,15 @@ export const IMAGERY_THRESHOLDS = {
   face: { minAreaShare: 0.005, maxAreaShare: 0.35, minAspect: 0.9, maxAspect: 2.2, minFill: 0.45 },
 
   /**
+   * An image with fewer pixels than this, or with almost nothing painted, is
+   * `unknown` rather than classified: 8x8 is the smallest grid a 3x3 Sobel
+   * operator has an interior for at all, and an image that is 98% transparent
+   * carries no treatment to read.
+   */
+  minAnalysablePixels: 64,
+  minOpaqueShare: 0.02,
+
+  /**
    * Below this score for both classes, an image is `unknown` rather than
    * guessed at. Above it, a margin narrower than `mixedMargin` means the image
    * itself is mixed — a photograph with flat graphic overlay, which is a real
@@ -515,6 +524,17 @@ export function classifyImage(sample, index = 0) {
   const norm = normalizeSample(sample, index);
   const small = downsample(norm, t.analysisMaxEdge);
 
+  const opaque = opaqueShare(small);
+  if (small.width * small.height < t.minAnalysablePixels || opaque < t.minOpaqueShare) {
+    return {
+      id: norm.id, treatment: 'unknown', photographic: 0, illustrative: 0, weight: norm.weight,
+      edges: { edgeDensity: 0, flatShare: 0, meanMagnitude: 0 },
+      palette: { distinctBins: 0, topShare: 0 },
+      saturation: { mean: 0, vividShare: 0, neutralShare: 0 },
+      face: { skinShare: 0, faceLike: false, blob: null },
+    };
+  }
+
   const edges = edgeStats(small);
   const palette = paletteStats(small);
   const sat = saturationStats(small);
@@ -579,6 +599,8 @@ export function classifyImagery(images) {
   let satDen = 0;
   for (const v of verdicts) {
     weights[v.treatment] += v.weight;
+    // An image that could not be read contributes no saturation evidence.
+    if (v.treatment === 'unknown') continue;
     satNum += v.saturation.mean * v.weight;
     satDen += v.weight;
   }
@@ -655,6 +677,20 @@ export function imageryConfidence(verdicts, treatment) {
   const agreement = total > 0 ? agreeing / total : 0;
   const decisive = total > 0 ? Math.min(1, (margin / total) / 0.4) : 0;
   return round6(clamp01(0.35 * sample + 0.4 * agreement + 0.25 * decisive));
+}
+
+/**
+ * Share of pixels that are painted at all.
+ * @param {{width: number, height: number, data: Uint8Array}} image
+ * @returns {number}
+ */
+export function opaqueShare(image) {
+  const d = image.data;
+  const n = image.width * image.height;
+  if (n === 0) return 0;
+  let opaque = 0;
+  for (let i = 3; i < d.length; i += 4) if (d[i] >= 128) opaque += 1;
+  return opaque / n;
 }
 
 /**

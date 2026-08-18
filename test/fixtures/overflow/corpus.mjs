@@ -34,7 +34,7 @@ import {
 } from '../../../src/core/text-metrics.js';
 import {
   HEADLINES, SUBHEADS, PARAGRAPHS, GERMAN_COMPOUNDS, GERMAN_SENTENCES,
-  CJK, LABELS, LONG_TOKENS,
+  CJK, LABELS, LONG_TOKENS, BREAKABLE_TOKEN,
 } from './copy.mjs';
 
 /** The three breakpoints §4 pins, by id. */
@@ -150,7 +150,9 @@ function plant(spec) {
     const width = whiteSpace === 'nowrap'
       ? measureText(text, measuredStyle)
       : layoutText(text, measuredStyle, { maxWidthPx: containerWidthPx, whiteSpace, overflowWrap }).maxLineWidthPx;
-    const target = whiteSpace === 'nowrap' ? q(width / (1 + overBy)) : containerWidthPx;
+    const target = containerWidthPx !== undefined
+      ? containerWidthPx
+      : (whiteSpace === 'nowrap' ? q(width / (1 + overBy)) : containerWidthPx);
     box.containerWidthPx = target;
     // Generous on the other axis, so exactly one axis is under test.
     box.containerHeightPx = q(fontSizePx * lineHeight * 6);
@@ -279,7 +281,7 @@ PARAGRAPHS.forEach((text, i) => {
 // ---------------------------------------------------------------------------
 
 [
-  { family: 'Calibri', stack: ['Verdana'], text: HEADLINES[0], size: 32, embeddable: false },
+  { family: 'Barlow', stack: ['Verdana'], text: HEADLINES[0], size: 32 },
   { family: 'EB Garamond', stack: ['Verdana', 'Georgia'], text: HEADLINES[1], size: 30 },
 ].forEach((spec, i) => {
   const resolved = firstAvailable([spec.family, ...spec.stack]);
@@ -431,7 +433,7 @@ LONG_TOKENS.forEach((token, i) => {
   plant({
     id: `G4${i}`,
     group: 'long-token',
-    note: 'A file path or identifier pasted into body copy: one token, no spaces, wider than the column.',
+    note: 'An identifier pasted into body copy: one token, no spaces and no hyphens, wider than the column.',
     planted: 'sev1',
     axis: 'width',
     text: `Asset reference: ${token}`,
@@ -445,6 +447,24 @@ LONG_TOKENS.forEach((token, i) => {
     role: 'paragraph',
     overBy: 0,
   });
+});
+
+plant({
+  id: 'G42',
+  group: 'long-token',
+  note: 'The same path with its hyphens and slashes intact: every one is a break opportunity, so it wraps and must not fire.',
+  planted: 'fit',
+  axis: 'width',
+  text: `Asset reference: ${BREAKABLE_TOKEN}`,
+  family: 'Inter',
+  stack: ['Arial'],
+  breakpoint: 'md',
+  fontSizePx: 16,
+  whiteSpace: 'normal',
+  overflowWrap: 'normal',
+  containerWidthPx: q(measureText(BREAKABLE_TOKEN, { family: 'Arial', fontSizePx: 16 }) * 0.6),
+  role: 'paragraph',
+  overBy: 0,
 });
 
 GERMAN_SENTENCES.forEach((text, i) => {
@@ -706,38 +726,42 @@ LABELS.slice(0, 4).forEach((text, i) => {
   });
 });
 
+// One headline, one container, sized with 2% to spare for the face the brand
+// asked for. Whether it survives depends only on whether that face ships.
+const EMBED_CONTAINER = q(measureText(HEADLINES[4], { family: 'Source Sans Pro', fontSizePx: 36, weight: 700 }) * 1.02);
+
 plant({
   id: 'L3',
   group: 'embeddable-face',
-  note: 'A licensed font file was supplied, so no substitution happens and the container that fits the requested face is the container that fits.',
+  note: 'A licensed font file was supplied, so nothing substitutes and the headline fits with 2% to spare.',
   planted: 'fit',
   axis: 'width',
   text: HEADLINES[4],
-  family: 'Poppins',
+  family: 'Source Sans Pro',
   stack: ['Arial'],
   breakpoint: 'md',
   fontSizePx: 36,
   weight: 700,
   role: 'headline',
   embeddable: true,
-  overBy: -0.06,
+  containerWidthPx: EMBED_CONTAINER,
 });
 
 plant({
   id: 'L4',
   group: 'embeddable-face',
-  note: 'The same headline, same container, without the licensed file: the substitution alone takes it over.',
+  note: 'The same headline in the same container without the licensed file: the substitution alone takes it over.',
   planted: 'sev1',
   axis: 'width',
   text: HEADLINES[4],
-  family: 'Poppins',
+  family: 'Source Sans Pro',
   stack: ['Arial'],
   breakpoint: 'md',
   fontSizePx: 36,
   weight: 700,
   role: 'headline',
   embeddable: false,
-  overBy: 0.09,
+  containerWidthPx: EMBED_CONTAINER,
 });
 
 // ---------------------------------------------------------------------------

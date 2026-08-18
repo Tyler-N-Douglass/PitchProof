@@ -79,16 +79,17 @@ function entriesFor(ctx) {
     entries.push({ title: String(block.text), blurb, rendition: null });
   }
 
-  if (entries.length === 0) {
-    const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
-    rends.forEach((rendition, index) => {
-      entries.push({
-        title: renditionLabel(rendition, index),
-        blurb: renditionMeta(rendition),
-        rendition,
-      });
+  // Renditions are listed too, after the sections — a contents scene that
+  // silently dropped the variants the scene carries would be a contents list
+  // that is not a list of the contents.
+  const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
+  rends.forEach((rendition, index) => {
+    entries.push({
+      title: renditionLabel(rendition, index),
+      blurb: renditionMeta(rendition),
+      rendition,
     });
-  }
+  });
 
   if (entries.length === 0 && ctx.specimen) {
     entries.push({ title: specimenTitle(ctx.specimen), blurb: null, rendition: null });

@@ -390,8 +390,17 @@ export function enforceBudget(blocks, budget, options = {}) {
     const indices = assignment.get(part.role) || [];
     if (indices.length === 0) continue;
     const text = indices.map((i) => flatten(blockText(list[i]).join(' '))).filter(Boolean).join(' ');
-    const chars = Array.from(text).length;
-    const partOver = Math.max(0, chars - part.maxChars);
+
+    // SMS is measured in septets against the limit its *detected encoding*
+    // imposes, not against the GSM-7 number: a single non-GSM character (an em
+    // dash, a curly apostrophe, an accented name) drops the single-segment
+    // budget from 160 to 70, and reporting 160 in that case would be a lie.
+    const seg = b.id === 'sms' ? smsSegments(text) : null;
+    const chars = seg ? seg.units : Array.from(text).length;
+    const limit = seg
+      ? (seg.encoding === 'GSM-7' ? SMS_SEGMENTS.gsm7Single : SMS_SEGMENTS.ucs2Single)
+      : part.maxChars;
+    const partOver = Math.max(0, chars - limit);
     overBy += partOver;
 
     /** @type {BudgetPartReport} */
@@ -399,21 +408,20 @@ export function enforceBudget(blocks, budget, options = {}) {
       role: part.role,
       name: part.name,
       chars,
-      limit: part.maxChars,
+      limit,
       overBy: partOver,
       removed: 0,
       blockIndices: indices.slice(),
       source: part.source,
     };
-    if (b.id === 'sms') {
-      const seg = smsSegments(text);
+    if (seg) {
       report.encoding = seg.encoding;
       report.segments = seg.segments;
       report.units = seg.units;
     }
 
     if (truncate && partOver > 0) {
-      let budgetLeft = part.maxChars;
+      let budgetLeft = limit;
       for (const i of indices) {
         const block = out[i];
         const before = flatten(blockText(block).join(' '));

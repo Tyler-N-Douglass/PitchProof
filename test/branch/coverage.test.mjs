@@ -88,11 +88,12 @@ test('BRANCH_NO_RETURN: a branch whose last scene has no resolved return is repo
   // Reachable — it has an objection, so the jump index finds it — but it hangs
   // off nothing, so `returnPolicy: 'anchor'` names a scene that does not exist.
   const loose = branch('bn_loose', 'They will ask about procurement', [scene('sc_loose_0', 2)], 'anchor', ['purchasing']);
-  const coverage = branchCoverage(deckOf([scene('sc_n_0', 2)], [loose], 'orphan-no-return'));
+  const looseDeck = deckOf([scene('sc_n_0', 2)], [loose], 'orphan-no-return');
+  const coverage = branchCoverage(looseDeck);
 
   assert.deepEqual(coverage.noReturn, ['bn_loose']);
   assert.deepEqual(coverage.unreachable, [], 'it is reachable — that is a different finding');
-  assert.equal(returnTargetFor(buildDeck(deckOf([scene('sc_n_0', 2)], [loose], 'orphan-no-return').proof), 'bn_loose'), null);
+  assert.equal(returnTargetFor(looseDeck, 'bn_loose'), null);
 });
 
 test('both orphans are reported at once, and told apart', () => {

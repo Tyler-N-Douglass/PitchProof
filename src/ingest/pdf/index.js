@@ -60,6 +60,8 @@ export function importPdf(bytes, deps = /** @type {any} */ ({})) {
   /** @type {import('../capture.js').CaptureAsset[]} */
   const assets = [];
   const report = { skipped: /** @type {{name: string, filter: string}[]} */ ([]) };
+  /** @type {Map<any, string>} image object identity → asset name, document-wide */
+  const seenImages = new Map();
   let textPages = 0;
   let imageCount = 0;
 
@@ -80,8 +82,12 @@ export function importPdf(bytes, deps = /** @type {any} */ ({})) {
 
     /** @type {import('./image.js').ExtractedImage[]} */
     let images = [];
+    /** @type {{name: string}[]} */
+    let repeats = [];
     try {
-      images = extractPageImages(doc, page, pageNumber, report);
+      const extracted = extractPageImages(doc, page, pageNumber, report, { seen: seenImages });
+      images = extracted.images;
+      repeats = extracted.repeats;
     } catch (e) {
       doc.warnings.push(`page ${pageNumber} images could not be read: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -90,6 +96,11 @@ export function importPdf(bytes, deps = /** @type {any} */ ({})) {
       assets.push({ name: image.name, bytes: image.bytes, mime: image.mime });
       blocks.push({ type: 'media', ref: image.name, caption: `Page ${pageNumber}` });
       imageCount += 1;
+    }
+    // An image the document reuses is one asset with a block on each page that
+    // shows it — the bytes are never carried twice.
+    for (const repeat of repeats) {
+      blocks.push({ type: 'media', ref: repeat.name, caption: `Page ${pageNumber}` });
     }
   }
 

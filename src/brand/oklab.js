@@ -185,46 +185,90 @@ export function rgbInRange(rgb, eps = GAMUT_EPS_8BIT) {
  * ------------------------------------------------------------------------ */
 
 /** Linear sRGB → LMS cone response. Published matrix M1. */
-const LSRGB_TO_LMS = [
+export const LSRGB_TO_LMS = [
   [0.4122214708, 0.5363325363, 0.0514459929],
   [0.2119034982, 0.6806995451, 0.1073969566],
   [0.0883024619, 0.2817188376, 0.6299787005],
 ];
 
 /** LMS (cube-rooted) → OKLab. Published matrix M2. */
-const LMS_TO_OKLAB = [
+export const LMS_TO_OKLAB = [
   [0.2104542553, 0.7936177850, -0.0040720468],
   [1.9779984951, -2.4285922050, 0.4505937099],
   [0.0259040371, 0.7827717662, -0.8086757660],
 ];
 
-/** OKLab → LMS (cube-rooted). Published inverse of M2. */
-const OKLAB_TO_LMS = [
+/**
+ * Ottosson also publishes rounded inverse matrices. They are convenient but
+ * they are *rounded*, and a rounded inverse is not the inverse: composing the
+ * published forward and published inverse matrices leaves a residual of about
+ * 1e-6, which shows up directly as a 4e-4 error in an 8-bit round trip — an
+ * order of magnitude past the 1e-6 §17.1 demands.
+ *
+ * So the forward matrices above are the normative definition and every inverse
+ * is computed from them exactly, by Gauss–Jordan elimination at load. The
+ * published inverses are kept below purely so the reference test can assert
+ * that the computed inverse agrees with them to their published precision —
+ * which makes both sets of published numbers load-bearing instead of one.
+ */
+export const PUBLISHED_OKLAB_TO_LMS = [
   [1, 0.3963377774, 0.2158037573],
   [1, -0.1055613458, -0.0638541728],
   [1, -0.0894841775, -1.2914855480],
 ];
 
-/** LMS → linear sRGB. Published inverse of M1. */
-const LMS_TO_LSRGB = [
+export const PUBLISHED_LMS_TO_LSRGB = [
   [4.0767416621, -3.3077115913, 0.2309699292],
   [-1.2684380046, 2.6097574011, -0.3413193965],
   [-0.0041960863, -0.7034186147, 1.7076147010],
 ];
 
-/** CIE XYZ (D65) → LMS. Published matrix, used only by the reference test. */
-const XYZ_TO_LMS = [
+export const PUBLISHED_LMS_TO_XYZ = [
+  [1.2270138511, -0.5577999807, 0.2812561490],
+  [-0.0405801784, 1.1122568696, -0.0716766787],
+  [-0.0763812845, -0.4214819784, 1.5861632204],
+];
+
+/**
+ * Exact 3×3 inverse by Gauss–Jordan elimination with partial pivoting.
+ * Deterministic: IEEE-754 double arithmetic in a fixed order.
+ * @param {readonly number[][]} m
+ * @returns {number[][]}
+ */
+export function invert3(m) {
+  const a = m.map((row, i) => [...row, i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0]);
+  for (let col = 0; col < 3; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < 3; r++) if (Math.abs(a[r][col]) > Math.abs(a[pivot][col])) pivot = r;
+    if (Math.abs(a[pivot][col]) < 1e-15) throw new Error('invert3: singular matrix');
+    if (pivot !== col) { const t = a[pivot]; a[pivot] = a[col]; a[col] = t; }
+    const d = a[col][col];
+    for (let c = 0; c < 6; c++) a[col][c] /= d;
+    for (let r = 0; r < 3; r++) {
+      if (r === col) continue;
+      const f = a[r][col];
+      if (f === 0) continue;
+      for (let c = 0; c < 6; c++) a[r][c] -= f * a[col][c];
+    }
+  }
+  return a.map((row) => row.slice(3));
+}
+
+/** OKLab → LMS (cube-rooted): the exact inverse of the published M2. */
+const OKLAB_TO_LMS = invert3(LMS_TO_OKLAB);
+
+/** LMS → linear sRGB: the exact inverse of the published M1. */
+const LMS_TO_LSRGB = invert3(LSRGB_TO_LMS);
+
+/** CIE XYZ (D65) → LMS. Published matrix. */
+export const XYZ_TO_LMS = [
   [0.8189330101, 0.3618667424, -0.1288597137],
   [0.0329845436, 0.9293118715, 0.0361456387],
   [0.0482003018, 0.2643662691, 0.6338517070],
 ];
 
-/** LMS → CIE XYZ (D65). Published inverse. */
-const LMS_TO_XYZ = [
-  [1.2270138511, -0.5577999807, 0.2812561490],
-  [-0.0405801784, 1.1122568696, -0.0716766787],
-  [-0.0763812845, -0.4214819784, 1.5861632204],
-];
+/** LMS → CIE XYZ (D65): the exact inverse of the published forward matrix. */
+const LMS_TO_XYZ = invert3(XYZ_TO_LMS);
 
 /**
  * @param {readonly number[][]} m
@@ -466,11 +510,23 @@ export const GUARANTEED_CONTRAST = Math.sqrt(MAX_CONTRAST);
  * ------------------------------------------------------------------------ */
 
 /**
- * Gamut tolerance in 8-bit units. 1/512 is half of the smallest representable
- * 8-bit step, so a colour that survives this test rounds to an `#rrggbb` value
- * whose own conversion back is inside the cube.
+ * Gamut tolerance in 8-bit units, chosen to sit between two measured
+ * quantities and to be justified by both:
+ *
+ *  - **Above** ≈3e-5, the intrinsic mismatch between the OKLab neutral axis
+ *    and the sRGB grey axis. The published matrices do not put `#ffffff`
+ *    exactly on `a = b = 0` (it lands at b ≈ 3.7e-8), so a pure neutral at
+ *    white's own lightness overshoots the blue channel by about 2.7e-5 8-bit
+ *    units. A tighter tolerance would report white itself as out of gamut.
+ *  - **Far below** 0.5, the tolerance at which a colour would round to a
+ *    different 8-bit code. A looser tolerance is a real defect: at 1/512 the
+ *    predicate calls a visibly chromatic colour "in gamut at L = 0" purely
+ *    because every channel still rounds to zero.
+ *
+ * The OKLab ↔ sRGB round trip itself is accurate to ≈3e-12 8-bit units, so
+ * conversion noise is nowhere near either bound.
  */
-export const GAMUT_EPS_8BIT = 1 / 512;
+export const GAMUT_EPS_8BIT = 1e-4;
 
 /**
  * The largest OKLCH chroma any sRGB colour reaches is that of pure blue
@@ -514,14 +570,26 @@ export function maxChromaAt(L, H) {
 }
 
 /**
+ * The OKLab lightness of pure sRGB white. It is *not* exactly 1: the published
+ * matrices put `#ffffff` at L = 0.99999999347…, so an OKLCH colour at L = 1 is
+ * a hair above the top of the sRGB solid and is correctly reported out of
+ * gamut. Callers legitimately walk lightness up to 1, so the clamp maps that
+ * end of the range onto white rather than off the end of the gamut.
+ */
+export const SRGB_WHITE_L = linearRgbToOklab([1, 1, 1])[0];
+/** The OKLab lightness of pure sRGB black, exactly 0. */
+export const SRGB_BLACK_L = linearRgbToOklab([0, 0, 0])[0];
+
+/**
  * Clamp chroma into the sRGB gamut, holding lightness and hue. Lightness
- * outside 0..1 is clamped first: no chroma can rescue it, and returning a
- * silently NaN colour would be worse than returning the nearest neutral.
+ * outside the achievable neutral range is clamped first: no chroma can rescue
+ * it, and returning a silently NaN colour would be worse than returning the
+ * nearest neutral.
  * @param {readonly number[]} lch
  * @returns {[number, number, number]}
  */
 export function clampChromaToGamut(lch) {
-  const L = Math.min(1, Math.max(0, lch[0]));
+  const L = Math.min(SRGB_WHITE_L, Math.max(SRGB_BLACK_L, lch[0]));
   const H = ((lch[2] % 360) + 360) % 360;
   const C = Math.max(0, lch[1]);
   if (C === 0) return [L, 0, H];

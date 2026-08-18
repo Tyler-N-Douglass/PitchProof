@@ -14,7 +14,7 @@
  * @module ingest/pdf/image
  */
 
-import { PdfStream, nameOf } from './lexer.js';
+import { Lexer, Name, Operator, PdfStream, nameOf, findKeyword } from './lexer.js';
 import { deflateRaw } from '../../core/deflate.js';
 import { crc32 } from '../../core/zip.js';
 
@@ -33,48 +33,102 @@ import { crc32 } from '../../core/zip.js';
  */
 
 /**
- * Every image XObject reachable from a page, in resource order.
+ * The XObject names a content stream actually draws.
+ *
+ * Resource dictionaries are inherited down the page tree, so "every image in
+ * the page's resources" over-reports badly — a two-page document that shares
+ * one resource dict would report each image twice. Reading the `Do` operators
+ * reports what the page really shows.
+ *
+ * @param {Uint8Array} content
+ * @returns {Set<string>}
+ */
+export function namesDrawnIn(content) {
+  /** @type {Set<string>} */
+  const names = new Set();
+  if (!content || !content.length) return names;
+  const lexer = new Lexer(content, 0);
+  /** @type {string|null} */
+  let lastName = null;
+  let guard = 0;
+  while (!lexer.atEnd && guard < 2_000_000) {
+    guard += 1;
+    const before = lexer.pos;
+    const token = lexer.parseObject({ allowOperators: true });
+    if (lexer.pos === before) { lexer.pos += 1; continue; }
+    if (token instanceof Name) { lastName = token.name; continue; }
+    if (token instanceof Operator) {
+      if (token.op === 'Do' && lastName) names.add(lastName);
+      if (token.op === 'BI') {
+        const at = findKeyword(content, lexer.pos, 'EI');
+        lexer.pos = at < 0 ? content.length : at + 2;
+      }
+      lastName = null;
+      continue;
+    }
+    lastName = null;
+  }
+  return names;
+}
+
+/**
+ * Every image XObject a page draws, in the order the resource dictionary lists
+ * them.
  *
  * @param {PdfDocument} doc
  * @param {Record<string, any>} page
  * @param {number} pageNumber
  * @param {{skipped: {name: string, filter: string}[]}} report
- * @returns {ExtractedImage[]}
+ * @param {{seen?: Map<any, string>}} [options]  document-wide identity map, so
+ *        an image used on several pages is extracted once
+ * @returns {{images: ExtractedImage[], repeats: {name: string}[]}}
  */
-export function extractPageImages(doc, page, pageNumber, report) {
+export function extractPageImages(doc, page, pageNumber, report, options = {}) {
   /** @type {ExtractedImage[]} */
   const images = [];
+  /** @type {{name: string}[]} */
+  const repeats = [];
+  const seen = options.seen || new Map();
   /** @type {Set<any>} */
-  const seen = new Set();
+  const localSeen = new Set();
 
   /**
    * @param {Record<string, any>|null} resources
+   * @param {Set<string>} drawn
    * @param {number} depth
    */
-  const visit = (resources, depth) => {
-    if (!resources || depth > 6) return;
+  const visit = (resources, drawn, depth) => {
+    if (!resources || depth > 6 || !drawn.size) return;
     const xobjects = doc.dictGet(resources, 'XObject');
     if (!xobjects || typeof xobjects !== 'object') return;
     for (const key of Object.keys(xobjects)) {
+      if (!drawn.has(key)) continue;
       const raw = xobjects[key];
       const identity = raw && raw.key !== undefined ? raw.key : raw;
-      if (seen.has(identity)) continue;
-      seen.add(identity);
+      if (localSeen.has(identity)) continue;
+      localSeen.add(identity);
       const stream = doc.resolve(raw);
       if (!(stream instanceof PdfStream)) continue;
       const subtype = nameOf(doc.dictGet(stream.dict, 'Subtype'));
       if (subtype === 'Form') {
-        visit(doc.dictGet(stream.dict, 'Resources'), depth + 1);
+        const data = doc.decode(stream);
+        visit(doc.dictGet(stream.dict, 'Resources') || resources, namesDrawnIn(data || new Uint8Array(0)), depth + 1);
         continue;
       }
       if (subtype !== 'Image') continue;
+      const already = seen.get(identity);
+      if (already) { repeats.push({ name: already }); continue; }
       const extracted = decodeImage(doc, stream, `${key}`, pageNumber, report);
-      if (extracted) images.push(extracted);
+      if (extracted) {
+        seen.set(identity, extracted.name);
+        images.push(extracted);
+      }
     }
   };
 
-  visit(doc.dictGet(page, 'Resources'), 0);
-  return images;
+  const content = doc.pageContent(page);
+  visit(doc.dictGet(page, 'Resources'), namesDrawnIn(content), 0);
+  return { images, repeats };
 }
 
 /**

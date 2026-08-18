@@ -1354,8 +1354,11 @@ export function collectLogoCandidates(doc, assets) {
   }
   // §7 asks for the *largest* raster in the header region; a named logo beats a
   // merely-large hero image at equal size.
+  // The name and alt belong to the image itself; the surrounding context does
+  // not, because every image inside a `.masthead` inherits the same words and
+  // the tie-break would stop discriminating.
   headerRasters.sort((a, b) => {
-    const named = (c) => (LOGO_CONTEXT_RE.test(`${c.name} ${c.alt} ${c.context}`) ? 1 : 0);
+    const named = (c) => (LOGO_CONTEXT_RE.test(`${c.name} ${c.alt}`) ? 1 : 0);
     return (named(b) - named(a)) || ((b.info.w * b.info.h) - (a.info.w * a.info.h)) || a.name.localeCompare(b.name);
   });
   out.push(...headerRasters);
@@ -1512,33 +1515,72 @@ function base64ToBytes(b64) {
 // ----------------------------------------------------------------- inversion
 
 /**
- * Invert one ink through OKLCH: hold the hue, keep the chroma in gamut, and
- * reflect the lightness about the middle. A black mark comes back white; a navy
- * mark comes back as the same navy hue at the lightness a dark ground needs.
+ * The luminance at which black and white contrast equally against a colour:
+ * the solution of (Y + 0.05)/0.05 = 1.05/(Y + 0.05), which is
+ * sqrt(1.05 x 0.05) - 0.05 = 0.17912878... Published as the "contrast pivot" and
+ * used here as the definition of a light ink.
+ */
+export const WCAG_CONTRAST_PIVOT = Math.sqrt(1.05 * 0.05) - 0.05;
+
+/** Bisection steps used to hit a target luminance. 24 steps resolve L to 6e-8. */
+export const INVERT_BISECT_STEPS = 24;
+
+/**
+ * Invert one ink by **luminance inversion**, which is what §7 asks for: the
+ * ink's WCAG relative luminance Y is reflected to 1 - Y, its hue is held, and
+ * its chroma is clamped back into the sRGB gamut at the new lightness.
  *
- * Colour science is L4's (`brand/color.js`); this module only decides *what* to
- * invert, never *how* a colour converts.
+ * Reflecting OKLab lightness instead would be a different operation and a worse
+ * one: a near-black mark would come back mid-grey rather than white, and a
+ * reversed lockup that is grey on black is a defect, not an inverse.
+ *
+ * The lightness that hits the target luminance is found by bisection, because
+ * relative luminance is monotonic in OKLab L at a fixed hue and clamped chroma
+ * but has no closed form through the gamut clamp.
+ *
+ * Colour science is L4's (`brand/color.js`); this module decides *what* to
+ * invert and *to what*, never *how* a colour converts.
  *
  * @param {string} hex
  * @returns {string}
  */
 export function invertInk(hex) {
-  const [l, c, h] = hexToOklch(hex);
-  const clamped = clampChromaToGamut([1 - l, c, h]);
-  return oklchToHex(clamped);
+  const rgb = paintToRgb(hex);
+  if (!rgb) return hex;
+  const target = 1 - relativeLuminance(rgb);
+  const [, chroma, hue] = hexToOklch(hex);
+
+  /** @param {number} l @returns {string} */
+  const at = (l) => oklchToHex(clampChromaToGamut([l, chroma, hue]));
+  /** @param {number} l @returns {number} */
+  const luminanceAt = (l) => {
+    const out = paintToRgb(at(l));
+    return out ? relativeLuminance(out) : 0;
+  };
+
+  let lo = 0;
+  let hi = 1;
+  if (luminanceAt(hi) <= target) return at(hi);
+  if (luminanceAt(lo) >= target) return at(lo);
+  for (let i = 0; i < INVERT_BISECT_STEPS; i++) {
+    const mid = (lo + hi) / 2;
+    if (luminanceAt(mid) < target) lo = mid;
+    else hi = mid;
+  }
+  return at((lo + hi) / 2);
 }
 
 /**
- * Whether an ink reads as light — used to label a generated inverse for the
- * studio. WCAG relative luminance is the measure the rest of the product uses,
- * so it is the measure used here.
+ * Whether an ink reads as light: its WCAG relative luminance sits above the
+ * contrast pivot, the luminance at which black and white contrast equally
+ * against it. Used to label a generated inverse for the studio.
  * @param {string} hex
  * @returns {boolean}
  */
 export function isLightInk(hex) {
   const rgb = paintToRgb(hex);
   if (!rgb) return false;
-  return relativeLuminance(rgb) >= 0.5;
+  return relativeLuminance(rgb) > WCAG_CONTRAST_PIVOT;
 }
 
 /**
