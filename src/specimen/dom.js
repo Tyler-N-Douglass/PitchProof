@@ -5,11 +5,19 @@
  *
  * `DocNode` = { type: 'element'|'text'|'comment', tag?, attrs?, children?, text?, parent? }
  *
+ * Attribute reads delegate to L3's `attr` so the two lanes cannot disagree
+ * about what a page says. Text measurement does **not**: `textContent` from
+ * ingest concatenates without block boundaries, which would glue
+ * `<div>a</div><div>b</div>` into "ab" and quietly corrupt every link-density
+ * ratio and text signature the classifier computes (D-L6-9).
+ *
  * Everything here is pure apart from `detach`/`reattach`, which are the two
  * mutating operations chrome stripping needs and which are exact inverses of
  * each other — that is what makes §8's "stripping is reversible" true at the
  * tree level as well as at the block level.
  */
+
+import { attr as ingestAttr } from '../ingest/index.js';
 
 /** Elements that never contribute rendered text. */
 export const NON_RENDERED = new Set([
@@ -55,6 +63,8 @@ export function childrenOf(n) { return (n && Array.isArray(n.children)) ? n.chil
  */
 export function attrOf(n, name) {
   if (!isElement(n) || !n.attrs) return null;
+  const viaIngest = ingestAttr(n, name);
+  if (viaIngest !== null && viaIngest !== undefined) return String(viaIngest);
   const want = name.toLowerCase();
   if (Object.prototype.hasOwnProperty.call(n.attrs, want)) {
     const v = n.attrs[want];

@@ -9,4 +9,4 @@
  * @module validate/lane-emit
  */
 
-export { scanForNetworkReferences, assertProvenance } from './standin/emit-scan.js';
+export { scanForNetworkReferences, assertProvenance } from '../emit/index.js';

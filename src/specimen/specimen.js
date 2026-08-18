@@ -22,6 +22,7 @@
 
 import { countWords, validateSpecimen } from '../core/contracts.js';
 import { contentId } from '../core/ids.js';
+import { parseHtml } from '../ingest/index.js';
 import { blocksWithTrace, repairHeadingLevels, unrepairHeadingLevels } from './blocks.js';
 import { classifyChrome, dropNonRendered } from './chrome.js';
 import {
@@ -290,10 +291,8 @@ export function buildSpecimen(capture, options = {}) {
 function resolveDoc(capture, options) {
   if (capture.doc) return capture.doc;
   if (typeof capture.html === 'string' && capture.html) {
-    const parse = options.parseHtml || null;
-    if (!parse) {
-      throw new Error('buildSpecimen: capture.doc is missing and no parser was supplied — ingest parses HTML (D8)');
-    }
+    // HTML parsing belongs to ingest (D8); this lane never grows its own.
+    const parse = options.parseHtml || parseHtml;
     return parse(capture.html);
   }
   return null;

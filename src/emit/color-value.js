@@ -205,9 +205,17 @@ export function parseColor(input) {
     if (name === 'color-mix') return parseColorMix(fn[2]);
     if (name === 'color') {
       // color(srgb r g b) — the only space whose numbers need no conversion.
+      // Its alpha is only ever after a slash: the fourth positional value is a
+      // channel, not an alpha, which is the opposite of `rgb()`.
       const space = (args[0] || '').toLowerCase();
+      const colorAlpha = slash >= 0 ? clamp01(numberOf(args[slash + 1], 1)) : 1;
       if (space === 'srgb') {
-        return { r: clamp255(numberOf(args[1], 1) * 255), g: clamp255(numberOf(args[2], 1) * 255), b: clamp255(numberOf(args[3], 1) * 255), a: alpha };
+        return {
+          r: clamp255(numberOf(args[1], 1) * 255),
+          g: clamp255(numberOf(args[2], 1) * 255),
+          b: clamp255(numberOf(args[3], 1) * 255),
+          a: colorAlpha,
+        };
       }
       return null;
     }

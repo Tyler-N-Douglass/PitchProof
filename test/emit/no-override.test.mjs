@@ -113,6 +113,20 @@ const NOT_OVERRIDES = new Set([
   'overridden',        // prose in identifiers is rare, but harmless
 ]);
 
+/**
+ * Named exemptions. Each one is a specific file and a specific token with a
+ * specific reason — a pattern-shaped exemption would let the next one in.
+ */
+const EXEMPT = [
+  {
+    file: 'src/core/storage.js',
+    token: 'force',
+    why: 'API.md Part 1 declares ProjectStore.save({force}). It re-saves a record whose '
+      + 'content hash is unchanged (§16 autosave dedupe). It has no reach into validation '
+      + 'or emit, and §16 asks for saves that never fail silently.',
+  },
+];
+
 test('no override-shaped identifier exists anywhere in src/, scripts/ or test/emit/', () => {
   const suspicious = /\b(force|forced|forceEmit|override|overrides|overrideFindings|bypass|unsafe|skipValidation|skipProvenance|skipScan|ignoreFindings|allowSeverity1|allowBlocking|allowNetwork|blockOnSeverity)\b/g;
   /** @type {string[]} */
@@ -129,6 +143,7 @@ test('no override-shaped identifier exists anywhere in src/, scripts/ or test/em
       suspicious.lastIndex = 0;
       while ((m = suspicious.exec(code)) !== null) {
         if (NOT_OVERRIDES.has(m[0])) continue;
+        if (EXEMPT.some((e) => e.file === rel && e.token === m[0])) continue;
         const line = code.slice(0, m.index).split('\n').length;
         offenders.push(`${rel}:${line}  ${m[0]}  →  ${text.split('\n')[line - 1].trim()}`);
       }

@@ -85,6 +85,50 @@ function statements(src) {
   return out;
 }
 
+
+/**
+ * Blank out string literals and comments so a check can look at code rather
+ * than at prose.
+ *
+ * The bundler's refusals are deliberately blunt, but a blunt check that greps a
+ * whole line matches its own vocabulary inside content. A panel subtitle
+ * reading "nothing fetched on import (§16)" is not a dynamic import, and
+ * failing the build on it is a false positive that costs more than the check
+ * saves. Quotes are replaced rather than removed so column numbers survive.
+ *
+ * @param {string} line
+ * @returns {string}
+ */
+export function stripLiteralsAndComments(line, state = { inBlock: false }) {
+  if (state.inBlock) {
+    const end = line.indexOf('*/');
+    if (end < 0) return '';
+    state.inBlock = false;
+    return stripLiteralsAndComments(line.slice(end + 2), state);
+  }
+  let out = '';
+  let quote = '';
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === '\\') { out += '  '; i += 1; continue; }
+      if (ch === quote) { quote = ''; out += ch; continue; }
+      out += ' ';
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue; }
+    if (ch === '/' && line[i + 1] === '/') return out;
+    if (ch === '/' && line[i + 1] === '*') {
+      const end = line.indexOf('*/', i + 2);
+      if (end < 0) { state.inBlock = true; return out; }
+      i = end + 1;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 /**
  * Rewrite one module.
  * @param {string} file
@@ -100,6 +144,9 @@ export function parseModule(file, src, root) {
   const exported = [];
   /** @type {string[]} */
   const outLines = [];
+  // Block-comment state carried across lines, so a JSDoc `@param {import(...)}`
+  // is read as documentation rather than as a dynamic import.
+  const commentState = { inBlock: false };
 
   const addDep = (spec) => {
     if (!spec.startsWith('.')) {
@@ -145,6 +192,7 @@ export function parseModule(file, src, root) {
     }
 
     const line = st.text;
+    const code = stripLiteralsAndComments(line, commentState);
     if (/^\s*export\s+default\b/.test(line)) throw new BundleError(`${id}:${st.line}: export default is not supported`);
     if (/^\s*export\s+\*/.test(line)) throw new BundleError(`${id}:${st.line}: export * is not supported`);
     const decl = line.match(/^(\s*)export\s+(async\s+function|function|class|const|let|var)\s+([A-Za-z_$][\w$]*)/);
@@ -154,7 +202,7 @@ export function parseModule(file, src, root) {
       continue;
     }
     if (/^\s*export\b/.test(line)) throw new BundleError(`${id}:${st.line}: unsupported export form: ${line.trim()}`);
-    if (/\bimport\s*\(/.test(line) && !/@type|@param|@returns|\*/.test(line)) {
+    if (/\bimport\s*\(/.test(code)) {
       throw new BundleError(`${id}:${st.line}: dynamic import() is not supported`);
     }
     outLines.push(line);

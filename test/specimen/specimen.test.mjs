@@ -250,17 +250,26 @@ test('a capture whose importer already produced blocks is passed through untouch
   assert.deepEqual(errs, []);
 });
 
-test('buildSpecimen refuses to invent a clock, and refuses to parse HTML itself (D8)', () => {
+test('buildSpecimen refuses to invent a clock, and parses HTML with L3 rather than its own parser (D8)', () => {
   assert.throws(() => buildSpecimen({ kind: 'html', html: '<p>x</p>', doc: parseFixtureHtml('<p>x</p>'), assets: [] }, {}),
     /clock is required/);
-  assert.throws(() => buildSpecimen({ kind: 'html', html: '<p>x</p>', doc: null, assets: [], capturedAt: CLOCK() }, { clock: CLOCK }),
-    /ingest parses HTML/);
-  // …but it accepts a parser passed in, which is how the studio wires L3 in.
+
+  const html = '<html lang="en"><body><main><h1>Hi</h1><p>Some prose for the body of this page.</p></main></body></html>';
+  // A capture that carries only HTML is parsed through `src/ingest` — this
+  // lane contains no HTML parser of its own.
+  const parsedHere = buildSpecimen(
+    { kind: 'html', html, doc: null, assets: [], capturedAt: CLOCK() },
+    { clock: CLOCK, imageQuality: 0.85 },
+  );
+  assert.equal(parsedHere.blocks[0].text, 'Hi');
+
+  // …and an explicitly supplied parser is still honoured, which is how a test
+  // or a browser host can substitute one.
   const withParser = buildSpecimen(
-    { kind: 'html', html: '<html lang="en"><body><main><h1>Hi</h1><p>Some prose for the body of this page.</p></main></body></html>', doc: null, assets: [], capturedAt: CLOCK() },
+    { kind: 'html', html, doc: null, assets: [], capturedAt: CLOCK() },
     { clock: CLOCK, imageQuality: 0.85, parseHtml: parseFixtureHtml },
   );
-  assert.equal(withParser.blocks[0].text, 'Hi');
+  assert.deepEqual(withParser.blocks, parsedHere.blocks);
 });
 
 test('the chrome report on a specimen says how the root was found and what was removed', () => {

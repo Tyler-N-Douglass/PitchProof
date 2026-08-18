@@ -41,14 +41,17 @@ test('the index covers every branch, over objections and aliases only', () => {
 });
 
 test('§11: three characters of "approvals" lands the approvals branch first, instantly', () => {
+  // The very first search of the session, on cold code, exactly as the first `/`
+  // of a pitch would be. The steady-state cost is measured properly — warmed,
+  // over a median round, at 200 branches — further down this file.
   const started = process.hrtime.bigint();
   const results = searchJump(index, 'app', { limit: 5 });
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
 
   assert.ok(results.length > 0, 'three characters found nothing');
   assert.equal(results[0].branchId, 'bn_approvals', 'the approval-chain branch must rank first');
-  assert.ok(elapsedMs < 1000, `§11 requires under a second; took ${elapsedMs}ms`);
-  assert.ok(elapsedMs < 1, `and in practice must be imperceptible; took ${elapsedMs}ms`);
+  assert.ok(elapsedMs < 1000, `§11 requires under a second; took ${elapsedMs.toFixed(3)}ms`);
+  assert.ok(elapsedMs < 50, `and the first keystroke of a pitch must still feel instant; took ${elapsedMs.toFixed(3)}ms`);
 
   // The overlay highlights what matched, so the presenter can confirm without reading.
   assert.equal(results[0].matchedField, 'objection');

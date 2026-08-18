@@ -7,4 +7,4 @@
  * @module validate/lane-scene
  */
 
-export { measureScene } from './standin/scene-measure.js';
+export { measureScene } from '../scene/index.js';

@@ -4,4 +4,4 @@
  * @module validate/lane-branch
  */
 
-export { branchCoverage } from './standin/branch-coverage.js';
+export { branchCoverage } from '../branch/index.js';

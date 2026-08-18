@@ -1180,8 +1180,8 @@ html, body {
 .pp-figure--tall .pp-img { height: 100%; object-fit: cover; }
 /* A captured hero is evidence, not the scene: it takes at most a third of the
    frame inside a content column, so the copy beside it stays the subject. */
-.pp-block--media .pp-img { max-height: 34vh; width: auto; max-width: 100%; }
-.pp-figure--tall .pp-img { max-height: none; width: 100%; }
+.pp-block--media .pp-img { max-height: 34vh; }
+.pp-figure--tall .pp-img { max-height: none; }
 .pp-img-missing {
   display: flex;
   align-items: center;
@@ -1322,8 +1322,8 @@ html, body {
      the middle of a line. It is still reported to the overflow detector with
      its clamp, so the scene that needs a shorter blurb is a finding, not a
      surprise on the projector. */
-  mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 10px), transparent);
-  -webkit-mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 10px), transparent);
+  mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 22px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 22px), transparent);
 }
 .pp-fan-card-title { margin: 0; }
 .pp-fan-card-blurb { margin: 0; opacity: 0.86; }
@@ -1406,8 +1406,8 @@ html, body {
   gap: 4px;
   align-content: start;
   overflow: hidden;
-  mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 8px), transparent);
-  -webkit-mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 8px), transparent);
+  mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 18px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 18px), transparent);
 }
 .pp-stack-title { margin: 0; }
 .pp-stack-blurb { margin: 0; opacity: 0.86; }
