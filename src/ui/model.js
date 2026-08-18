@@ -43,14 +43,6 @@ import { defaultEmitOptions, normalizeEmitOptions, SCENE_LAYOUTS, COLOR_ROLES, R
  * @property {Proof} proof
  */
 
-/** Meta key marking a specimen the user has opted into raw-HTML rendering for (§8). */
-export const RAW_OPT_IN_KEY = 'pp:allowRaw';
-/** Meta key holding the untouched source HTML kept per specimen (§8). */
-export const RAW_SOURCE_KEY = 'pp:rawHtml';
-/** Meta key recording that a specimen's blocks were edited by hand (§18.3). */
-export const EDITED_KEY = 'pp:edited';
-/** Meta key holding the JSON of blocks stripped as chrome, so they stay restorable (§8). */
-export const STRIPPED_KEY = 'pp:stripped';
 
 /** The brand groups §7 attaches a confidence to, and therefore a review gate. */
 export const BRAND_GROUPS = ['colors', 'faces', 'logos', 'shape', 'imagery'];
@@ -535,111 +527,63 @@ export function setSpecimenKind(doc, id, kind) {
 }
 
 /**
- * §8: raw HTML is kept per specimen but never presented without an explicit
- * per-specimen opt-in.
+ * Put a whole specimen back, which is how every L6-owned operation lands: the
+ * lane produces the new specimen (restore a stripped block, record an edit, set
+ * the raw opt-in) and the studio commits it through the command stack.
  * @param {Doc} doc
- * @param {string} id
- * @param {boolean} allow
+ * @param {Specimen} specimen
  * @returns {Doc}
  */
-export function setSpecimenRawOptIn(doc, id, allow) {
-  return withProof(doc, (p) => updateSpecimen(p, id, (s) => {
-    const meta = { ...(s.meta || {}) };
-    if (allow) meta[RAW_OPT_IN_KEY] = 'true'; else delete meta[RAW_OPT_IN_KEY];
-    return { ...s, meta };
-  }));
+export function replaceSpecimen(doc, specimen) {
+  return withProof(doc, (p) => updateSpecimen(p, specimen.id, () => specimen));
 }
 
 /**
- * The blocks a capture stripped as chrome, kept on the specimen so §8's
- * "every stripped block restorable" is a property of the saved project rather
- * than of a session that is still open.
- * @param {Specimen} specimen
- * @returns {{block: ContentBlock, reason: string, score: number}[]}
+ * The blocks a capture stripped as chrome. L6 keeps them on the specimen with
+ * the reason and the score that removed them, which is what §8's "every
+ * stripped block restorable" needs in order to survive a save and a reload.
+ * @param {any} specimen
+ * @returns {{id?: string, reason: string, score: number, text?: string, blocks?: ContentBlock[]}[]}
  */
 export function strippedBlocks(specimen) {
-  const raw = (specimen.meta || {})[STRIPPED_KEY];
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((e) => e && e.block) : [];
-  } catch { return []; }
+  const list = /** @type {any} */ (specimen || {}).stripped;
+  return Array.isArray(list) ? list : [];
 }
 
 /**
- * @param {Doc} doc
- * @param {string} specimenId
- * @param {{block: ContentBlock, reason: string, score: number}[]} entries
- * @returns {Doc}
+ * Has this specimen been edited by hand? §18.3 requires the artifact to say so.
+ * @param {any} specimen
+ * @returns {boolean}
  */
-export function setStrippedBlocks(doc, specimenId, entries) {
-  return withProof(doc, (p) => updateSpecimen(p, specimenId, (s) => ({
-    ...s,
-    meta: { ...(s.meta || {}), [STRIPPED_KEY]: JSON.stringify(entries) },
-  })));
-}
+export function specimenIsEdited(specimen) { return !!(/** @type {any} */ (specimen || {}).edited); }
 
 /**
- * Put a stripped block back into the specimen at the end of its blocks, and
- * take it off the stripped list. Reversible in both directions: undo puts it
- * back on the list, and the block can be stripped again by deleting it.
- * @param {Doc} doc
- * @param {string} specimenId
- * @param {number} index   position in the stripped list
- * @returns {Doc}
+ * The per-specimen raw-HTML opt-in (§8), never assumed.
+ * @param {any} specimen
+ * @returns {{allowed: boolean, by: string|null, at: string|null}}
  */
-export function restoreStrippedBlock(doc, specimenId, index) {
-  return withProof(doc, (p) => updateSpecimen(p, specimenId, (s) => {
-    const entries = strippedBlocks(s);
-    if (index < 0 || index >= entries.length) return s;
-    const entry = entries[index];
-    const rest = entries.filter((_, i) => i !== index);
-    return {
-      ...s,
-      blocks: [...(s.blocks || []), entry.block],
-      meta: { ...(s.meta || {}), [STRIPPED_KEY]: JSON.stringify(rest) },
-    };
-  }));
+export function rawOptIn(specimen) {
+  const value = /** @type {any} */ (specimen || {}).rawOptIn;
+  return value && typeof value === 'object'
+    ? { allowed: !!value.allowed, by: value.by || null, at: value.at || null }
+    : { allowed: false, by: null, at: null };
 }
 
 /**
- * Take a block out of a specimen and remember it as stripped, which is the same
- * operation the chrome detector performs — so a hand-strip is as reversible as
- * an automatic one.
+ * Delete a block outright. Distinct from chrome stripping, which is L6's and is
+ * restorable: this is the user saying the block does not belong in the proof.
+ * Undo is the route back, which is why it goes through the stack like the rest.
  * @param {Doc} doc
  * @param {string} specimenId
  * @param {number} index
  * @returns {Doc}
  */
-export function stripBlock(doc, specimenId, index) {
+export function removeBlockAt(doc, specimenId, index) {
   return withProof(doc, (p) => updateSpecimen(p, specimenId, (s) => {
     const blocks = s.blocks || [];
     if (index < 0 || index >= blocks.length) return s;
-    const entries = strippedBlocks(s);
-    entries.push({ block: blocks[index], reason: 'removed by hand in the studio', score: 1 });
-    return {
-      ...s,
-      blocks: blocks.filter((_, i) => i !== index),
-      meta: { ...(s.meta || {}), [STRIPPED_KEY]: JSON.stringify(entries), [EDITED_KEY]: 'true' },
-    };
-  }));
-}
-
-/**
- * Edit a block's text. §18.3 requires the artifact to say when a specimen was
- * edited, so every text edit stamps the specimen.
- * @param {Doc} doc
- * @param {string} specimenId
- * @param {number} index
- * @param {string} text
- * @returns {Doc}
- */
-export function setBlockText(doc, specimenId, index, text) {
-  return withProof(doc, (p) => updateSpecimen(p, specimenId, (s) => {
-    const blocks = (s.blocks || []).slice();
-    if (index < 0 || index >= blocks.length) return s;
-    blocks[index] = applyBlockText(blocks[index], text);
-    return { ...s, blocks, meta: { ...(s.meta || {}), [EDITED_KEY]: 'true' } };
+    const next = blocks.filter((_, i) => i !== index);
+    return { ...s, blocks: next, wordCount: countBlockWords(next) };
   }));
 }
 
@@ -678,11 +622,40 @@ export function blockEditableText(block) {
   }
 }
 
+/**
+ * A one-line description of a block for the library rows.
+ * @param {ContentBlock} block
+ * @returns {string}
+ */
+export function blockSummary(block) {
+  if (!block) return '';
+  if (block.type === 'media') return block.caption || block.ref || 'media';
+  if (block.type === 'table') return `${(block.rows || []).length} rows`;
+  return blockEditableText(block).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Word count over blocks, kept in step with `Specimen.wordCount` whenever the
+ * studio changes a block. Mirrors `core/contracts.countWords`, which counts the
+ * same runs; duplicating the two-line loop here keeps this module free of a
+ * dependency it would otherwise need only for this.
+ * @param {ContentBlock[]} blocks
+ * @returns {number}
+ */
+export function countBlockWords(blocks) {
+  let n = 0;
+  for (const block of blocks || []) {
+    const text = blockEditableText(block);
+    if (text) n += text.split(/\s+/).filter(Boolean).length;
+  }
+  return n;
+}
+
 /** @param {Doc} doc @param {string} specimenId @param {number} from @param {number} to @returns {Doc} */
 export function moveBlock(doc, specimenId, from, to) {
   return withProof(doc, (p) => updateSpecimen(p, specimenId, (s) => {
     const blocks = moveItem(s.blocks || [], from, to);
-    return blocks === s.blocks ? s : { ...s, blocks, meta: { ...(s.meta || {}), [EDITED_KEY]: 'true' } };
+    return blocks === s.blocks ? s : { ...s, blocks };
   }));
 }
 

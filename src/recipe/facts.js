@@ -130,6 +130,7 @@ export function sourceStrings(specimen) {
   /** @type {string[]} */
   const out = [];
   if (!specimen) return out;
+  if (typeof specimen.id === 'string') out.push(specimen.id);
   if (typeof specimen.title === 'string') out.push(specimen.title);
   for (const b of specimen.blocks || []) {
     for (const t of blockText(b)) out.push(t);
@@ -138,6 +139,7 @@ export function sourceStrings(specimen) {
   }
   for (const [k, v] of Object.entries(specimen.meta || {})) { out.push(k); out.push(String(v)); }
   for (const m of specimen.media || []) {
+    if (typeof m.id === 'string') out.push(m.id);
     if (typeof m.alt === 'string') out.push(m.alt);
     if (m.intrinsic) { out.push(String(m.intrinsic.w)); out.push(String(m.intrinsic.h)); }
   }
