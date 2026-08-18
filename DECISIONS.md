@@ -444,3 +444,38 @@ overlay while the presenter was still typing. L9 filed it as a dispute against
 this file and defended against it in the capture phase; that interception is now
 the outer of two defences rather than the only one. A presenter searching for an
 objection must not be moving the deck the room is looking at.
+
+---
+
+## D22 — Form state is a property, and the caret is carried across a repaint
+
+**Unsettled by:** D4 makes the renderer a VNode tree with `mount()` replacing the
+subtree. Nothing said what happens to a focused form control when the tree
+re-renders under it.
+
+**Decision.** `toDom` sets `value`, `checked`, `selected` and `indeterminate` as
+DOM **properties** as well as attributes, and `RuntimeHost.paint()` captures the
+focused text entry's value and selection before `mount()` and restores them
+after. When the value round-trips unchanged the exact selection is restored;
+when the model deliberately changed the value, the caret goes to the end of the
+new value rather than to a stale offset.
+
+**Why.** On a form control the attribute sets the *default* value and the
+property holds the live one, so a re-rendered search field showed the right text
+with its caret at zero. The jump index re-renders on every keystroke, so each
+character landed in front of the last: a presenter typing `appr` produced
+`rppa`, and §11's "types three characters of 'approvals' and lands in the
+approval-chain branch in under a second" matched nothing at all.
+
+Found by `scripts/verify-offline.mjs` driving a real emitted artifact with a
+real keyboard — no unit test would have caught it, because every lane's tests
+render once and assert the output. L10 diagnosed it precisely and reported it
+across lanes rather than working around it; the root cause was in L1's `vdom.js`
+and L2's `host.js`, so it was fixed there rather than papered over in the
+overlay.
+
+The general lesson is in the mechanism: a renderer that rebuilds a subtree
+destroys anything the DOM was holding that the model does not describe —
+selection, scroll, focus, composition state. Selection is the one that mattered
+here; `focusOverlay` already handled focus, and scroll is derived per beat by
+D12.

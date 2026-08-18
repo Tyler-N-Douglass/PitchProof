@@ -24,7 +24,7 @@
  */
 
 import { Emitter } from '../core/events.js';
-import { CommandStack, editCommand } from '../core/command.js';
+import { CommandStack, replaceCommand } from '../core/command.js';
 import { Patcher, delegate } from './render.js';
 import { Preview } from './preview.js';
 import { newDoc } from './model.js';
@@ -157,8 +157,14 @@ export class StudioApp extends Emitter {
    */
   mutate(label, updater, options = {}) {
     const before = this.stack.state;
-    const next = this.stack.run(editCommand(label, before, updater, options));
-    if (next !== before) this.emit('mutated', { label, doc: next });
+    const after = updater(before);
+    // A reducer that changed nothing returns the document it was given. That is
+    // the signal that this was not an edit: pushing it would put an entry on the
+    // undo stack whose undo does nothing, which is how an undo stack stops being
+    // trustworthy under pressure.
+    if (after === before) return before;
+    const next = this.stack.run(replaceCommand(label, before, after, options));
+    this.emit('mutated', { label, doc: next });
     return next;
   }
 

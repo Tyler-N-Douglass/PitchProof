@@ -102,33 +102,92 @@ test('src/ reads no environment variable at all', () => {
 });
 
 /**
- * Identifiers that contain an override-shaped word but are not one. Each is
- * named individually — a pattern-shaped allowlist would let the next one in.
+ * An override is a **verb welded to a noun**, not a word that happens to appear.
+ *
+ * The first version of this check matched the bare word `force` and failed on
+ * `rmSync(dir, {recursive: true, force: true})` — this script's own temp-file
+ * cleanup. That is the third instance of the same failure mode in this build:
+ * one scanner matched prose *documenting* that there is no override, another
+ * matched `disabled: blocking.length > 0`, which is the law being enforced.
+ * A lexical match without context produces a check nobody trusts, and an
+ * untrusted check gets suppressed, which is how a law becomes a README claim.
+ *
+ * So the pattern is narrow and shaped like the thing it is looking for:
+ *
+ *   - an override verb immediately followed by an override noun, as one
+ *     identifier: `forceEmit`, `skipFindings`, `bypassPreflight`,
+ *     `allowSeverity1`, `overrideValidation`;
+ *   - an option of that shape passed into `emit(...)`.
+ *
+ * `overrideOffenders` is exercised against planted positives below, because a
+ * scanner that cannot catch a planted override proves nothing.
  */
-const NOT_OVERRIDES = new Set([
-  'manualOverrides',   // §4: the brand fields a user edited by hand
-  'recordOverride',    // L12: records such an edit
-  'renderOverrides',   // L12: displays the list
-  'overrides',         // the same list, and test-fixture argument objects
-  'overridden',        // prose in identifiers is rare, but harmless
-]);
+const OVERRIDE_VERB = 'force|skip|ignore|bypass|allow|override|unsafe|disable|suppress|silence';
+const OVERRIDE_NOUN = 'Emit|Emits|Emitted|Finding|Findings|Severity|Severities|Severity1|Blocking|Blocker|Blockers'
+  + '|Preflight|Validation|Validate|Provenance|Scan|Scanner|Network|Budget|Law|Laws|Refusal|Gate|Guard|Check|Checks';
+const WELDED = new RegExp(`\\b(${OVERRIDE_VERB})(${OVERRIDE_NOUN})\\b`, 'gi');
+
+/** An override-shaped option handed to `emit(...)`. */
+const EMIT_OPTION = new RegExp(
+  `\\bemit\\s*\\([\\s\\S]{0,240}?\\{[\\s\\S]{0,240}?\\b(${OVERRIDE_VERB})[A-Za-z0-9_$]*\\s*:`,
+  'gi',
+);
 
 /**
  * Named exemptions. Each one is a specific file and a specific token with a
  * specific reason — a pattern-shaped exemption would let the next one in.
+ * @type {{file: string, token: string, why: string}[]}
  */
-const EXEMPT = [
-  {
-    file: 'src/core/storage.js',
-    token: 'force',
-    why: 'API.md Part 1 declares ProjectStore.save({force}). It re-saves a record whose '
-      + 'content hash is unchanged (§16 autosave dedupe). It has no reach into validation '
-      + 'or emit, and §16 asks for saves that never fail silently.',
-  },
-];
+const EXEMPT = [];
+
+/**
+ * @param {string} text  source with comments and string literals already masked
+ * @returns {{token: string, index: number}[]}
+ */
+function overrideOffenders(text) {
+  /** @type {{token: string, index: number}[]} */
+  const out = [];
+  for (const re of [WELDED, EMIT_OPTION]) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) out.push({ token: m[0], index: m.index });
+  }
+  return out;
+}
+
+test('the override scanner catches a planted override', () => {
+  const planted = [
+    'const skipFindings = true;',
+    'function forceEmit(proof) { return proof; }',
+    'if (options.bypassPreflight) return ok(result);',
+    'const allowSeverity = 1;',
+    'export const overrideValidation = false;',
+    'const r = await emit(proof, { force: true }, deps);',
+    'const r = await emit(proof, {\n  skipValidation: true,\n}, deps);',
+  ];
+  for (const sample of planted) {
+    assert.ok(overrideOffenders(sample).length > 0, `the scanner missed a planted override: ${sample}`);
+  }
+});
+
+test('the override scanner does not fire on code that is not an override', () => {
+  const innocent = [
+    'rmSync(dir, { recursive: true, force: true });',
+    'await store.save({ id, name, proof, seed, force: true });',
+    'h("button", { disabled: blocking.length > 0 }, "Emit");',
+    'const overrides = brand.manualOverrides;',
+    'notice("bad", "A severity-1 finding blocks the emit. There is no override.");',
+    'if (!force && this.lastHash.get(id) === hash) return skipped;',
+    'const scan = scanForNetworkReferences(html);',
+    'const emitted = await emit(proof, { maxBytes: 1000 }, deps);',
+    'let allowed = true;',
+  ];
+  for (const sample of innocent) {
+    assert.deepEqual(overrideOffenders(sample), [], `the scanner fired on innocent code: ${sample}`);
+  }
+});
 
 test('no override-shaped identifier exists anywhere in src/, scripts/ or test/emit/', () => {
-  const suspicious = /\b(force|forced|forceEmit|override|overrides|overrideFindings|bypass|unsafe|skipValidation|skipProvenance|skipScan|ignoreFindings|allowSeverity1|allowBlocking|allowNetwork|blockOnSeverity)\b/g;
   /** @type {string[]} */
   const offenders = [];
   const roots = [join(ROOT, 'src'), join(ROOT, 'scripts'), join(ROOT, 'test', 'emit')];
@@ -138,14 +197,13 @@ test('no override-shaped identifier exists anywhere in src/, scripts/ or test/em
       // This file names every override it attempts, on purpose.
       if (rel === 'test/emit/no-override.test.mjs') continue;
       const text = readFileSync(file, 'utf8');
+      // Comments and string literals are masked: prose that *documents* the law
+      // must not fail the check that *enforces* it.
       const code = maskJs(text).code;
-      let m;
-      suspicious.lastIndex = 0;
-      while ((m = suspicious.exec(code)) !== null) {
-        if (NOT_OVERRIDES.has(m[0])) continue;
-        if (EXEMPT.some((e) => e.file === rel && e.token === m[0])) continue;
-        const line = code.slice(0, m.index).split('\n').length;
-        offenders.push(`${rel}:${line}  ${m[0]}  →  ${text.split('\n')[line - 1].trim()}`);
+      for (const hit of overrideOffenders(code)) {
+        if (EXEMPT.some((e) => e.file === rel && e.token === hit.token)) continue;
+        const line = code.slice(0, hit.index).split('\n').length;
+        offenders.push(`${rel}:${line}  ${hit.token}  \u2192  ${text.split('\n')[line - 1].trim()}`);
       }
     }
   }

@@ -12,7 +12,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { RuntimeHost, STAGE_ROOT_ID, PRERENDERED_ATTR, isTextEntry, cssEscape } from '../../src/runtime/host.js';
+import { RuntimeHost, STAGE_ROOT_ID, PRERENDERED_ATTR, isTextEntry, cssEscape, captureTextEntryState, restoreTextEntryState, renderToNode } from '../../src/runtime/host.js';
+import { h } from '../../src/core/vdom.js';
 import { Runtime } from '../../src/runtime/runtime.js';
 import { ManualTimer, renderPresenterView, PRESENTER_CSS, openPresenterWindow } from '../../src/runtime/presenter.js';
 import { toHtml } from '../../src/core/vdom.js';
@@ -212,4 +213,94 @@ test('a blocked pop-up is reported rather than leaving the presenter pressing p 
   assert.equal(result.opened, false);
   assert.doesNotThrow(() => result.close());
   assert.ok(result.timer instanceof ManualTimer);
+});
+
+test('the caret survives a repaint, so typing into a search field is not reversed', () => {
+  // The jump index re-renders on every keystroke, and `mount` rebuilds the
+  // subtree, so the input is a new element each time. Without carrying the
+  // selection across, every character lands in front of the last: a presenter
+  // typing "appr" gets "rppa", which matches nothing. Found by
+  // scripts/verify-offline.mjs against a real emitted artifact.
+  const input = {
+    tagName: 'INPUT',
+    value: 'app',
+    selectionStart: 3,
+    selectionEnd: 3,
+    selectionDirection: 'none',
+    attributes: [{ name: 'data-pp-jump-input', value: '' }],
+    getAttribute(n) { return n === 'type' ? 'search' : (n === 'data-pp-jump-input' ? '' : null); },
+    focus() { this.focused = true; },
+    setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; },
+    ownerDocument: { activeElement: null },
+  };
+  const doc = { activeElement: input };
+  const root = { contains: () => true, querySelector: () => rebuilt };
+
+  const carried = captureTextEntryState(doc, root);
+  assert.ok(carried, 'a focused search field must be captured');
+  assert.equal(carried.selector, 'input[data-pp-jump-input=""]');
+  assert.equal(carried.value, 'app');
+  assert.equal(carried.start, 3);
+
+  // The rebuilt element is what `mount` produces: same value, caret at 0.
+  const rebuilt = { ...input, selectionStart: 0, selectionEnd: 0, focused: false,
+    focus() { this.focused = true; },
+    setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; } };
+
+  restoreTextEntryState(root, carried);
+  assert.equal(rebuilt.selectionStart, 3, 'the caret goes back where the presenter left it');
+  assert.equal(rebuilt.selectionEnd, 3);
+});
+
+test('a value the model changed puts the caret at the end, not at a stale offset', () => {
+  const rebuilt = {
+    tagName: 'INPUT', value: 'approvals', selectionStart: 0, selectionEnd: 0,
+    getAttribute: (n) => (n === 'type' ? 'search' : null),
+    focus() {}, setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; },
+    ownerDocument: { activeElement: null },
+  };
+  const root = { contains: () => true, querySelector: () => rebuilt };
+  restoreTextEntryState(root, { selector: 'input', value: 'app', start: 3, end: 3, direction: 'none' });
+  assert.equal(rebuilt.selectionStart, 'approvals'.length, 'a deliberate model change wins, and the caret follows it');
+});
+
+test('a control with no selection support is left alone rather than throwing', () => {
+  const numberInput = {
+    tagName: 'INPUT',
+    getAttribute: (n) => (n === 'type' ? 'number' : null),
+    get selectionStart() { throw new Error('does not support selection'); },
+  };
+  assert.equal(captureTextEntryState({ activeElement: numberInput }, { contains: () => true }), null);
+  assert.doesNotThrow(() => restoreTextEntryState({ querySelector: () => null }, { selector: 'input', value: '', start: 0, end: 0, direction: 'none' }));
+});
+
+test('form state is set as a property, not only as an attribute', () => {
+  // `setAttribute('value', …)` sets the *default* value; the live state is the
+  // property. A tree rendered with only the attribute shows the right text with
+  // its caret at 0.
+  const created = [];
+  const doc = {
+    createElement(tag) {
+      const el = {
+        tag, attrs: {}, props: {}, children: [],
+        setAttribute(k, v) { this.attrs[k] = v; },
+        appendChild(c) { this.children.push(c); },
+      };
+      // Mimic a real input: `value` is a settable own property.
+      Object.defineProperty(el, 'value', {
+        configurable: true,
+        get() { return this.props.value ?? ''; },
+        set(v) { this.props.value = v; },
+      });
+      created.push(el);
+      return el;
+    },
+    createTextNode: (t) => ({ text: t }),
+    createDocumentFragment: () => ({ children: [], appendChild(c) { this.children.push(c); } }),
+    createElementNS: (ns, tag) => ({ tag, ns, setAttribute() {}, appendChild() {} }),
+  };
+  renderToNode(h('input', { type: 'search', value: 'appr' }), doc);
+  const input = created.find((e) => e.tag === 'input');
+  assert.equal(input.attrs.value, 'appr', 'the attribute is still written, for a pre-rendered document');
+  assert.equal(input.value, 'appr', 'and the live property is set, which is what the caret follows');
 });

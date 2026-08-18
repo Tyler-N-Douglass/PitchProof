@@ -37,6 +37,9 @@ const SVG_TAGS = new Set([
 ]);
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+/** Attributes whose live state lives on the property, not the attribute. */
+const FORM_STATE_PROPS = new Set(['value', 'checked', 'selected', 'indeterminate']);
+
 /**
  * Create an element node.
  * @param {string} tag
@@ -197,6 +200,15 @@ export function toDom(node, doc, svg = false) {
     }
     if (v === true) { el.setAttribute(k, ''); continue; }
     el.setAttribute(k, String(v));
+    // `value` and `checked` are attributes only in name: on a form control the
+    // attribute sets the *default*, and the live state is the property. Setting
+    // only the attribute leaves a re-rendered search field showing the right
+    // text with its caret at 0, so the next character lands in front of what
+    // the presenter already typed. `toHtml` still writes the attribute, which
+    // is what a pre-rendered document needs.
+    if (!isSvg && FORM_STATE_PROPS.has(k) && k in el) {
+      try { el[k] = k === 'value' ? String(v) : true; } catch { /* read-only on this element */ }
+    }
   }
   if (!VOID_ELEMENTS.has(node.t)) {
     for (const child of node.c) el.appendChild(toDom(child, doc, isSvg));

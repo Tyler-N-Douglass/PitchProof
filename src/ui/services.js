@@ -28,31 +28,22 @@ import { normalizeEmitOptions } from '../core/contracts.js';
 // ---------------------------------------------------------------------------
 // LANE IMPORTS — the integrator's block.
 //
-// Each line below is exactly the surface `API.md` Part 3 declares. A lane that
-// has not landed has its line commented out and its entry in `LANE_MODULES`
-// marked `wired: false`; wiring it is uncommenting the import and flipping the
-// flag. Nothing else in `src/ui/**` changes.
+// Exactly the nine surfaces `API.md` Part 3 declares, and nothing else. If a
+// lane's module path moves, this block is the only place in `src/ui/**` that
+// changes; `LANE_MODULES` below derives `wired` from the binding itself, so a
+// lane that fails to load reports itself rather than failing silently in a
+// panel.
 // ---------------------------------------------------------------------------
 
-/* eslint-disable */
-// import * as ingestLane from '../ingest/index.js';
-// import * as colorLane from '../brand/color.js';
-// import * as themeLane from '../brand/theme.js';
+import * as ingestLane from '../ingest/index.js';
+import * as colorLane from '../brand/color.js';
+import * as themeLane from '../brand/theme.js';
 import * as specimenLane from '../specimen/index.js';
-// import * as recipeLane from '../recipe/index.js';
-// import * as sceneLane from '../scene/index.js';
+import * as recipeLane from '../recipe/index.js';
+import * as sceneLane from '../scene/index.js';
 import * as branchLane from '../branch/index.js';
-// import * as emitLane from '../emit/index.js';
-// import * as validateLane from '../validate/index.js';
-/* eslint-enable */
-
-/** @type {any} */ const ingestLane = null;
-/** @type {any} */ const colorLane = null;
-/** @type {any} */ const themeLane = null;
-/** @type {any} */ const recipeLane = null;
-/** @type {any} */ const sceneLane = null;
-/** @type {any} */ const emitLane = null;
-/** @type {any} */ const validateLane = null;
+import * as emitLane from '../emit/index.js';
+import * as validateLane from '../validate/index.js';
 
 /**
  * Every lane the studio consumes, in the order the left rail needs them.
@@ -164,17 +155,17 @@ export function makeServices(env) {
      */
     async importFiles(files) {
       if (!ingestLane) return laneErr('ingest');
-      /** @type {any[]} */
-      const captures = [];
-      /** @type {string[]} */
-      const problems = [];
-      for (const file of files) {
-        const result = await importOne(ingestLane, file, clock);
-        if (result.ok) captures.push(...(Array.isArray(result.value) ? result.value : [result.value]));
-        else problems.push(`${file.name}: ${result.error}`);
-      }
-      if (!captures.length) return err(problems.join('\n') || 'Nothing in those files could be read.');
-      return ok({ captures, problems });
+      try {
+        // L3's own multi-file router: it detects a saved page plus its asset
+        // folder, attaches the assets, and routes everything else by sniffed
+        // MIME. Doing that here would be a second, worse copy of it.
+        const result = await ingestLane.ingestFiles(files, { clock });
+        if (!result.ok) return result;
+        const value = result.value;
+        return ok(Array.isArray(value)
+          ? { captures: value, problems: [] }
+          : { captures: value.captures || [], problems: value.problems || [] });
+      } catch (e) { return err(`Import failed: ${message(e)}`, e); }
     },
 
     /**
@@ -247,8 +238,7 @@ export function makeServices(env) {
       if (!themeLane || !colorLane) return laneErr(themeLane ? 'color' : 'theme');
       try {
         const idMinter = minterFor(options.seed);
-        const parts = brandParts(captures, { colorLane, themeLane, idMinter, seed: options.seed });
-        return ok(themeLane.buildBrandSystem(parts, { clock, idMinter }));
+        return ok(themeLane.buildBrandSystem(brandParts(captures, { seed: options.seed }), { clock, idMinter }));
       } catch (e) { return err(`Brand extraction failed: ${message(e)}`, e); }
     },
 
@@ -286,6 +276,9 @@ export function makeServices(env) {
           imageQuality: options.imageQuality,
           clock,
           idMinter: minterFor(options.seed),
+          // §8/D8: L6 needs a parser when a capture arrived as HTML text with
+          // no tree. The parser is L3's, and this is the seam that joins them.
+          parseHtml: ingestLane ? ingestLane.parseHtml : undefined,
         }));
       } catch (e) { return err(`Specimen capture failed: ${message(e)}`, e); }
     },
@@ -606,48 +599,48 @@ export function minterFor(seed) {
 }
 
 /**
- * Pick the right L3 importer for a file by extension, then by content.
- * @param {any} lane
- * @param {{name: string, bytes: Uint8Array, mime: string, text?: string}} file
- * @param {() => string} clock
- * @returns {Promise<any>}
- */
-async function importOne(lane, file, clock) {
-  const name = (file.name || '').toLowerCase();
-  try {
-    if (name.endsWith('.har')) return lane.importHar(file.text || '', { clock });
-    if (name.endsWith('.mhtml') || name.endsWith('.mht')) return lane.importMhtml(file.text || '', { clock });
-    if (name.endsWith('.html') || name.endsWith('.htm')) return lane.importHtmlText(file.text || '', { sourceUrl: null, clock });
-    if (name.endsWith('.docx') || name.endsWith('.pptx') || name.endsWith('.xlsx')) {
-      return lane.importOoxml(file.bytes, { name: file.name, clock });
-    }
-    if (name.endsWith('.pdf')) return lane.importPdf(file.bytes, { name: file.name, clock });
-    if (/^image\//.test(file.mime || '')) return lane.importImage(file.bytes, { name: file.name, mime: file.mime, clock });
-    return lane.importSavedPage([file], { clock });
-  } catch (e) { return err(message(e), e); }
-}
-
-/**
- * Assemble the `parts` argument L5's `buildBrandSystem` takes from a set of
- * captures. Everything it contains is produced by L4/L5; this only routes.
+ * Assemble the `parts` argument L5's `buildBrandSystem` takes.
+ *
+ * L5 does its own face, logo and shape detection given `doc`, `css` and
+ * `assets`; L4 owns colour, so the palette is solved here with
+ * `extractPalette` and handed over finished, along with the confidence it
+ * computed. Imagery is deliberately left to L5's classifier with no samples:
+ * decoding a page's images into RGBA belongs to a lane that owns image
+ * decoding, and an imagery treatment guessed without pixels would be a
+ * confident-looking fabrication. With no samples the classifier returns
+ * `unknown` at zero confidence, which routes imagery straight into §7's review
+ * gate — where a person decides it. See `docs/decisions/L12-ui.md`.
+ *
  * @param {any[]} captures
- * @param {{colorLane: any, themeLane: any, idMinter: any, seed: string}} deps
+ * @param {{seed: string}} options
  * @returns {any}
  */
-function brandParts(captures, deps) {
+function brandParts(captures, options) {
   const docs = captures.map((c) => c.doc).filter(Boolean);
-  const css = captures.map((c) => c.html || '').join('\n');
+  const css = captures.map((c) => c.html || '').filter(Boolean);
   const assets = captures.flatMap((c) => c.assets || []);
-  const pixels = assets.filter((a) => /^image\//.test(a.mime || ''));
-  const clusters = deps.colorLane.quantize(pixels, { k: deps.colorLane.chooseK(pixels, { seed: deps.seed, range: [3, 8] }), seed: deps.seed });
+  const sourceUrl = (captures.find((c) => c.sourceUrl) || {}).sourceUrl || null;
+
+  /** @type {{colors: any[], confidence: number}} */
+  let palette = { colors: [], confidence: 0 };
+  try {
+    const solved = colorLane.extractPalette({ css }, { seed: options.seed });
+    palette = { colors: solved.colors, confidence: solved.confidence };
+  } catch {
+    // §7: no colour could be collected. An empty palette with zero confidence
+    // is the honest result; the studio holds it for review and the user enters
+    // the roles by hand.
+    palette = { colors: [], confidence: 0 };
+  }
+
   return {
-    sourceUrl: captures.find((c) => c.sourceUrl)?.sourceUrl || null,
-    colors: deps.colorLane.solveRoles(clusters, { seed: deps.seed }),
-    faces: deps.themeLane.detectFaces(docs[0] || null, css, {}),
-    logos: deps.themeLane.extractLogos(docs[0] || null, assets, { idMinter: deps.idMinter }),
-    shape: deps.themeLane.detectShape(css),
-    imagery: deps.themeLane.classifyImagery(pixels),
-    confidence: { colors: deps.colorLane.colorConfidence(clusters, captures.length) },
+    sourceUrl,
+    doc: docs[0] || null,
+    css,
+    assets,
+    images: [],
+    colors: palette.colors,
+    confidence: { colors: palette.confidence, imagery: 0 },
   };
 }
 

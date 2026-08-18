@@ -361,9 +361,18 @@ export function ppBootArtifact(config) {
 
     if (runtimeApi && typeof runtimeApi.registerAllLayouts === 'function') runtimeApi.registerAllLayouts();
     var booted = runtimeApi.boot({ proof: proof, document: doc, window: win });
-    if (runtimeApi && typeof runtimeApi.registerBranchOverlays === 'function') {
+    // The composition root (`src/artifact.js`) already registers the jump, map
+    // and contents overlays and installs the input bridge. This guard exists
+    // for a bundle that does not, and it checks first: registering a second
+    // time would install a second controller whose render function replaces the
+    // first's, while the input bridge still holds the first — the overlay would
+    // then be drawn by one object and driven by another. It also deliberately
+    // announces no change, since no overlay is open at boot and a repaint would
+    // only discard the markup the emitter pre-rendered.
+    var overlays = booted.runtime && booted.runtime.overlays;
+    var alreadyWired = !!(overlays && overlays.registry && overlays.registry.has('jump'));
+    if (!alreadyWired && runtimeApi && typeof runtimeApi.registerBranchOverlays === 'function') {
       runtimeApi.registerBranchOverlays(booted.runtime);
-      booted.runtime.emit('change', { reason: 'overlays', state: booted.runtime.snapshot() });
     }
     win.__PITCHPROOF__ = {
       runtime: booted.runtime,

@@ -12,7 +12,7 @@
  * labelling law is exercised in every direction.
  */
 
-import { contentId } from '../../../src/core/ids.js';
+import { contentId, elementId as elementIdFor } from '../../../src/core/ids.js';
 import { countWords } from '../../../src/core/contracts.js';
 
 const CAPTURED_AT = '2026-02-01T09:00:00.000Z';
@@ -273,8 +273,6 @@ export function contextFor(scene, options = {}) {
     mode: options.mode || 'presenter',
   };
 }
-
-import { elementId as elementIdFor } from '../../../src/core/ids.js';
 
 /**
  * A brand with a real type system, so measurement is not measuring the

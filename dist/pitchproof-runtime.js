@@ -2107,6 +2107,9 @@ const SVG_TAGS = new Set([
 ]);
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+/** Attributes whose live state lives on the property, not the attribute. */
+const FORM_STATE_PROPS = new Set(['value', 'checked', 'selected', 'indeterminate']);
+
 /**
  * Create an element node.
  * @param {string} tag
@@ -2267,6 +2270,15 @@ function toDom(node, doc, svg = false) {
     }
     if (v === true) { el.setAttribute(k, ''); continue; }
     el.setAttribute(k, String(v));
+    // `value` and `checked` are attributes only in name: on a form control the
+    // attribute sets the *default*, and the live state is the property. Setting
+    // only the attribute leaves a re-rendered search field showing the right
+    // text with its caret at 0, so the next character lands in front of what
+    // the presenter already typed. `toHtml` still writes the attribute, which
+    // is what a pre-rendered document needs.
+    if (!isSvg && FORM_STATE_PROPS.has(k) && k in el) {
+      try { el[k] = k === 'value' ? String(v) : true; } catch { /* read-only on this element */ }
+    }
   }
   if (!VOID_ELEMENTS.has(node.t)) {
     for (const child of node.c) el.appendChild(toDom(child, doc, isSvg));
@@ -3346,9 +3358,16 @@ class RuntimeHost {
 
   /** Render the current state into the root. */
   paint() {
+    // `mount` rebuilds the subtree, so a focused text field is destroyed and
+    // recreated on every repaint. Focus is restored below; the caret has to be
+    // carried across explicitly, or a presenter typing into the jump index gets
+    // each character inserted in front of the last — "appr" arrives as "rppa"
+    // and matches nothing.
+    const carried = captureTextEntryState(this.doc, this.root);
     mount(this.root, this.runtime.render());
     this.applyScroll();
     this.focusOverlay();
+    restoreTextEntryState(this.root, carried);
   }
 
   /**
@@ -3421,6 +3440,81 @@ class RuntimeHost {
   }
 }
 
+
+/**
+ * A stable selector for a control, so it can be found again after the subtree
+ * that held it has been rebuilt. Prefers an id, then any `data-*` hook a lane
+ * put on it, then the element's own shape.
+ * @param {Element} el
+ * @returns {string|null}
+ */
+function controlSelector(el) {
+  if (!el || !el.getAttribute) return null;
+  const id = el.getAttribute('id');
+  if (id) return `#${cssEscape(id)}`;
+  const attrs = el.attributes ? [...el.attributes] : [];
+  const hook = attrs.find((a) => a.name.startsWith('data-'));
+  const tag = (el.tagName || '').toLowerCase();
+  if (hook) return `${tag}[${hook.name}="${cssEscape(hook.value)}"]`;
+  const name = el.getAttribute('name');
+  if (name) return `${tag}[name="${cssEscape(name)}"]`;
+  const cls = el.getAttribute('class');
+  if (cls) return `${tag}.${cls.trim().split(/\s+/).map(cssEscape).join('.')}`;
+  return tag || null;
+}
+
+/**
+ * Capture the focused text entry's value and selection before a repaint.
+ * @param {Document} doc
+ * @param {Element} root
+ * @returns {{selector: string, value: string, start: number, end: number, direction: string}|null}
+ */
+function captureTextEntryState(doc, root) {
+  const el = doc && doc.activeElement;
+  if (!el || !isTextEntry(el)) return null;
+  if (root && typeof root.contains === 'function' && !root.contains(el)) return null;
+  const selector = controlSelector(el);
+  if (!selector) return null;
+  try {
+    return {
+      selector,
+      value: el.value === undefined ? '' : String(el.value),
+      start: el.selectionStart === null || el.selectionStart === undefined ? -1 : el.selectionStart,
+      end: el.selectionEnd === null || el.selectionEnd === undefined ? -1 : el.selectionEnd,
+      direction: el.selectionDirection || 'none',
+    };
+  } catch {
+    // `selectionStart` throws on input types that have no selection (number,
+    // email in some engines). Nothing to carry, and nothing broken.
+    return null;
+  }
+}
+
+/**
+ * Put the caret back where the presenter left it.
+ * @param {Element} root
+ * @param {{selector: string, value: string, start: number, end: number, direction: string}|null} carried
+ */
+function restoreTextEntryState(root, carried) {
+  if (!carried || !root || typeof root.querySelector !== 'function') return;
+  const el = root.querySelector(carried.selector);
+  if (!el || !isTextEntry(el)) return;
+  // The model is the authority on the text: if a re-render changed it, the
+  // change is deliberate and the caret goes to the end of it. Only when the
+  // value round-tripped unchanged is the exact selection still meaningful.
+  const same = String(el.value === undefined ? '' : el.value) === carried.value;
+  try {
+    if (typeof el.focus === 'function' && el.ownerDocument.activeElement !== el) el.focus();
+    if (typeof el.setSelectionRange !== 'function') return;
+    if (same && carried.start >= 0) {
+      el.setSelectionRange(carried.start, carried.end, carried.direction === 'none' ? undefined : carried.direction);
+    } else {
+      const end = String(el.value === undefined ? '' : el.value).length;
+      el.setSelectionRange(end, end);
+    }
+  } catch { /* the element does not support a selection; nothing to restore */ }
+}
+
 /**
  * Is focus in a control where typing means text, not commands?
  * @param {Element|null} el
@@ -3473,6 +3567,9 @@ function renderToNode(tree, doc) {
 __exports["STAGE_ROOT_ID"] = STAGE_ROOT_ID;
 __exports["PRERENDERED_ATTR"] = PRERENDERED_ATTR;
 __exports["RuntimeHost"] = RuntimeHost;
+__exports["controlSelector"] = controlSelector;
+__exports["captureTextEntryState"] = captureTextEntryState;
+__exports["restoreTextEntryState"] = restoreTextEntryState;
 __exports["isTextEntry"] = isTextEntry;
 __exports["cssEscape"] = cssEscape;
 __exports["firstPaintTree"] = firstPaintTree;

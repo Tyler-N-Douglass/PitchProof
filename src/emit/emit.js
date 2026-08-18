@@ -112,7 +112,8 @@ export async function emit(proof, options, deps) {
   // a note a recipient can read out of the file — and presenter notes are where
   // the internal read on the room lives. So they are removed from the model,
   // not merely hidden.
-  let working = stripPresenterNotes({ ...proof, emitOptions }, emitOptions.includePresenterNotes);
+  const original = stripPresenterNotes({ ...proof, emitOptions }, emitOptions.includePresenterNotes);
+  let working = original;
   /** @type {import('./budget.js').DegradationLine[]} */
   let degradations = [];
   /** @type {{assetId: string, bytes: number, reason: string}[]} */
@@ -122,7 +123,13 @@ export async function emit(proof, options, deps) {
   for (let pass = 0; pass < BUDGET_PASSES && built.bytes > emitOptions.maxBytes; pass++) {
     const assetBytes = collectAssets(working).reduce((sum, a) => sum + a.bytes, 0);
     const reserveBytes = Math.max(0, built.bytes - assetBytes);
-    const budgeted = budgetAssets({ ...proof, emitOptions }, emitOptions.maxBytes, {
+    // Always from `original`, never from the previous pass's output. Each pass
+    // refines the reserve — the bytes the document costs before assets — but a
+    // plan measured against an already-degraded proof would report savings
+    // relative to a state that never shipped, and §13 says the report has to be
+    // the real one. Budgeting `original` also keeps the presenter-note stripping
+    // that a Review build depends on.
+    const budgeted = budgetAssets(original, emitOptions.maxBytes, {
       reserveBytes,
       renderScene: built.renderScene,
       quality: emitOptions.imageQuality,

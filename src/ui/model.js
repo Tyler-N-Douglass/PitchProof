@@ -236,9 +236,37 @@ export function reviewedGroups(brand) {
 // Generic updaters
 // ---------------------------------------------------------------------------
 
-/** @param {Doc} doc @param {(p: Proof) => Proof} fn @returns {Doc} */
+/**
+ * Apply a proof reducer to a document, preserving identity when the reducer
+ * changed nothing. Identity is the signal `app.mutate` uses to decide whether
+ * anything happened at all: a no-op that still allocated a new object would put
+ * an empty entry on the undo stack, and an undo that does nothing is worse than
+ * no undo.
+ * @param {Doc} doc
+ * @param {(p: Proof) => Proof} fn
+ * @returns {Doc}
+ */
 export function withProof(doc, fn) {
-  return { ...doc, proof: fn(doc.proof) };
+  const proof = fn(doc.proof);
+  return proof === doc.proof ? doc : { ...doc, proof };
+}
+
+/**
+ * Map over a list, returning the *same array* when no element changed.
+ * @template T
+ * @param {T[]} list
+ * @param {(item: T, index: number) => T} fn
+ * @returns {T[]}
+ */
+export function mapChanged(list, fn) {
+  const source = list || [];
+  let changed = false;
+  const next = source.map((item, i) => {
+    const value = fn(item, i);
+    if (value !== item) changed = true;
+    return value;
+  });
+  return changed ? next : source;
 }
 
 /**
@@ -249,13 +277,13 @@ export function withProof(doc, fn) {
  * @returns {Proof}
  */
 export function updateScene(proof, sceneId, fn) {
-  let touched = false;
-  const spine = (proof.spine || []).map((s) => (s.id === sceneId ? (touched = true, fn(s)) : s));
-  const branches = (proof.branches || []).map((b) => ({
-    ...b,
-    scenes: (b.scenes || []).map((s) => (s.id === sceneId ? (touched = true, fn(s)) : s)),
-  }));
-  return touched ? { ...proof, spine, branches } : proof;
+  const spine = mapChanged(proof.spine || [], (s) => (s.id === sceneId ? fn(s) : s));
+  const branches = mapChanged(proof.branches || [], (b) => {
+    const scenes = mapChanged(b.scenes || [], (s) => (s.id === sceneId ? fn(s) : s));
+    return scenes === (b.scenes || []) ? b : { ...b, scenes };
+  });
+  if (spine === (proof.spine || []) && branches === (proof.branches || [])) return proof;
+  return { ...proof, spine, branches };
 }
 
 /**
@@ -265,7 +293,8 @@ export function updateScene(proof, sceneId, fn) {
  * @returns {Proof}
  */
 export function updateBranch(proof, branchId, fn) {
-  return { ...proof, branches: (proof.branches || []).map((b) => (b.id === branchId ? fn(b) : b)) };
+  const branches = mapChanged(proof.branches || [], (b) => (b.id === branchId ? fn(b) : b));
+  return branches === (proof.branches || []) ? proof : { ...proof, branches };
 }
 
 /**
@@ -275,7 +304,8 @@ export function updateBranch(proof, branchId, fn) {
  * @returns {Proof}
  */
 export function updateSpecimen(proof, specimenId, fn) {
-  return { ...proof, specimens: (proof.specimens || []).map((s) => (s.id === specimenId ? fn(s) : s)) };
+  const specimens = mapChanged(proof.specimens || [], (s) => (s.id === specimenId ? fn(s) : s));
+  return specimens === (proof.specimens || []) ? proof : { ...proof, specimens };
 }
 
 /**
@@ -285,7 +315,8 @@ export function updateSpecimen(proof, specimenId, fn) {
  * @returns {Proof}
  */
 export function updateRendition(proof, renditionId, fn) {
-  return { ...proof, renditions: (proof.renditions || []).map((r) => (r.id === renditionId ? fn(r) : r)) };
+  const renditions = mapChanged(proof.renditions || [], (r) => (r.id === renditionId ? fn(r) : r));
+  return renditions === (proof.renditions || []) ? proof : { ...proof, renditions };
 }
 
 /**

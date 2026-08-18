@@ -417,5 +417,5 @@ test('the status bar always says whether the work is saved and what blocks the e
   const html = toHtml(renderStudio(app));
   assert.match(html, /Local storage/);
   assert.match(html, /Not saved yet|Saved /);
-  assert.match(html, /blocks the emit|Ready to emit/);
+  assert.match(html, /blocks? the emit|Ready to emit/);
 });
