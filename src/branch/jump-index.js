@@ -232,9 +232,34 @@ function candidateEntries(index, q, qTokens, qSqueezed, qGrams) {
     }
   };
 
+  // A prefix or acronym posting is a promise of a solid match, so it is always
+  // a candidate.
   for (const token of qTokens) take(`p:${token.text.slice(0, PREFIX_DEPTH)}`);
   if (qSqueezed.length >= 2) take(`a:${qSqueezed.slice(0, PREFIX_DEPTH)}`);
-  for (const gram of qGrams) take(`g:${gram}`);
+
+  // Trigrams are the loose path, and one shared trigram between a long query
+  // and a long objection means almost nothing. Asking long queries for two
+  // shared grams cuts the candidate set hard — but the threshold has to be
+  // provably safe, not merely fast: the worst edit this file's typo budget
+  // allows is two transpositions, each of which can destroy four grams, so the
+  // threshold only applies once a query carries ten grams and two typos
+  // therefore cannot exhaust the overlap. Shorter queries — where the typo
+  // tolerance actually earns its keep — keep full recall.
+  const threshold = qGrams.size >= 10 ? 2 : 1;
+  if (threshold === 1) {
+    for (const gram of qGrams) take(`g:${gram}`);
+  } else {
+    const counts = new Uint16Array(index.entries.length);
+    for (const gram of qGrams) {
+      const list = index.postings.get(`g:${gram}`);
+      if (!list) continue;
+      for (const i of list) {
+        if (seen[i]) continue;
+        if (++counts[i] === threshold) { seen[i] = 1; out.push(i); }
+      }
+    }
+  }
+
   // A one- or two-character query has no trigram of its own; the prefix
   // postings above are the whole candidate set, which is exactly right — at
   // that length anything looser is noise.

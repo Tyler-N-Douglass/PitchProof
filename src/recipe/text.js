@@ -30,7 +30,15 @@ export const CURRENCY_CODES = [
 ];
 
 /** Unicode spaces that appear as digit-group separators. */
-const NUM_SPACES = '   ';
+const NUM_SPACES = '\u00A0\u202F\u2009';
+
+/**
+ * CJK date unit characters. They join a date's parts the way `/` and `.` do in
+ * Latin scripts, so a token scanner that stopped at them would read
+ * `2026\u5E7408\u670817\u65E5` as three unrelated numerals and the §18.2 guard would
+ * flag a faithfully reformatted Japanese date as fabricated.
+ */
+const NUM_JOINERS = '\u5E74\u6708\u65E5';
 
 /**
  * Collapse runs of whitespace, normalise line endings, and trim.
@@ -117,7 +125,7 @@ export function diceCoefficient(a, b) {
  * @property {'plain'|'percent'|'currency'|'multiplier'} kind
  */
 
-const NUM_CORE = new RegExp(`\\d[\\d.,'’/:\\-${NUM_SPACES}]*\\d|\\d`, 'g');
+const NUM_CORE = new RegExp(`\\d[\\d.,'’/:\\-${NUM_SPACES}${NUM_JOINERS}]*\\d|\\d`, 'g');
 
 /**
  * Find every numeric token in a string, with its symbol classification.
@@ -144,10 +152,10 @@ export function numericTokens(s) {
     // Look left for a currency symbol or an ISO code, allowing one space.
     let l = start;
     while (l > 0 && text[l - 1] === ' ') l -= 1;
-    if (l > 0 && CURRENCY_SYMBOLS.includes(text[l - 1])) { kind = 'currency'; start = l - 1; }
+    if (l > 0 && text[l - 1] && CURRENCY_SYMBOLS.includes(text[l - 1])) { kind = 'currency'; start = l - 1; }
     else {
       const before = text.slice(Math.max(0, l - 3), l).toUpperCase();
-      if (CURRENCY_CODES.includes(before) && (l - 3 === 0 || !/[A-Za-z]/.test(text[l - 4] || ''))) {
+      if (before.length === 3 && CURRENCY_CODES.includes(before) && (l - 3 === 0 || !/[A-Za-z]/.test(text[l - 4] || ''))) {
         kind = 'currency'; start = l - 3;
       }
     }
@@ -156,8 +164,8 @@ export function numericTokens(s) {
     let r = end;
     while (r < text.length && text[r] === ' ') r += 1;
     if (text[r] === '%' || text[r] === '‰') { kind = 'percent'; end = r + 1; }
-    else if (CURRENCY_SYMBOLS.includes(text[r] || '')) { kind = 'currency'; end = r + 1; }
-    else if (CURRENCY_CODES.includes(text.slice(r, r + 3).toUpperCase()) && !/[A-Za-z]/.test(text[r + 3] || '')) {
+    else if (text[r] && CURRENCY_SYMBOLS.includes(text[r])) { kind = 'currency'; end = r + 1; }
+    else if (text.slice(r, r + 3).length === 3 && CURRENCY_CODES.includes(text.slice(r, r + 3).toUpperCase()) && !/[A-Za-z]/.test(text[r + 3] || '')) {
       kind = 'currency'; end = r + 3;
     } else if ((text[r] === 'x' || text[r] === 'X' || text[r] === '×') && !/[A-Za-z0-9]/.test(text[r + 1] || '')) {
       kind = 'multiplier'; end = r + 1;

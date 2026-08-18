@@ -20,6 +20,9 @@
  * @module branch/text
  */
 
+/** Text that needs no Unicode decomposition. */
+const ASCII_ONLY = /^[\x00-\x7f]*$/;
+
 /** Characters that make up a token: any letter or number, in any script. */
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 
@@ -46,6 +49,11 @@ const STOPWORDS = new Set([
  * @returns {string}
  */
 export function foldChar(ch) {
+  const code = ch.charCodeAt(0);
+  // ASCII is the overwhelmingly common case and `String.prototype.normalize`
+  // is expensive enough per character to show up in an index build, so it is
+  // only reached by text that could actually decompose.
+  if (code < 128) return code >= 65 && code <= 90 ? ch.toLowerCase() : ch;
   return ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
@@ -63,6 +71,14 @@ export function foldChar(ch) {
  */
 export function fold(input) {
   const source = String(input == null ? '' : input);
+  // Pure-ASCII text folds one-to-one, so the index map is the identity and the
+  // whole string can be lower-cased in one call.
+  if (ASCII_ONLY.test(source)) {
+    const text = source.toLowerCase();
+    const map = new Array(text.length);
+    for (let i = 0; i < text.length; i++) map[i] = i;
+    return { text, map, source };
+  }
   let text = '';
   /** @type {number[]} */
   const map = [];

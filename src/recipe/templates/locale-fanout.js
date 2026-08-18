@@ -75,6 +75,12 @@ function asRtl(block, localeId) {
     const items = block.items.map((it) => `<li>${esc(it)}</li>`).join('');
     return { type: 'raw', html: `<${tag} dir="rtl" lang="${localeId}">${items}</${tag}>` };
   }
+  if (block.type === 'quote') {
+    const cite = block.attribution ? `<cite>${esc(block.attribution)}</cite>` : '';
+    return { type: 'raw', html: `<blockquote dir="rtl" lang="${localeId}"><p>${esc(block.text)}</p>${cite}</blockquote>` };
+  }
+  // A call to action stays a `cta` block: the layouts render it as a control,
+  // and direction is carried by the surrounding prose blocks.
   return block;
 }
 

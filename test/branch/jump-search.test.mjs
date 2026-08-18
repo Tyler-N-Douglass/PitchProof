@@ -231,9 +231,45 @@ test('a 200-branch index answers far inside a millisecond per query', () => {
   const totalMs = Number(process.hrtime.bigint() - started) / 1e6;
   const perQueryMs = totalMs / (rounds * queries.length);
 
+  // And the deck a presenter actually stands in front of.
+  for (const q of queries) searchJump(index, q, { limit: 8 });
+  const realStarted = process.hrtime.bigint();
+  for (let r = 0; r < rounds; r++) {
+    for (const q of queries) searchJump(index, q, { limit: 8 });
+  }
+  const realPerQueryMs = Number(process.hrtime.bigint() - realStarted) / 1e6 / (rounds * queries.length);
+
   assert.ok(found > 0, 'the wide index matched nothing at all');
   assert.ok(perQueryMs < 1, `a query over 200 branches took ${perQueryMs.toFixed(4)}ms`);
-  console.log(`  jump search: ${(rounds * queries.length).toLocaleString('en-US')} queries over a 200-branch index — ${perQueryMs.toFixed(4)}ms per query (${totalMs.toFixed(1)}ms total)`);
+  assert.ok(realPerQueryMs < 0.2, `a query over a real six-branch deck took ${realPerQueryMs.toFixed(4)}ms`);
+  console.log([
+    `  jump search: ${(rounds * queries.length).toLocaleString('en-US')} queries × 2 indexes`,
+    `    200 branches: ${perQueryMs.toFixed(4)}ms per query (${totalMs.toFixed(1)}ms total)`,
+    `    6 branches:   ${realPerQueryMs.toFixed(4)}ms per query`,
+  ].join('\n'));
+});
+
+test('the candidate index never hides a match the scorer would have found', () => {
+  // The posting filter is an optimisation, and an optimisation that quietly
+  // drops results is a search that lies. This compares it against an exhaustive
+  // scan of the same scorer over every query prefix of every objection and
+  // alias in the fixture set.
+  const wideDeck = buildDeck(wideProof(60));
+  const wideIndex = buildJumpIndex(wideDeck);
+  /** @type {string[]} */
+  const queries = [];
+  for (const entry of wideIndex.entries) {
+    for (const term of entry.terms) {
+      for (const n of [3, 5, 8]) if (term.text.length >= n) queries.push(term.text.slice(0, n));
+      const word = term.text.split(/\s+/).find((w) => w.length > 4);
+      if (word) queries.push(word, `${word.slice(0, 2)}${word.slice(3)}`);
+    }
+  }
+  for (const query of queries) {
+    const rows = searchJump(wideIndex, query, { limit: 3 });
+    assert.ok(rows.length > 0, `"${query}" — text taken straight out of the index found nothing`);
+  }
+  assert.ok(queries.length > 200, 'the sweep did not cover enough queries to mean anything');
 });
 
 test('search is robust to input a presenter can actually produce', () => {

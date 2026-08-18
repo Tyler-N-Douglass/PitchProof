@@ -41,6 +41,21 @@ export const CHROME_THRESHOLD = 1.0;
 export const DOMINANT_SHARE = 0.5;
 export const DOMINANT_THRESHOLD = 1.7;
 
+/**
+ * A block that contains the page's own headline is presumed to be content: the
+ * title of the page is the one thing that cannot be furniture. It can still be
+ * stripped, but only on overwhelming evidence — a site header whose logo is
+ * marked up as the `h1` still goes, because it scores far above this.
+ */
+export const HEADLINE_THRESHOLD = 2.0;
+
+/**
+ * Elements whose descendants are structural parts of one content block rather
+ * than independent blocks. A `<footer>` inside a `<blockquote>` is the
+ * attribution, not a page footer; a `<th>` is not a block that can be chrome.
+ */
+export const ATOMIC_CONTAINERS = new Set(['blockquote', 'figure', 'table', 'pre', 'dl', 'p']);
+
 /** Landmark tags that are chrome by definition when they are page-level. */
 const LANDMARK_TAGS = {
   nav: 1.25,
@@ -83,7 +98,7 @@ export const CHROME_LEXICON = [
   { name: 'sidebar', w: 0.95, re: /\b(sidebar|side-nav|sidenav|rail|toc|tree|left-nav|secondary-nav)\b/ },
   { name: 'breadcrumb', w: 1.1, re: /\b(breadcrumb|breadcrumbs|crumbs)\b/ },
   { name: 'newsletter', w: 1.05, re: /\b(newsletter|subscribe|subscription|signup|sign-up|optin|opt-in|email-capture)\b/ },
-  { name: 'personalization', w: 1.05, re: /\b(personaliz|personalis|recommend|recommendations|foryou|for-you|because-you|audience|segment|visitor|greeting)\b/ },
+  { name: 'personalization', w: 1.05, re: /\b(personaliz\w*|personalis\w*|recommend\w*|for-?you|because-?you|audience|segment|visitor|greeting)\b/ },
   { name: 'chat', w: 1.1, re: /\b(chat|livechat|messenger|intercom|drift|zendesk|helpbot|bot-launcher|support-widget)\b/ },
   { name: 'social', w: 0.95, re: /\b(social|share|sharing|follow|twitter|facebook|linkedin|instagram|youtube|tiktok|whatsapp)\b/ },
   { name: 'related', w: 0.95, re: /\b(related|recirc|recirculation|more-from|morefrom|also-like|readnext|read-next|promoted|trending|popular)\b/ },
@@ -92,6 +107,7 @@ export const CHROME_LEXICON = [
   { name: 'sticky', w: 0.8, re: /\b(sticky|fixed-bar|floating|affix|stickybar|sticky-cta|anchor-bar)\b/ },
   { name: 'skip', w: 1.3, re: /\b(skip-link|skiplink|skip-to|skipnav|visually-hidden-link)\b/ },
   { name: 'widget', w: 0.55, re: /\b(widget|toolbar|controls|switcher|selector|locale-picker|language-picker|country-selector)\b/ },
+  { name: 'logos', w: 0.95, re: /\b(logo-?cloud|logos|logo-?marquee|marquee|trusted-?by|client-?logos|customer-?logos|as-?seen-?in|awards-?bar)\b/ },
   { name: 'cart', w: 0.8, re: /\b(minicart|mini-cart|cart-drawer|basket-flyout|wishlist-flyout)\b/ },
 ];
 
@@ -172,7 +188,7 @@ export function structSignature(node, depth = 3) {
 export function distinctiveStruct(sig) {
   if (!sig) return false;
   const parts = sig.split('/');
-  if (parts.length < 3) return false;
+  if (parts.length < 2) return false;
   return /[#.[]/.test(sig);
 }
 
@@ -298,7 +314,7 @@ export function linkSignal(node, stats) {
  * @returns {{score: number, detail: string[], names: string[]}}
  */
 export function boilerplateSignal(node, stats) {
-  const identity = identityString(node);
+  const identity = identityString(node, { includeTag: false });
   const text = textOf(node).toLowerCase();
   /** @type {string[]} */
   const detail = [];
@@ -360,7 +376,7 @@ export function repeatSignal(node, index, stats) {
   if (distinctiveStruct(ssig) && stats.textChars < 1500) {
     const hits = index.structs.get(ssig) || 0;
     if (hits > 0) {
-      score += hits >= index.pages ? 1.1 : 0.95;
+      score += 1.0 + 0.2 * Math.min(1, (hits - 1) / 2);
       detail.push(`same structure on ${hits}/${index.pages} sibling page(s)`);
     }
   }
@@ -389,12 +405,20 @@ export function contentSignal(node, stats) {
     score += 0.7; detail.push('article-body-class');
   }
   if (density < 0.35) {
-    const prose = Math.min(1, stats.textChars / 700) * 0.55;
-    if (prose > 0) { score += prose; detail.push(`${stats.textChars} chars of prose`); }
+    const proseChars = Math.max(0, stats.textChars - boilerplateChars(node));
+    const prose = Math.min(1, proseChars / 700) * 0.55;
+    if (prose > 0) { score += prose; detail.push(`${proseChars} chars of prose`); }
   }
   let longParas = 0;
   walk(node, (n) => {
-    if (isElement(n) && tagOf(n) === 'p' && textOf(n).length >= 60) longParas += 1;
+    if (isElement(n) && tagOf(n) === 'p') {
+      const t = textOf(n);
+      // Boilerplate text is not evidence of content, however long it is: a
+      // consent line and a "enter your email address" invitation are both full
+      // sentences, and counting them as prose is how a lead-capture shell
+      // talks its way into a specimen.
+      if (t.length >= 60 && !isBoilerplateText(t)) longParas += 1;
+    }
     return true;
   });
   if (longParas >= 2 && density < 0.35) { score += 0.35; detail.push(`${longParas} full paragraphs`); }
@@ -402,6 +426,38 @@ export function contentSignal(node, stats) {
     score += 0.3; detail.push('heading with prose');
   }
   return { score: Math.min(1.7, score), detail };
+}
+
+/**
+ * True when a run of text is one of the phrases the boilerplate lexicon knows.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isBoilerplateText(text) {
+  const t = text.toLowerCase();
+  for (const entry of CHROME_PHRASES) {
+    if (t.length <= entry.max && entry.re.test(t)) return true;
+  }
+  return false;
+}
+
+/**
+ * Characters of a subtree that belong to boilerplate paragraphs, discounted
+ * from the prose the content signal credits.
+ * @param {any} node
+ * @returns {number}
+ */
+function boilerplateChars(node) {
+  let chars = 0;
+  walk(node, (n) => {
+    if (!isElement(n)) return true;
+    const tag = tagOf(n);
+    if (tag !== 'p' && tag !== 'li') return true;
+    const t = textOf(n);
+    if (isBoilerplateText(t)) { chars += t.length; return false; }
+    return true;
+  });
+  return chars;
 }
 
 /**
@@ -441,7 +497,11 @@ export function scoreBlock(node, ctx) {
   const nonLink = Math.max(0, stats.textChars - stats.interactiveChars);
   const rootNonLink = ctx.rootContentChars || 0;
   const dominant = rootNonLink > 0 && nonLink >= DOMINANT_SHARE * rootNonLink;
-  const threshold = dominant ? DOMINANT_THRESHOLD : CHROME_THRESHOLD;
+  const holdsHeadline = Boolean(ctx.headline) && contains(node, ctx.headline);
+  const threshold = Math.max(
+    dominant ? DOMINANT_THRESHOLD : CHROME_THRESHOLD,
+    holdsHeadline ? HEADLINE_THRESHOLD : CHROME_THRESHOLD,
+  );
 
   return {
     score,
@@ -496,6 +556,16 @@ export function locateMainRoot(body) {
     }
   }
   return cur === body ? { root: body, how: 'body' } : { root: cur, how: 'density' };
+}
+
+/**
+ * The page's own headline: the first `h1` inside the extraction root, or the
+ * first `h2` when a page has none.
+ * @param {any} root
+ * @returns {any|null}
+ */
+export function primaryHeadline(root) {
+  return firstElement(root, (n) => tagOf(n) === 'h1') || firstElement(root, (n) => tagOf(n) === 'h2');
 }
 
 /** Non-link text characters — the quantity a content locator should maximise. */
@@ -553,7 +623,8 @@ export function classifyChrome(body, options = {}) {
   const located = locateMainRoot(body);
   const root = located.root;
   const rootContentChars = contentChars(root);
-  const ctx = { root, index, rootContentChars };
+  const headline = primaryHeadline(root);
+  const ctx = { root, index, rootContentChars, headline };
 
   /** @type {any[]} */
   const removed = [];
@@ -581,6 +652,9 @@ export function classifyChrome(body, options = {}) {
         removed.push(entryFor(child, body, root, scored, false));
         continue;
       }
+      // The parts of a quote, figure, table or paragraph are that block, not
+      // blocks of their own, so scoring stops here.
+      if (ATOMIC_CONTAINERS.has(tag)) continue;
       visitInside(child);
     }
   };

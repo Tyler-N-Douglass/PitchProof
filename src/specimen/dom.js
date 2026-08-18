@@ -265,13 +265,17 @@ export function identityTokens(n) {
 
 /**
  * The identity string used for whole-word lexicon matching, e.g.
- * "div site-header utility-nav".
+ * "div site-header utility-nav". Pass `{includeTag: false}` to leave the tag
+ * name out — the boilerplate lexicon does, because element names are the
+ * landmark signal's business and counting them twice would charge an article's
+ * own `<header>` for being called header.
  * @param {any} n
+ * @param {{includeTag?: boolean}} [options]
  * @returns {string}
  */
-export function identityString(n) {
+export function identityString(n, options = {}) {
   if (!isElement(n)) return '';
-  const parts = [tagOf(n)];
+  const parts = options.includeTag === false ? [] : [tagOf(n)];
   for (const name of ['id', 'class', 'role', 'aria-label', 'data-testid', 'data-component', 'data-module']) {
     const v = attrOf(n, name);
     if (v) parts.push(v.toLowerCase());

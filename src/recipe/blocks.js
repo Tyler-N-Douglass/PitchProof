@@ -15,7 +15,7 @@
  */
 
 import { blockText } from '../core/contracts.js';
-import { flatten, titleCase } from './text.js';
+import { flatten } from './text.js';
 import { buildRendition } from './provenance.js';
 import { enforceNoFabricatedFacts } from './facts.js';
 
@@ -165,7 +165,7 @@ export function mapBlockText(block, fn) {
  * @returns {import('../core/contracts.d.ts').ContentBlock}
  */
 export function sectionHeading(text, level = 3) {
-  return { type: 'heading', level, text: titleCase(text) };
+  return { type: 'heading', level, text: flatten(text) };
 }
 
 /**

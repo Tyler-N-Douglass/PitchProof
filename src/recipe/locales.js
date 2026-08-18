@@ -26,7 +26,7 @@
  */
 
 /** Narrow no-break space — French and Russian digit grouping. */
-const NNBSP = ' ';
+const NNBSP = '\u202F';
 
 /**
  * @typedef {object} LocaleModel
@@ -194,11 +194,10 @@ const ANY_NUMBER = /(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?![\d,]|\.\d
  * @returns {string}
  */
 function formatDate(locale, parts) {
-  const values = locale.dateOrder.map((k) => {
-    const raw = parts[k];
-    if (k === 'year') return raw;
-    return locale.dateSuffixes ? String(Number(raw)) : raw.padStart(2, '0');
-  });
+  // Each part keeps the digits the source wrote it with. Padding `8` to `08`
+  // would add a digit the source never had, and the §18.2 guard would be right
+  // to call that fabrication.
+  const values = locale.dateOrder.map((k) => parts[k]);
   if (locale.dateSuffixes) {
     return values.map((v, i) => `${v}${locale.dateSuffixes[i]}`).join('');
   }

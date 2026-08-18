@@ -83,6 +83,44 @@ export const CORPUS_PAGES = [
   },
 ];
 
+/**
+ * Local documents a seller would drop into the studio alongside the URL. These
+ * exercise the §6.5 file-import paths — OOXML and PDF — with real archives and a
+ * real cross-reference table rather than with something a parser could special
+ * case. The `.docx` carries styled headings, a numbered list, a table, an
+ * external hyperlink and an embedded PNG; the PDF carries a Flate-compressed
+ * content stream, two Type1 fonts with a `ToUnicode` CMap, and one embedded
+ * FlateDecode image.
+ * @type {{id: string, file: string, name: string, mime: string, kind: 'document'}[]}
+ */
+export const CORPUS_DOCUMENTS = [
+  {
+    id: 'proposal-docx',
+    file: 'hx-400-proposal.docx',
+    name: 'hx-400-proposal.docx',
+    mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    kind: 'document',
+  },
+  {
+    id: 'design-note-pdf',
+    file: 'hx-400-design-note.pdf',
+    name: 'hx-400-design-note.pdf',
+    mime: 'application/pdf',
+    kind: 'document',
+  },
+];
+
+/**
+ * Read a local document's bytes.
+ * @param {string} id
+ * @returns {Uint8Array}
+ */
+export function documentBytes(id) {
+  const doc = CORPUS_DOCUMENTS.find((d) => d.id === id);
+  if (!doc) throw new Error(`corpus: no document "${id}"`);
+  return new Uint8Array(readFileSync(join(CORPUS_ROOT, doc.file)));
+}
+
 /** Assets the pages reference, by the path they use. */
 export const CORPUS_ASSETS = [
   { path: '/assets/site.css', file: 'assets/site.css', mime: 'text/css' },
