@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Northwind mark">
+  <rect width="48" height="48" rx="4" fill="#0F2A47"/>
+  <path d="M12 36V12h5l11 16V12h5v24h-5L17 20v16h-5z" fill="#FFFFFF"/>
+  <rect x="12" y="38" width="24" height="3" fill="#E8622C"/>
+</svg>

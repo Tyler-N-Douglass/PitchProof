@@ -1,0 +1,276 @@
+/*
+ * L9 branch overlays: the jump index, the branch map and the contents index.
+ *
+ * These extend the `pp-overlay` shell that `src/runtime/runtime.css` owns; they
+ * never redefine a class the runtime owns (API.md, Artifact CSS). Every colour
+ * comes from a `--pp-*` role variable, so the panels wear the prospect's brand
+ * like the rest of the artifact and nothing here can leak studio chrome (D11).
+ *
+ * NOTE FOR THE INTEGRATOR: `scripts/build.mjs` concatenates CSS from
+ * `src/runtime/**` and `src/scene/**` only. This file must be added to that
+ * list, or the overlays render unstyled in the emitted artifact.
+ */
+
+.pp-overlay--jump,
+.pp-overlay--map,
+.pp-overlay--contents {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ------------------------------------------------------------- jump index */
+
+.pp-jump-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: var(--pp-border-width) solid var(--pp-border);
+  border-radius: var(--pp-radius);
+  padding: 10px 14px;
+  background: var(--pp-surface-alt);
+}
+
+.pp-jump-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--pp-on-surface-alt);
+  font-family: var(--pp-font-body);
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.pp-jump-input:focus { outline: none; }
+.pp-jump-input::placeholder { color: var(--pp-on-surface-alt); opacity: 0.5; }
+
+.pp-jump-count {
+  font-family: var(--pp-font-mono);
+  font-size: 12px;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+.pp-jump-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.pp-jump-result {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: 'objection meta' 'alias meta';
+  align-items: baseline;
+  gap: 2px 16px;
+  padding: 10px 12px;
+  border-radius: var(--pp-radius);
+  border-left: 3px solid transparent;
+  cursor: pointer;
+}
+
+.pp-jump-result--active {
+  background: color-mix(in srgb, var(--pp-accent) 14%, transparent);
+  border-left-color: var(--pp-accent);
+}
+
+.pp-jump-objection {
+  grid-area: objection;
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.pp-jump-alias {
+  grid-area: alias;
+  font-size: 13px;
+  opacity: 0.72;
+}
+
+.pp-jump-meta {
+  grid-area: meta;
+  font-family: var(--pp-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+.pp-jump-result--shown .pp-jump-objection { opacity: 0.62; }
+
+.pp-jump-hit {
+  background: color-mix(in srgb, var(--pp-accent) 26%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+  font-weight: 700;
+}
+
+.pp-jump-empty {
+  margin: 0;
+  padding: 14px 12px;
+  font-size: 15px;
+  opacity: 0.7;
+}
+
+/* -------------------------------------------------------------- branch map */
+
+.pp-map-here {
+  border: var(--pp-border-width) solid var(--pp-border);
+  border-left: 3px solid var(--pp-accent);
+  border-radius: var(--pp-radius);
+  padding: 12px 14px;
+  background: var(--pp-surface-alt);
+  color: var(--pp-on-surface-alt);
+}
+
+.pp-map-heading {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.pp-map-here-line { margin: 0; font-size: 13px; }
+.pp-map-here-seq { font-weight: 700; }
+.pp-map-here-scene { opacity: 0.7; font-family: var(--pp-font-mono); font-size: 12px; }
+.pp-map-here-title { margin: 4px 0 0; font-family: var(--pp-font-display); font-size: 17px; }
+.pp-map-here-return { margin: 6px 0 0; font-size: 13px; }
+.pp-map-here-policy { opacity: 0.6; }
+
+.pp-map-section { margin: 0; }
+
+.pp-map-spine,
+.pp-map-loose {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pp-map-scene {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 7px 10px;
+  border-radius: var(--pp-radius);
+  cursor: pointer;
+}
+
+.pp-map-scene--shown { opacity: 0.66; }
+
+.pp-map-scene--current {
+  background: color-mix(in srgb, var(--pp-accent) 14%, transparent);
+  opacity: 1;
+  font-weight: 700;
+}
+
+.pp-map-index { font-family: var(--pp-font-mono); font-size: 12px; opacity: 0.6; }
+.pp-map-title { font-size: 15px; }
+
+.pp-map-state {
+  font-family: var(--pp-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+.pp-map-anchors {
+  grid-column: 2 / -1;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pp-map-anchor {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 10px;
+  border-left: 2px solid var(--pp-border);
+  border-radius: 0 var(--pp-radius) var(--pp-radius) 0;
+  font-size: 13px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+/*
+ * Unshown branches are the point of this panel (§11), so they carry the accent
+ * and shown ones recede. Never the other way round: a map that highlights what
+ * is already spent tells the presenter nothing they can act on.
+ */
+.pp-map-anchor { border-left-color: var(--pp-accent); }
+.pp-map-anchor--shown { border-left-color: var(--pp-border); opacity: 0.55; }
+
+.pp-map-summary {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------- contents index */
+
+.pp-contents-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  counter-reset: pp-contents;
+}
+
+.pp-contents-item {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  grid-template-areas: 'index title beats' 'index sub beats';
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 9px 10px;
+  border-radius: var(--pp-radius);
+  border-bottom: var(--pp-border-width) solid var(--pp-border);
+  cursor: pointer;
+}
+
+.pp-contents-item:last-child { border-bottom: 0; }
+
+.pp-contents-item--current {
+  background: color-mix(in srgb, var(--pp-accent) 12%, transparent);
+  font-weight: 700;
+}
+
+.pp-contents-item--seen .pp-contents-title { opacity: 0.7; }
+
+.pp-contents-index { grid-area: index; font-family: var(--pp-font-mono); font-size: 12px; opacity: 0.6; }
+.pp-contents-title { grid-area: title; font-size: 16px; }
+.pp-contents-sub { grid-area: sub; font-size: 13px; opacity: 0.65; }
+
+.pp-contents-beats {
+  grid-area: beats;
+  font-family: var(--pp-font-mono);
+  font-size: 11px;
+  opacity: 0.55;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-jump-result,
+  .pp-map-scene,
+  .pp-contents-item { transition: none; }
+}

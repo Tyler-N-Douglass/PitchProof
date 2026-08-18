@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 48" width="240" height="48" role="img" aria-label="Northwind Industrial">
+  <title>Northwind Industrial</title>
+  <g fill="#0F2A47">
+    <path d="M4 40V8h7l13 20V8h6v32h-7L10 20v20H4z"/>
+    <path d="M44 40c-8 0-13-6-13-16S36 8 44 8s13 6 13 16-5 16-13 16zm0-6c4 0 7-4 7-10s-3-10-7-10-7 4-7 10 3 10 7 10z"/>
+  </g>
+  <path d="M64 8h6l6 22 6-22h6l6 22 6-22h6l-9 32h-7l-5-19-5 19h-7L64 8z" fill="#0F2A47"/>
+  <rect x="120" y="8" width="4" height="32" fill="#E8622C"/>
+  <text x="134" y="21" font-family="Sohne, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="600" fill="#0F2A47">INDUSTRIAL</text>
+  <text x="134" y="37" font-family="Sohne, Helvetica Neue, Arial, sans-serif" font-size="11" fill="#5A6B7C">Since 1948</text>
+</svg>

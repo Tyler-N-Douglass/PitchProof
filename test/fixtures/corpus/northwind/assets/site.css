@@ -1,0 +1,68 @@
+/* Northwind Industrial — public stylesheet (fixture) */
+@font-face {
+  font-family: "Sohne";
+  src: url("/assets/fonts/sohne-buch.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Sohne";
+  src: url("/assets/fonts/sohne-kraftig.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Sohne Mono";
+  src: url("/assets/fonts/sohne-mono.woff2") format("woff2");
+  font-weight: 400;
+}
+
+:root {
+  --nw-navy: #0F2A47;
+  --nw-navy-deep: #071A2E;
+  --nw-orange: #E8622C;
+  --nw-steel: #5A6B7C;
+  --nw-mist: #EEF2F6;
+  --nw-paper: #FFFFFF;
+  --nw-ink: #14202B;
+  --nw-line: #D3DBE3;
+}
+
+body {
+  margin: 0;
+  font-family: "Sohne", "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--nw-ink);
+  background: var(--nw-paper);
+}
+
+h1, h2, h3 { font-family: "Sohne", "Helvetica Neue", Arial, sans-serif; font-weight: 600; letter-spacing: -0.015em; }
+h1 { font-size: 54px; line-height: 1.08; margin: 0 0 20px; }
+h2 { font-size: 34px; line-height: 1.15; margin: 48px 0 16px; }
+h3 { font-size: 22px; margin: 32px 0 10px; }
+code, pre, .spec-table td.part { font-family: "Sohne Mono", ui-monospace, "SF Mono", Menlo, monospace; font-size: 15px; }
+
+.site-header { background: var(--nw-navy); color: #FFFFFF; border-bottom: 1px solid var(--nw-navy-deep); }
+.site-header a { color: #FFFFFF; text-decoration: none; }
+.mega-nav { display: flex; gap: 28px; padding: 0 32px; }
+.mega-nav__panel { background: var(--nw-navy-deep); color: #C8D4E0; }
+.utility-bar { background: var(--nw-navy-deep); color: #90A4B8; font-size: 13px; padding: 6px 32px; }
+
+.hero { background: var(--nw-navy); color: #FFFFFF; padding: 96px 32px 88px; }
+.hero__eyebrow { color: var(--nw-orange); text-transform: uppercase; letter-spacing: 0.12em; font-size: 13px; font-weight: 600; }
+.hero__media { display: block; width: 100%; height: auto; }
+
+.button--primary { background: var(--nw-orange); color: #FFFFFF; border: 0; border-radius: 4px; padding: 14px 26px; font-weight: 600; }
+.button--ghost { background: transparent; color: var(--nw-navy); border: 2px solid var(--nw-navy); border-radius: 4px; padding: 12px 24px; }
+
+.card { background: var(--nw-mist); border: 1px solid var(--nw-line); border-radius: 4px; padding: 28px; box-shadow: 0 1px 2px rgba(7, 26, 46, 0.08); }
+.spec-table { border-collapse: collapse; width: 100%; }
+.spec-table th { background: var(--nw-mist); text-align: left; border-bottom: 2px solid var(--nw-line); padding: 10px 12px; }
+.spec-table td { border-bottom: 1px solid var(--nw-line); padding: 10px 12px; }
+
+.cookie-banner { position: fixed; inset: auto 0 0 0; background: var(--nw-navy-deep); color: #DCE5EE; padding: 20px 32px; }
+.newsletter-gate { background: var(--nw-mist); border: 1px solid var(--nw-line); padding: 32px; }
+.personalization-shell { background: #FFF7F2; border-left: 4px solid var(--nw-orange); padding: 16px 20px; }
+.site-footer { background: var(--nw-navy-deep); color: #90A4B8; padding: 56px 32px 40px; }
+.site-footer a { color: #C8D4E0; }

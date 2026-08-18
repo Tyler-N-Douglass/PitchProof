@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Designing fouling margin you will actually use — Northwind Industrial</title>
+<meta name="description" content="Fouling factors are the most over-specified number on a heat exchanger datasheet. Here is how we size for the fouling a plant really sees.">
+<link rel="canonical" href="https://www.northwind-industrial.example/insights/fouling-margins/">
+<link rel="icon" type="image/svg+xml" href="/assets/mark.svg">
+<link rel="stylesheet" href="/assets/site.css">
+<link rel="alternate" hreflang="de-DE" href="https://www.northwind-industrial.example/de/einblicke/verschmutzungsreserve/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Designing fouling margin you will actually use">
+<meta property="og:image" content="https://www.northwind-industrial.example/assets/uptime-figure.png">
+<meta property="og:locale" content="en_GB">
+<meta property="article:published_time" content="2026-01-14T09:00:00Z">
+<meta property="article:author" content="Marta Ellison">
+</head>
+<body>
+
+<div class="utility-bar" role="region" aria-label="Utility">
+  <ul>
+    <li><a href="/contact/">Contact</a></li>
+    <li><a href="/service/emergency/">24h service line</a></li>
+    <li><a href="/investors/">Investors</a></li>
+    <li><a href="/careers/">Careers</a></li>
+    <li><a href="/de/einblicke/verschmutzungsreserve/" hreflang="de-DE">Deutsch</a></li>
+    <li><a href="/login/">Customer portal</a></li>
+  </ul>
+</div>
+
+<header class="site-header" role="banner">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <a class="site-header__logo" href="/"><img src="/assets/logo.svg" alt="Northwind Industrial" width="240" height="48"></a>
+  <nav class="mega-nav" role="navigation" aria-label="Primary">
+    <ul>
+      <li><a href="/equipment/">Equipment</a></li>
+      <li><a href="/industries/">Industries</a></li>
+      <li><a href="/service/">Service</a></li>
+      <li><a href="/insights/">Insights</a></li>
+      <li><a href="/about/">About</a></li>
+    </ul>
+  </nav>
+  <form class="site-search" role="search" action="/search/">
+    <label for="q">Search</label>
+    <input id="q" name="q" type="search" placeholder="Search equipment, parts, documents">
+    <button type="submit">Search</button>
+  </form>
+</header>
+
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <ol>
+    <li><a href="/">Home</a></li>
+    <li><a href="/insights/">Insights</a></li>
+    <li>Designing fouling margin you will actually use</li>
+  </ol>
+</nav>
+
+<main id="main">
+  <article class="article">
+    <p class="article__kicker">Process engineering</p>
+    <h1>Designing fouling margin you will actually use</h1>
+    <p class="article__byline">Marta Ellison, principal process engineer &middot; 14 January 2026 &middot; 9 minute read</p>
+
+    <p class="article__standfirst">The fouling factor is the most over-specified number on a heat exchanger datasheet, and the one most likely to be copied from the last project without anyone asking what it did there.</p>
+
+    <p>Open any tender pack for a preheat train and you will find fouling resistances quoted to three decimal places. Trace them back and they usually come from a table in a standard, applied to a fluid described in two words. The number is not wrong, exactly. It is simply not about this plant.</p>
+
+    <p>What it does instead is buy area. A generous fouling allowance makes the exchanger bigger, which makes the clean-condition velocity lower, which makes it foul faster. The margin creates the problem it was specified to absorb. We see the consequence on the service side four or five times a year: a unit that has never once run at its design duty, cleaned twice as often as the model said it would need to be.</p>
+
+    <img src="/assets/uptime-figure.png" alt="Chart of overall heat transfer coefficient against months in service, showing a steep early decline and a long plateau" width="200" height="120">
+
+    <h2>Start from the cleaning interval, not the resistance</h2>
+    <p>The question that produces a useful answer is not "what is the fouling factor for this fluid". It is "how often will this plant open this unit, and what duty does it need to hold on the day before it does".</p>
+    <p>That reframes the design point. Instead of sizing for a fouled steady state that never arrives, you size for the end of the run — the worst hour before the turnaround — and you let the clean-condition performance be whatever it is. In practice this almost always produces a smaller exchanger with higher velocities, which fouls more slowly, which lengthens the run.</p>
+
+    <h3>Three things worth measuring before you size anything</h3>
+    <ol>
+      <li><strong>The actual cleaning history of the incumbent unit.</strong> Not the planned interval. The dates the bundle physically came out, for the last five years.</li>
+      <li><strong>Pressure drop against time, not just duty against time.</strong> Duty degrades gently and hides the problem; pressure drop tells you what the deposit is doing to the flow path.</li>
+      <li><strong>What the deposit is.</strong> Ten minutes with a sample and a lab is worth more than a season of correlation. Coke, scale and biofilm behave nothing alike and respond to velocity in opposite directions.</li>
+    </ol>
+
+    <h2>Where the standard tables still help</h2>
+    <p>None of this makes the published resistances useless. They are a reasonable prior when there is genuinely no operating history — a new plant, a new feedstock, a duty nobody in the room has run before. The failure is not using them. The failure is using them when there are five years of maintenance records sitting in the CMMS that nobody pulled.</p>
+
+    <blockquote>
+      <p>We halved the fouling allowance, the exchanger came out two shell sizes smaller, and the run length went from eleven months to nineteen. Nobody believed the first number until the second one arrived.</p>
+      <footer><cite>Process engineering manager, Humber refinery</cite></footer>
+    </blockquote>
+
+    <h2>What we do differently on a quotation</h2>
+    <p>When a datasheet arrives with a fouling factor on it, we quote to the datasheet, because that is what was asked for. Then we send a second sheet showing what the unit looks like sized to a cleaning interval, with the assumptions written out so they can be argued with. About a third of the time the second sheet becomes the order.</p>
+    <p>It is a slower way to sell an exchanger. It is a much faster way to stop selling the same customer a replacement in four years.</p>
+
+    <h3>Further reading</h3>
+    <ul>
+      <li><a href="/insights/velocity-and-deposit/">Velocity, shear and why the same deposit behaves differently at 1.2 and 1.8 metres per second</a></li>
+      <li><a href="/insights/turnaround-scope/">Writing a turnaround scope an inspector can price</a></li>
+      <li><a href="/equipment/heat-exchangers/hx-400/">The HX-400, and why the extraction rail is in the base scope</a></li>
+    </ul>
+
+    <p><a class="button--primary" href="/service/assessment/">Have an existing unit assessed</a></p>
+  </article>
+</main>
+
+<aside class="related-rail" aria-label="Related">
+  <h2>More from Insights</h2>
+  <ul>
+    <li><a href="/insights/velocity-and-deposit/">Velocity, shear and deposit</a></li>
+    <li><a href="/insights/turnaround-scope/">Writing a turnaround scope</a></li>
+    <li><a href="/insights/duplex-welding/">Duplex welding without the metallurgist</a></li>
+    <li><a href="/insights/spares-that-matter/">The three spares that actually matter</a></li>
+  </ul>
+</aside>
+
+<div class="social-bar" aria-label="Share">
+  <a href="https://www.linkedin.com/shareArticle">Share on LinkedIn</a>
+  <a href="mailto:?subject=Fouling%20margin">Email this</a>
+  <button type="button">Copy link</button>
+</div>
+
+<div class="newsletter-gate" role="complementary" aria-label="Newsletter">
+  <h2>Keep reading</h2>
+  <p>The Northwind Note goes out once a month. One email, no sales sequences.</p>
+  <form action="/subscribe/">
+    <label for="email">Work email</label>
+    <input id="email" name="email" type="email">
+    <button type="submit">Subscribe</button>
+  </form>
+</div>
+
+<footer class="site-footer" role="contentinfo">
+  <nav aria-label="Footer">
+    <ul>
+      <li><a href="/equipment/">Equipment</a></li>
+      <li><a href="/industries/">Industries</a></li>
+      <li><a href="/service/">Service</a></li>
+      <li><a href="/insights/">Insights</a></li>
+      <li><a href="/about/">About</a></li>
+      <li><a href="/careers/">Careers</a></li>
+      <li><a href="/investors/">Investors</a></li>
+      <li><a href="/contact/">Contact</a></li>
+      <li><a href="/legal/privacy/">Privacy</a></li>
+      <li><a href="/legal/terms/">Terms</a></li>
+      <li><a href="/legal/modern-slavery/">Modern slavery statement</a></li>
+      <li><a href="/legal/cookies/">Cookies</a></li>
+    </ul>
+  </nav>
+  <p>Northwind Industrial Limited, registered in England and Wales, number 00417732. Registered office: Dockside Works, Middlesbrough TS2 1AA.</p>
+  <p>&copy; 1948&ndash;2026 Northwind Industrial Limited.</p>
+</footer>
+
+<div class="cookie-banner" role="dialog" aria-label="Cookie consent">
+  <p>We use cookies to run this site, remember your region and measure which pages engineers actually read. You can accept all, reject non-essential, or choose.</p>
+  <button type="button">Accept all</button>
+  <button type="button">Reject non-essential</button>
+  <a href="/legal/cookies/">Manage preferences</a>
+</div>
+
+<div class="chat-widget" aria-label="Chat">
+  <button type="button">Chat with an engineer</button>
+</div>
+
+</body>
+</html>
