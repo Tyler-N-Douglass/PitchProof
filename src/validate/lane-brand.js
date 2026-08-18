@@ -8,4 +8,4 @@
  * @module validate/lane-brand
  */
 
-export { contrastRatio, deriveForContrast } from './standin/brand-color.js';
+export { contrastRatio, deriveForContrast, hexToOklch } from './standin/brand-color.js';

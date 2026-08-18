@@ -91,3 +91,45 @@ export function deriveForContrast(baseHex, targetHex, minRatio) {
   }
   return towardWhite ? '#FFFFFF' : '#000000';
 }
+
+// ---------------------------------------------------------------------------
+// OKLab / OKLCH — needed so a derived colour keeps `ColorToken.oklch` honest
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {[number, number, number]} rgb 0..255
+ * @returns {[number, number, number]} OKLab
+ */
+export function rgbToOklab(rgb) {
+  const r = srgbToLinear(rgb[0] / 255);
+  const g = srgbToLinear(rgb[1] / 255);
+  const b = srgbToLinear(rgb[2] / 255);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [
+    0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+  ];
+}
+
+/**
+ * @param {[number, number, number]} lab
+ * @returns {[number, number, number]} L (0..1), C, H (degrees 0..360)
+ */
+export function oklabToOklch(lab) {
+  const [L, a, b] = lab;
+  const C = Math.sqrt(a * a + b * b);
+  let H = (Math.atan2(b, a) * 180) / Math.PI;
+  if (H < 0) H += 360;
+  return [L, C, H];
+}
+
+/**
+ * @param {string} hex
+ * @returns {[number, number, number]} OKLCH
+ */
+export function hexToOklch(hex) {
+  return oklabToOklch(rgbToOklab(hexToRgb(hex)));
+}

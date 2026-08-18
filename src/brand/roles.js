@@ -204,6 +204,13 @@ export const SEMANTIC_HUE_TOLERANCE = MIN_PRIMARY_ACCENT_HUE;
 export const SEMANTIC_CHROMA_FRACTION = 0.8;
 
 /**
+ * A brand colour is only adopted into a semantic role if it is at least as
+ * colourful as an accent is required to be. A muted brown sits within one hue
+ * category of pure red, but nobody reads it as an error state.
+ */
+export const SEMANTIC_MIN_CHROMA_FRACTION = CHROMA_BANDS.accent.min;
+
+/**
  * Tint carried by the synthesised neutral anchors: half of the surface chroma
  * ceiling, so an anchor is recognisably the brand's neutral rather than a
  * generic grey, while staying well inside the band a surface is allowed.
@@ -343,9 +350,16 @@ export function buildCandidatePool(clusters) {
   }
   /** @type {Candidate[]} */
   const variants = [];
-  const seeds = extracted.slice()
-    .sort((a, b) => (b.weight - a.weight) || (a.hex < b.hex ? -1 : 1))
-    .slice(0, MAX_VARIANT_SEEDS);
+  // Seed variants from the heaviest *chromatic* colours first. Variants exist
+  // to supply role-appropriate colour; the anchors already supply neutrals, so
+  // seeding from a heavy near-white would spend the budget on greys the pool
+  // already has. Neutral seeds fill any remaining slots, which is what a
+  // monochrome brand needs.
+  const byWeight = extracted.slice()
+    .sort((a, b) => (b.weight - a.weight) || (a.hex < b.hex ? -1 : 1));
+  const chromatic = byWeight.filter((c) => c.chromaFraction >= NEUTRAL_CHROMA_FRACTION);
+  const neutral = byWeight.filter((c) => c.chromaFraction < NEUTRAL_CHROMA_FRACTION);
+  const seeds = chromatic.concat(neutral).slice(0, MAX_VARIANT_SEEDS);
   for (const seed of seeds) {
     for (const v of variantCandidates(seed)) {
       if (seen.has(v.hex)) continue;
@@ -681,16 +695,21 @@ function resolveForeground(role, bgHex, ctx, rng) {
  * @param {import('../core/prng.js').Pcg32} rng
  * @returns {{hex: string, source: 'extracted'|'derived'}}
  */
-function resolveBorder(surfaceHex, ctx, rng) {
+function resolveBorder(surfaceHex, ctx, rng, assigned = []) {
   const y = luminanceOfHex(surfaceHex);
+  const taken = assigned.map((hex) => hexToOklab(hex));
   const eligible = ctx.pool.filter((c) => contrastFromLuminance(c.luminance, y) >= CONTRAST_AA_NONTEXT);
   if (eligible.length > 0) {
     const chosen = pickLowest(eligible, (c) => {
       const r = contrastFromLuminance(c.luminance, y);
       // Closest to 3:1 wins: a border that meets the threshold and no more is a
-      // border rather than a second foreground.
+      // border rather than a second foreground. A border that repeats primary
+      // or accent turns every card outline into a brand statement, so a
+      // collision with an already-assigned role is priced.
+      const collides = taken.some((lab) => deltaEok(lab, c.lab) < DUPLICATE_DELTA_E) ? 0.6 : 0;
       return (r - CONTRAST_AA_NONTEXT) / (MAX_CONTRAST - CONTRAST_AA_NONTEXT)
         + 0.5 * c.chromaFraction
+        + collides
         + (c.source === 'derived' ? 0.3 : 0);
     }, rng);
     if (chosen) return { hex: chosen.hex, source: chosen.source };
@@ -732,7 +751,7 @@ function resolveSemantic(role, surfaceHex, ctx, rng) {
   const hue = SEMANTIC_HUES[role];
   const y = luminanceOfHex(surfaceHex);
   const eligible = ctx.pool.filter((c) => c.source === 'extracted'
-    && c.chromaFraction >= NEUTRAL_CHROMA_FRACTION
+    && c.chromaFraction >= SEMANTIC_MIN_CHROMA_FRACTION
     && hueDistance(c.oklch[2], hue) <= SEMANTIC_HUE_TOLERANCE
     && contrastFromLuminance(c.luminance, y) >= ctx.minRatio);
   if (eligible.length > 0) {
@@ -854,7 +873,7 @@ export function solveRoles(clusters, options = {}) {
     sources[role] = resolved.source;
   }
 
-  const border = resolveBorder(byRole.surface, ctx, rng);
+  const border = resolveBorder(byRole.surface, ctx, rng, [byRole.primary, byRole.accent, byRole.secondary]);
   byRole.border = border.hex;
   sources.border = border.source;
 
