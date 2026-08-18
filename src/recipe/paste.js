@@ -591,6 +591,13 @@ export function blocksFromText(text) {
   const out = [];
   /** @type {string[]} */
   let para = [];
+  /**
+   * True when the paragraph being accumulated came from a line carrying Markdown
+   * markup — a link or an image. Such a line is content the author marked up
+   * deliberately, so the "short unpunctuated line is a heading" heuristic must
+   * not claim it.
+   */
+  let paraHadMarkup = false;
 
   /**
    * A paragraph run ends here. One line of short, unpunctuated text standing
@@ -601,13 +608,15 @@ export function blocksFromText(text) {
   const flushParagraph = () => {
     if (para.length === 0) return;
     const lineCount = para.length;
+    const hadMarkup = paraHadMarkup;
     const joined = para.join(' ').replace(/\s+/g, ' ').trim();
     para = [];
+    paraHadMarkup = false;
     if (!joined) return;
     const words = joined.split(' ').length;
     const isCaps = joined === joined.toUpperCase() && /\p{L}/u.test(joined);
     const headingShaped = lineCount === 1 && words <= 10 && joined.length <= 60 && !/[.,;:!?]$/.test(joined);
-    if (lineCount === 1 && (headingShaped || (isCaps && words <= 10 && joined.length <= 60))) {
+    if (!hadMarkup && lineCount === 1 && (headingShaped || (isCaps && words <= 10 && joined.length <= 60))) {
       out.push({ type: 'heading', level: /** @type {any} */(out.length === 0 ? 1 : 2), text: joined });
       return;
     }
@@ -741,6 +750,7 @@ export function blocksFromText(text) {
       continue;
     }
 
+    if (/\[[^\]]*\]\([^)\s]+\)/.test(line)) paraHadMarkup = true;
     para.push(stripInlineMarkdown(line).trim());
   }
   flushParagraph();

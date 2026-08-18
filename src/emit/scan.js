@@ -332,14 +332,32 @@ function scanTag(tag, src, hit) {
 
 /**
  * `srcset` candidates: `url descriptor, url descriptor, …`.
+ *
+ * Splitting on commas is wrong, because a `data:` URI contains one. The HTML
+ * specification reads a candidate as a run of non-whitespace followed by an
+ * optional descriptor, and that is what this does — so a legal `srcset` of two
+ * base64 images parses as two images rather than four fragments.
+ *
  * @param {string} value
  * @returns {string[]}
  */
 export function parseSrcset(value) {
-  return String(value)
-    .split(',')
-    .map((part) => part.trim().split(/\s+/)[0])
-    .filter(Boolean);
+  const s = String(value == null ? '' : value);
+  /** @type {string[]} */
+  const out = [];
+  let i = 0;
+  while (i < s.length) {
+    while (i < s.length && /[\s,]/.test(s[i])) i++;
+    const start = i;
+    while (i < s.length && !/\s/.test(s[i])) i++;
+    let url = s.slice(start, i).replace(/,+$/, '');
+    if (url) {
+      if (url.includes(',') && !/^data:/i.test(url)) out.push(...url.split(',').filter(Boolean));
+      else out.push(url);
+    }
+    while (i < s.length && s[i] !== ',') i++;
+  }
+  return out;
 }
 
 /**

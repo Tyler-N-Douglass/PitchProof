@@ -15,7 +15,7 @@
  */
 
 export {
-  stripChrome, restoreNode, classifyChrome, locateMainRoot, siblingIndex,
+  stripChrome, restoreNode, restoreNodes, classifyChrome, primaryHeadline, locateMainRoot, siblingIndex,
   scoreBlock, landmarkSignal, linkSignal, boilerplateSignal, repeatSignal,
   contentSignal, textSignature, structSignature, distinctiveStruct,
   dropNonRendered, CHROME_THRESHOLD, CHROME_LEXICON, CHROME_PHRASES,

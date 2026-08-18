@@ -149,6 +149,9 @@ export function buildSpecimen(capture, options = {}) {
   let stripped = [];
   let locator = 'none';
   let chromeRoot = null;
+  let chromeSiblingPages = 0;
+  /** @type {string[]} */
+  let chromeNotes = [];
 
   if (Array.isArray(capture.blocks) && capture.blocks.length > 0) {
     // Document and image importers hand over blocks directly; there is no page
@@ -169,6 +172,8 @@ export function buildSpecimen(capture, options = {}) {
       : classifyChrome(body, { siblings: options.siblings });
     locator = classified.how;
     chromeRoot = selectorPath(classified.root, body);
+    chromeSiblingPages = classified.siblingPages || 0;
+    chromeNotes = classified.notes || [];
 
     /** @type {Map<any, number>} node → index into `classified.removed` */
     const removedByNode = new Map();
@@ -181,12 +186,17 @@ export function buildSpecimen(capture, options = {}) {
     const perEntryPositions = classified.removed.map(() => []);
 
     traced.forEach((t, position) => {
-      let cur = t.node;
       let owner = -1;
-      while (cur) {
-        const hit = removedByNode.get(cur);
-        if (hit !== undefined) owner = hit;
-        cur = cur.parent;
+      // A block belongs to a removed region when *any* of the nodes it was
+      // built from sits inside one; the outermost such region owns it.
+      for (const source of (t.nodes && t.nodes.length ? t.nodes : [t.node])) {
+        let cur = source;
+        while (cur) {
+          const hit = removedByNode.get(cur);
+          if (hit !== undefined) owner = hit;
+          cur = cur.parent;
+        }
+        if (owner >= 0) break;
       }
       if (owner >= 0) {
         perEntry[owner].push(t.block);
@@ -251,7 +261,13 @@ export function buildSpecimen(capture, options = {}) {
     stripped,
     restored: [],
     blockPositions,
-    chrome: { locator, root: chromeRoot, removedCount: stripped.length, siblingPages: (options.siblings || []).length },
+    chrome: {
+      locator,
+      root: chromeRoot,
+      removedCount: stripped.length,
+      siblingPages: chromeSiblingPages,
+      notes: chromeNotes,
+    },
     headingsRepaired: Boolean(options.repairHeadings),
     kindConfidence: inferred.confidence,
     kindEvidence: inferred.evidence,

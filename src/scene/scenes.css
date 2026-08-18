@@ -11,9 +11,11 @@
  *     Colour comes from the brand theme's `--pp-*` roles; no literal hex
  *     appears below, because the artifact wears the prospect's brand and
  *     nobody else's.
- *   - **No network of any kind** (§13): no `@import`, no font URL, no image
- *     URL. Every visual is a border, a background, a gradient over brand
- *     colours, or inline SVG in the markup.
+ *   - **No network of any kind** (§13): no imported stylesheet, no font URL, no
+ *     image URL, no remote anything. Every visual is a border, a background, a
+ *     gradient over brand colours, or inline SVG in the markup. The rule is
+ *     checked by test/scene/css-agreement.test.mjs over the whole directory,
+ *     including this comment — the file is bundled into the artifact verbatim.
  *   - **The §10 motion budget**: the only animated properties are `opacity` and
  *     `transform`, every duration is `var(--pp-transition-ms)` (200ms, capped at
  *     240 by `transitionMs()` in runtime/beats.js), and

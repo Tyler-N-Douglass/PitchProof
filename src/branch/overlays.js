@@ -46,12 +46,28 @@ export class JumpController {
    */
   constructor(runtime, options = {}) {
     this.runtime = runtime;
-    this.index = buildJumpIndex(runtime.deck);
+    /** @type {import('./jump-index.js').JumpIndex|null} */
+    this.builtIndex = null;
     this.limit = options.limit === undefined ? DEFAULT_LIMIT : options.limit;
     this.query = '';
     this.selection = 0;
     /** @type {{query: string, results: import('./jump-index.js').JumpMatch[]}|null} */
     this.cache = null;
+  }
+
+  /**
+   * The index, built on first use rather than at registration.
+   *
+   * Registration happens during boot, and §12 gives the artifact 1.5s to first
+   * meaningful paint from a local file. Nothing about the opening beat needs the
+   * jump index, and a deck large enough for the build to cost anything is
+   * exactly the deck that can least afford it before first paint. The first `/`
+   * pays instead — single-digit milliseconds on a real deck, once per session.
+   * @returns {import('./jump-index.js').JumpIndex}
+   */
+  get index() {
+    if (!this.builtIndex) this.builtIndex = buildJumpIndex(this.runtime.deck);
+    return this.builtIndex;
   }
 
   /** @returns {import('./jump-index.js').JumpMatch[]} */
@@ -332,13 +348,8 @@ export function renderMapOverlay(ctx) {
         h('span', { class: 'pp-map-title' }, sceneTitle(scene, i)),
         h('span', { class: 'pp-map-state' }, current ? 'here' : visited.has(scene.id) ? 'shown' : 'ahead'),
         anchorHere.length
-          ? h('ul', { class: 'pp-map-anchors' }, anchorHere.map((seq) => h('li', {
-            class: `pp-map-anchor${shownOf(seq) ? ' pp-map-anchor--shown' : ''}`,
-            'data-pp-branch': seq.id,
-            [COMMAND_ATTR]: 'jump',
-            [PAYLOAD_ATTR]: seq.id,
-          }, h('span', { class: 'pp-map-anchor-label' }, seq.objection || seq.id),
-          h('span', { class: 'pp-map-state' }, shownOf(seq) ? 'shown' : 'ready'))))
+          ? h('ul', { class: 'pp-map-anchors' },
+            anchorHere.map((seq) => renderBranchItem(deck, seq, visited, shownOf, new Set(), 0)))
           : null);
       }))),
     renderUnanchored(ctx, branches.filter((seq) => !anchoredIds.has(seq.id)), shownOf),
@@ -347,6 +358,63 @@ export function renderMapOverlay(ctx) {
         ? 'No objection branches are wired into this proof.'
         : `${shownCount} of ${branches.length} ${branches.length === 1 ? 'branch' : 'branches'} shown · ${branches.length - shownCount} still in reserve`),
     h('p', { class: 'pp-overlay-foot' }, '/ jumps · R returns to the spine · Esc closes'));
+}
+
+/**
+ * One branch in the map, with the branches *it* offers nested underneath.
+ *
+ * A branch anchored from inside another branch is invisible on the spine, and
+ * an available branch a presenter cannot see is an available branch they will
+ * not use — so the map draws the anchor tree, not just its first level. Depth is
+ * capped and the trail is tracked, because a proof may declare an anchor cycle
+ * and a validation finding is a better answer than a hung overlay.
+ *
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {import('../runtime/deck.js').Sequence} seq
+ * @param {Set<string>} visited
+ * @param {(seq: import('../runtime/deck.js').Sequence) => boolean} shownOf
+ * @param {Set<string>} trail
+ * @param {number} depth
+ * @returns {import('../core/vdom.js').VNode}
+ */
+function renderBranchItem(deck, seq, visited, shownOf, trail, depth) {
+  const shown = shownOf(seq);
+  const children = depth < 4 && !trail.has(seq.id) ? childBranches(deck, seq) : [];
+  const nextTrail = new Set(trail).add(seq.id);
+
+  return h('li', {
+    class: `pp-map-anchor${shown ? ' pp-map-anchor--shown' : ''}`,
+    'data-pp-branch': seq.id,
+    [COMMAND_ATTR]: 'jump',
+    [PAYLOAD_ATTR]: seq.id,
+  },
+  h('span', { class: 'pp-map-anchor-label' }, seq.objection || seq.id),
+  h('span', { class: 'pp-map-state' }, shown ? 'shown' : 'ready'),
+  children.length
+    ? h('ul', { class: 'pp-map-anchors pp-map-anchors--nested' },
+      children.map((child) => renderBranchItem(deck, child, visited, shownOf, nextTrail, depth + 1)))
+    : null);
+}
+
+/**
+ * The branches a branch's own scenes offer, in scene order.
+ * @param {import('../runtime/deck.js').Deck} deck
+ * @param {import('../runtime/deck.js').Sequence} seq
+ * @returns {import('../runtime/deck.js').Sequence[]}
+ */
+function childBranches(deck, seq) {
+  /** @type {import('../runtime/deck.js').Sequence[]} */
+  const out = [];
+  const seen = new Set();
+  for (const scene of seq.scenes) {
+    for (const id of deck.anchorsByScene.get(scene.id) || []) {
+      if (seen.has(id) || id === seq.id) continue;
+      seen.add(id);
+      const child = deck.sequences.get(id);
+      if (child) out.push(child);
+    }
+  }
+  return out;
 }
 
 /**

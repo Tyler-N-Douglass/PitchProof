@@ -308,8 +308,26 @@ export function collectFromCss(cssText, options = {}) {
  * Collection — pixels
  * ------------------------------------------------------------------------ */
 
-/** Above this many pixels a source is strided down; 20000 keeps k-means fast without changing the histogram materially. */
-export const MAX_PIXEL_SAMPLES = 20000;
+/**
+ * Most bins kept from an image's colour histogram. When an image has more
+ * distinct binned colours than this, the lightest bins are dropped — which
+ * discards the least painted area, the exact quantity the area model ranks by.
+ */
+export const MAX_PIXEL_SAMPLES = 4096;
+
+/**
+ * Bits per channel used to bin pixels before histogramming: 5 bits gives
+ * 32³ = 32,768 bins, the classic uniform pre-quantisation step of a colour
+ * quantiser. It costs nothing in accuracy here because each bin reports the
+ * **weighted mean of the pixels that fell into it**, not the bin centre, and
+ * k-means then refines centroids from those means.
+ *
+ * Binning replaced an earlier stride-based subsample, which was a real defect:
+ * a fixed stride aliases against periodic pixel patterns, and images are full
+ * of them. A one-in-four red pattern sampled every fortieth pixel came back
+ * 100% red.
+ */
+export const PIXEL_BIN_BITS = 5;
 
 /**
  * Decode any reasonable pixel container into `{rgb, alpha}` records.
@@ -378,22 +396,41 @@ export function collectFromPixels(pixels, options = {}) {
     ? Math.floor(options.maxSamples) : MAX_PIXEL_SAMPLES;
   const decoded = decodePixels(pixels);
   if (decoded.length === 0) return [];
-  // Deterministic stride subsampling: no PRNG, no bias toward any region of the
-  // buffer beyond the uniform lattice, and identical on every machine.
-  const stride = Math.max(1, Math.ceil(decoded.length / maxSamples));
-  /** @type {ColorSample[]} */
-  const out = [];
   // Rendered area, when known, rescales pixel counts into CSS px². It cancels
   // out under source normalisation but keeps the units honest.
   const scale = Number.isFinite(options.area) && options.area > 0
     ? options.area / decoded.length : 1;
-  for (let i = 0; i < decoded.length; i += stride) {
-    const p = decoded[i];
+  const shift = 8 - PIXEL_BIN_BITS;
+  /** @type {Map<number, {r: number, g: number, b: number, w: number}>} */
+  const bins = new Map();
+  for (const p of decoded) {
     if (!Number.isFinite(p.rgb[0]) || !Number.isFinite(p.rgb[1]) || !Number.isFinite(p.rgb[2])) continue;
     const alpha = Math.min(1, Math.max(0, Number.isFinite(p.alpha) ? p.alpha : 1));
     if (alpha <= 0) continue;
     const rgb = compositeOver({ rgb: /** @type {[number,number,number]} */ (p.rgb), alpha, hex: '' }, backdrop);
-    out.push(makeSample(rgb, p.weight * alpha * stride * scale, origin, 'pixel', false));
+    const w = p.weight * alpha;
+    if (!(w > 0)) continue;
+    const key = ((Math.min(255, Math.max(0, Math.round(rgb[0]))) >> shift) << (2 * PIXEL_BIN_BITS))
+      | ((Math.min(255, Math.max(0, Math.round(rgb[1]))) >> shift) << PIXEL_BIN_BITS)
+      | (Math.min(255, Math.max(0, Math.round(rgb[2]))) >> shift);
+    let bin = bins.get(key);
+    if (!bin) { bin = { r: 0, g: 0, b: 0, w: 0 }; bins.set(key, bin); }
+    bin.r += rgb[0] * w;
+    bin.g += rgb[1] * w;
+    bin.b += rgb[2] * w;
+    bin.w += w;
+  }
+  // Sorted by weight, then by bin key: a total order independent of insertion.
+  let entries = [...bins.entries()].sort((a, b) => (b[1].w - a[1].w) || (a[0] - b[0]));
+  if (entries.length > maxSamples) entries = entries.slice(0, maxSamples);
+  /** @type {ColorSample[]} */
+  const out = [];
+  for (const [, bin] of entries) {
+    out.push(makeSample(
+      [bin.r / bin.w, bin.g / bin.w, bin.b / bin.w],
+      bin.w * scale,
+      origin, 'pixel', false,
+    ));
   }
   return out;
 }

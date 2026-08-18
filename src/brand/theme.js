@@ -26,9 +26,9 @@ import { validateBrand, COLOR_ROLES, MAX_TRANSITION_MS } from '../core/contracts
 import { contentId } from '../core/ids.js';
 import { cssFontFamily, FALLBACK_CANDIDATES } from '../core/text-metrics.js';
 
-import { detectFaces, facesConfidence, attachUserFont } from './type.js';
+import { detectFaces, facesConfidence } from './type.js';
 import { extractLogos, inverseVariant, logosConfidence } from './logo.js';
-import { detectShape, collectShapeEvidence, shapeFromEvidence, shapeConfidence } from './shape.js';
+import { collectShapeEvidence, shapeFromEvidence, shapeConfidence } from './shape.js';
 import { classifyImagery } from './imagery.js';
 
 export { detectFaces, attachUserFont, facesConfidence } from './type.js';

@@ -377,8 +377,11 @@ export function budgetAssets(proof, maxBytes, options = {}) {
   if (total > budget) {
     // Greedy: always spend the least important asset that still has a step.
     const order = assets.slice().sort((a, b) => b.rank - a.rank);
+    // -1, so the first step attempted is ladder index 0: a lossless re-encode.
+    // A PNG written by another encoder often gives back real bytes for nothing,
+    // and spending pixels before trying that would be gratuitous.
     /** @type {Map<string, number>} */
-    const stepIndex = new Map(assets.map((a) => [a.assetId, 0]));
+    const stepIndex = new Map(assets.map((a) => [a.assetId, -1]));
     /** @type {Set<string>} */
     const exhausted = new Set();
 
@@ -388,7 +391,7 @@ export function budgetAssets(proof, maxBytes, options = {}) {
       for (const asset of order) {
         if (total <= budget) break;
         if (exhausted.has(asset.assetId)) continue;
-        const next = (stepIndex.get(asset.assetId) || 0) + 1;
+        const next = /** @type {number} */ (stepIndex.get(asset.assetId)) + 1;
         if (next >= SCALE_LADDER.length) { exhausted.add(asset.assetId); continue; }
 
         const scale = SCALE_LADDER[next];
@@ -397,7 +400,7 @@ export function budgetAssets(proof, maxBytes, options = {}) {
         // The prediction: emitted bytes scale with pixel count, and step 0 is a
         // lossless re-encode whose gain we do not pretend to know in advance.
         const baseBytes = /** @type {number} */ (originalBytes.get(asset.assetId));
-        const predicted = next === 1 ? Math.round(baseBytes * 0.97) : Math.round(baseBytes * scale * scale);
+        const predicted = next === 0 ? Math.round(baseBytes * 0.97) : Math.round(baseBytes * scale * scale);
 
         const produced = degradeAsset({ ...asset, dataUri: asset.dataUri, bytes: baseBytes }, scale, { quality, resample: options.resample });
         stepIndex.set(asset.assetId, next);

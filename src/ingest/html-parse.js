@@ -106,8 +106,23 @@ const IMPLICIT_CLOSE = {
   rp: { closes: ['rt', 'rp'], stopAt: ['ruby', 'template'] },
 };
 
-/** Elements that stop an implied-close walk no matter what is being closed. */
+/**
+ * HTML5's "in scope" stoppers: an end tag never unwinds past one of these, so a
+ * single unbalanced `</div>` inside a table cell cannot destroy a page.
+ */
 const SCOPE_BOUNDARIES = new Set(['html', 'body', 'head', 'template', 'td', 'th', 'caption', 'table', 'button', 'object', 'marquee']);
+
+/**
+ * HTML5's "in table scope" stoppers, which are far weaker: `</table>` and
+ * `</tr>` are *expected* to close the cells and rows above them, and a parser
+ * that refuses to do so silently swallows the rest of the document into the
+ * first table it meets — which is exactly what real pages with implied `</td>`
+ * would trigger.
+ */
+const TABLE_SCOPE_BOUNDARIES = new Set(['html', 'body', 'head', 'template']);
+
+/** End tags resolved in table scope rather than ordinary scope. */
+const TABLE_ELEMENTS = new Set(['table', 'tbody', 'thead', 'tfoot', 'tr', 'td', 'th', 'caption', 'colgroup']);
 
 /** SVG tag names whose canonical form is not all-lowercase. */
 const SVG_TAG_ADJUST = new Map([
@@ -601,12 +616,13 @@ export function parseHtml(source) {
         continue;
       }
       const target = foreignAwareName(tag, inForeign());
+      const boundaries = TABLE_ELEMENTS.has(tag) ? TABLE_SCOPE_BOUNDARIES : SCOPE_BOUNDARIES;
       for (let k = stack.length - 1; k >= 1; k--) {
         if (stack[k].tag === target || stack[k].tag === tag) { stack.length = k; break; }
         // A stray end tag inside an unrelated subtree is ignored rather than
         // unwinding the document, which is what browsers do and what keeps a
         // single unbalanced `</div>` from destroying a page's structure.
-        if (SCOPE_BOUNDARIES.has(/** @type {string} */ (stack[k].tag))) break;
+        if (boundaries.has(/** @type {string} */ (stack[k].tag))) break;
       }
       continue;
     }

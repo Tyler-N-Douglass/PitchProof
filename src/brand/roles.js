@@ -100,8 +100,10 @@ const SLOT_FOREGROUND = {
  * which is what the eye sees. Measured the first way it qualifies as a brand
  * primary; measured the second way it is correctly read as a tinted neutral.
  *
- * Memoised by hue to a tenth of a degree: the cusp search is a golden-section
- * search over a binary search, and the pool asks for it once per candidate.
+ * Memoised by hue to a hundredth of a degree: the cusp search is a
+ * golden-section search over a binary search, and the pool asks for it once per
+ * candidate. A tenth of a degree is not fine enough — the sRGB solid has a
+ * sharp corner near blue where the cusp chroma moves ≈0.04 per degree.
  * @type {Map<number, number>}
  */
 const CUSP_CACHE = new Map();
@@ -112,9 +114,9 @@ const CUSP_CACHE = new Map();
  * @returns {number}
  */
 export function cuspChroma(hue) {
-  const key = Math.round((((hue % 360) + 360) % 360) * 10);
+  const key = Math.round((((hue % 360) + 360) % 360) * 100);
   let v = CUSP_CACHE.get(key);
-  if (v === undefined) { v = hueCusp(key / 10).C; CUSP_CACHE.set(key, v); }
+  if (v === undefined) { v = hueCusp(key / 100).C; CUSP_CACHE.set(key, v); }
   return v;
 }
 
@@ -132,6 +134,13 @@ export const CHROMA_BANDS = {
  * further excess carries no additional information for the search.
  */
 export const CHROMA_EXCESS_CAP = 2;
+
+/**
+ * Penalty added to a background whose best achievable foreground is below the
+ * required floor. Large enough that any feasible assignment beats any
+ * infeasible one, finite so the branch-and-bound bound stays a real number.
+ */
+export const INFEASIBLE_PENALTY = 100;
 
 /** Weight of each cost term. See the module header for the priority argument. */
 export const ROLE_COST_WEIGHTS = {
@@ -472,7 +481,15 @@ export function unaryCost(slot, ci, ctx) {
     if (r > bestFromPool) bestFromPool = r;
   }
   const reachable = Math.max(bestFromPool, cand.ceiling);
-  const contrastTerm = shortfall(reachable, COMFORT_TARGET[fgRole]);
+  // The comfort target is what a good background offers; the required floor is
+  // what a usable background must offer. A background that cannot carry a
+  // legible foreground at `minRatio` is not a background at all, so it takes a
+  // penalty large enough to lose to any feasible alternative. The penalty is
+  // finite, not infinite: the search still has to return something, and it is
+  // the post-condition — never the cost function — that refuses a palette.
+  const target = Math.max(COMFORT_TARGET[fgRole], ctx.minRatio);
+  const contrastTerm = shortfall(reachable, target)
+    + (reachable < ctx.minRatio ? INFEASIBLE_PENALTY : 0);
 
   // 2. Fidelity: a synthesised anchor is a concession.
   const derivedTerm = cand.source === 'derived' ? 1 : 0;
@@ -700,7 +717,7 @@ export function hueCusp(hue) {
  */
 function resolveForeground(role, bgHex, ctx, rng) {
   const bgY = luminanceOfHex(bgHex);
-  const target = COMFORT_TARGET[role] ?? ctx.minRatio;
+  const target = Math.max(COMFORT_TARGET[role] ?? ctx.minRatio, ctx.minRatio);
   const eligible = ctx.pool.filter((c) => contrastFromLuminance(c.luminance, bgY) >= ctx.minRatio);
   if (eligible.length > 0) {
     const chosen = pickLowest(eligible, (c) => {

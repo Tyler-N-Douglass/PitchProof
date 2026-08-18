@@ -46,6 +46,14 @@ prevBeat                                re-enter bnB, stack: [bnA]   ← floor i
 returnToSpine                           NavInvariantError
 ```
 
+**It breaks an invariant `nav.js` itself relies on.** `unwindToNextSpineScene`
+carries the comment "The bottom frame is always on the spine, because a frame is
+only pushed by a jump and the first jump can only be made from the spine", and
+computes the return position from `stack[0].sceneIndex` on that basis.
+`reenterExited` is the one path that can produce a stack whose floor is a
+branch, which is why `checkInvariants` — which does not test the floor — lets
+the state through and only throws one action later.
+
 **Incidence.** 342 of the 1000 seeded 200-step walks in the property test reach
 it; 7 of 200 walks that only ever take anchored jumps reach it. It is not an
 exotic corner.
@@ -145,11 +153,32 @@ specified. `details` (one record per branch, carrying `anchored`, `anchorScenes`
 
 ---
 
-## 5. `scripts/build.mjs` — branch CSS is not bundled
+## 5. `scripts/build.mjs` — branch CSS (resolved) and branch JS (open)
 
-**Not a contract objection; an integration fact.** `buildRuntime()` concatenates
-`cssFiles(src/runtime)` and `cssFiles(src/scene)`. `src/branch/branch.css`
-styles the three overlays L9 registers on the artifact runtime, and is not
-picked up. The overlays render and function without it — they reuse the
-`pp-overlay*` shell L2 owns — but they are unstyled in the emitted artifact
-until `join(SRC, 'branch')` joins that list. L9 may not edit `scripts/`.
+**Not a contract objection; an integration fact, in two halves.**
+
+**CSS — resolved.** `src/branch/branch.css` styles the three overlays L9
+registers on the artifact runtime. `buildRuntime()` now concatenates
+`cssFiles(src/runtime)`, `cssFiles(src/branch)` and `cssFiles(src/scene)`, and
+`dist/pitchproof-runtime.css` carries the file. (The overlays are legible and
+operable without it either way — they reuse the `pp-overlay*` shell L2 owns —
+so a missed line would have degraded the look, never the pitch.)
+
+**JS — open, and it matters.** The runtime bundle's entry is
+`src/runtime/index.js`, which does not import `src/branch/**`, so
+`dist/pitchproof-runtime.js` contains **no** `registerBranchOverlays`. As it
+stands, an emitted artifact boots with the `jump`, `map` and `contents`
+overlays unregistered: `/`, `m` and `c` resolve to commands that open nothing.
+
+Someone outside this lane has to close it, in one of two ways:
+
+1. `src/runtime/index.js` (or `boot`) imports `registerBranchOverlays` from
+   `../branch/index.js` and calls it — plus `installBranchInputBridge(runtime,
+   {document})` after the host attaches, so the search field accepts typing; or
+2. L10's emitter bundles `src/branch/index.js` alongside the runtime and calls
+   both at boot.
+
+Option 1 is the smaller change and keeps the studio preview and the artifact on
+one path. Either way the bridge must be installed **after** `host.attach()`, so
+its capture-phase listener sees a key before the host's document handler does
+(see §3).

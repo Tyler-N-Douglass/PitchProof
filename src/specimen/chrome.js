@@ -24,6 +24,7 @@
  * from, which is what makes restoration exact rather than approximate.
  */
 
+import { fnv1a32 } from '../core/hash.js';
 import {
   ancestors, attrOf, bodyOf, childrenOf, cloneTree, closest, contains, detach,
   elements, firstElement, identityString, indexPath, isElement, linkParents,
@@ -244,6 +245,49 @@ export function siblingIndex(siblings) {
     for (const s of sSeen) structs.set(s, (structs.get(s) || 0) + 1);
   }
   return { texts, structs, pages: docs.length };
+}
+
+/**
+ * A cheap identity for a parsed page: how much text it has, what that text is,
+ * and what shape it has. Two parses of the same HTML share a fingerprint even
+ * though they share no object identity.
+ * @param {any} doc
+ * @returns {string}
+ */
+export function docFingerprint(doc) {
+  const body = bodyOf(doc);
+  const text = textSignature(body);
+  return `${text.length}:${fnv1a32(text).toString(36)}:${fnv1a32(structSignature(body, 4)).toString(36)}`;
+}
+
+/**
+ * Drop the page under analysis from its own sibling set.
+ *
+ * Passing "all the pages I captured" as `siblings` is the obvious thing for a
+ * caller to do, and without this it is catastrophic: every block of the page
+ * repeats on itself, the strongest signal condemns all of them, and the
+ * specimen comes back all but empty — silently. Over-stripping is the same
+ * wound as under-stripping (§22.3), so the obvious call is made correct here
+ * rather than left as a trap.
+ *
+ * @param {any[]} siblings
+ * @param {any} self the document or body being analysed
+ * @returns {any[]} siblings that are genuinely other pages
+ */
+export function excludeSelf(siblings, self) {
+  if (!siblings || siblings.length === 0) return [];
+  const selfBody = bodyOf(self);
+  const selfPrint = docFingerprint(selfBody);
+  /** @type {any[]} */
+  const out = [];
+  for (const sibling of siblings) {
+    const doc = asDoc(sibling);
+    if (!doc) continue;
+    if (doc === self || bodyOf(doc) === selfBody) continue;
+    if (docFingerprint(doc) === selfPrint) continue;
+    out.push(doc);
+  }
+  return out;
 }
 
 /** @param {any} x @returns {any|null} */
@@ -652,12 +696,14 @@ export function dropNonRendered(root) {
  * @returns {{root: any, how: string, removed: any[]}}
  */
 export function classifyChrome(body, options = {}) {
-  const index = options.index || (options.siblings && options.siblings.length ? siblingIndex(options.siblings) : null);
+  const supplied = options.siblings || [];
+  const usable = options.index ? [] : excludeSelf(supplied, body);
+  const index = options.index || (usable.length ? siblingIndex(usable) : null);
   const located = locateMainRoot(body);
   const root = located.root;
   const rootContentChars = contentChars(root);
   const headline = primaryHeadline(root);
-  const ctx = { root, index, rootContentChars, headline };
+  const ctx = { root, index: options.noRepeat ? null : index, rootContentChars, headline };
 
   /** @type {any[]} */
   const removed = [];
@@ -693,7 +739,38 @@ export function classifyChrome(body, options = {}) {
   };
   visitInside(root);
 
-  return { root, how: located.how, removed };
+  const kept = keptContentChars(root, removed);
+  const notes = [];
+  if (supplied.length !== usable.length && !options.index) {
+    notes.push(`siblings: ${supplied.length - usable.length} of ${supplied.length} were this page and were ignored`);
+  }
+
+  // Circuit breaker. A classification that leaves almost nothing standing is
+  // evidence about the inputs, not about the page: the repeated-across-pages
+  // signal is the only one strong enough to do that on its own, so it is
+  // dropped and the page is re-classified without it. Reported, never silent.
+  if (index && rootContentChars >= 300 && kept < 0.1 * rootContentChars) {
+    const retry = classifyChrome(body, { ...options, siblings: [], index: null, noRepeat: true });
+    return {
+      root: retry.root,
+      how: retry.how,
+      removed: retry.removed,
+      siblingPages: 0,
+      notes: [...notes, 'repeat signal disabled: with it, the page kept less than a tenth of its own text'],
+    };
+  }
+
+  return { root, how: located.how, removed, siblingPages: index ? index.pages : 0, notes };
+}
+
+/** Non-link characters that survive a classification. */
+function keptContentChars(root, removed) {
+  let removedChars = 0;
+  for (const entry of removed) {
+    if (!contains(root, entry.node)) continue;
+    removedChars += contentChars(entry.node);
+  }
+  return Math.max(0, contentChars(root) - removedChars);
 }
 
 /** @returns {any} */
@@ -728,14 +805,30 @@ export function stripChrome(doc, options = {}) {
   const clone = linkParents(cloneTree(doc));
   const body = bodyOf(clone);
   dropNonRendered(body);
-  const { root, how, removed } = classifyChrome(body, options);
+  const classified = classifyChrome(body, options);
+  const { root, how, removed } = classified;
   for (const entry of removed) entry.where = detach(entry.node);
-  return { root, removed, how, body };
+  return { root, removed, how, body, siblingPages: classified.siblingPages || 0, notes: classified.notes || [] };
 }
 
 /**
- * Put a stripped subtree back exactly where it was. Exact inverse of the
- * detach performed by `stripChrome`.
+ * Put every stripped subtree back, in the only order that is an exact inverse:
+ * last removed, first restored. Each entry's index was recorded against the
+ * tree as it stood at the moment of removal, so unwinding in reverse is what
+ * reproduces the original document.
+ * @param {{node: any, where: any}[]} entries
+ * @returns {number} how many were restored
+ */
+export function restoreNodes(entries) {
+  let n = 0;
+  for (let i = entries.length - 1; i >= 0; i--) if (restoreNode(entries[i])) n += 1;
+  return n;
+}
+
+/**
+ * Put one stripped subtree back exactly where it was. Exact inverse of the
+ * detach performed by `stripChrome`. When restoring several, use
+ * `restoreNodes` — the order matters.
  * @param {{node: any, where: any}} entry
  * @returns {boolean}
  */

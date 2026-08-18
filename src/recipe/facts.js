@@ -54,6 +54,12 @@
  *   are not inspected.
  * - **Numbers assembled across blocks.** A rendition that puts `3` in one block
  *   and `x` in the next reads as two sourced tokens.
+ * - **A quantity disguised as an identifier.** `UCS-2` is a name and is skipped;
+ *   so would `LIFT-40` be. The rule needs uppercase letters running straight
+ *   into the digits with no space and no unit, which no ordinary sentence
+ *   produces, but a determined author could write one. It is the narrowest
+ *   exemption that removes the false positives, and it is stated here rather
+ *   than left to be discovered.
  *
  * ### The structural allowance
  *
@@ -173,17 +179,24 @@ export function buildSourceBag(specimen, extra = []) {
 }
 
 /**
- * True when a numeric token is a reformatting of something the source said.
+ * How a numeric token stands against the source.
+ *
+ * `sourced` — the digits and any unit both came from the source, possibly
+ * reformatted. `new-digits` — the source never stated those digits at all.
+ * `new-unit` — the digits are the source's, but the percent, currency or
+ * multiplier is not, which is how a page count becomes a conversion lift.
+ *
  * @param {import('./text.js').NumericToken} tok
  * @param {SourceBag} bag
- * @returns {boolean}
+ * @returns {'sourced'|'new-digits'|'new-unit'}
  */
-function numericIsSourced(tok, bag) {
+function numericStanding(tok, bag) {
   const gk = groupKey(tok.groups);
   const digitsKnown = bag.digits.has(tok.digits) || bag.groups.has(gk);
-  if (!digitsKnown) return false;
-  if (tok.kind === 'plain') return true;              // dropping a unit invents nothing
-  return bag.classed.has(`${tok.kind}:${tok.digits}`) || bag.classed.has(`${tok.kind}:g:${gk}`);
+  if (!digitsKnown) return 'new-digits';
+  if (tok.kind === 'plain') return 'sourced';         // dropping a unit invents nothing
+  const unitKnown = bag.classed.has(`${tok.kind}:${tok.digits}`) || bag.classed.has(`${tok.kind}:g:${gk}`);
+  return unitKnown ? 'sourced' : 'new-unit';
 }
 
 const SPELLED_RE = new RegExp(
@@ -255,17 +268,23 @@ export function assertNoFabricatedFacts(blocks, specimen, options = {}) {
 
       // 1 + 2 — numerals and units.
       for (const tok of numericTokens(raw)) {
-        if (numericIsSourced(tok, bag)) continue;
+        // A digit inside a name — `UCS-2`, `GSM-7`, `UTF-8`, `H.264` — measures
+        // nothing and claims nothing. See `IDENTIFIER_PREFIX` in `text.js` for
+        // how narrowly that is decided; a token carrying a percent, a currency
+        // or a multiplier is never treated as a name.
+        if (tok.kind === 'identifier') continue;
+        const standing = numericStanding(tok, bag);
+        if (standing === 'sourced') continue;
         const bare = tok.kind === 'plain' && structural.has(tok.digits);
         const px = tok.kind === 'plain' && structural.has(`${tok.digits}px`)
           && /^\s*px/.test(raw.slice(tok.end));
         if (bare || px) continue;
         out.push({
-          kind: tok.kind === 'plain' ? 'numeral' : 'unit',
+          kind: standing === 'new-digits' ? 'numeral' : 'unit',
           value: tok.text,
           blockIndex,
           where,
-          message: tok.kind === 'plain'
+          message: standing === 'new-digits'
             ? `numeral "${tok.text}" does not appear in the source specimen`
             : `"${tok.text}" applies a ${tok.kind} that the source does not carry on those digits`,
         });

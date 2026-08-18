@@ -218,6 +218,13 @@
 .pp-map-anchor { border-left-color: var(--pp-accent); }
 .pp-map-anchor--shown { border-left-color: var(--pp-border); opacity: 0.55; }
 
+/* A branch offered from inside another branch is drawn under it, indented, so
+ * the presenter can see the whole detour they are one key away from. */
+.pp-map-anchors--nested {
+  margin-left: 12px;
+  font-size: 12px;
+}
+
 .pp-map-summary {
   margin: 0;
   font-size: 13px;

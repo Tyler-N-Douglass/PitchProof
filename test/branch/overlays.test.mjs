@@ -240,14 +240,35 @@ test('the branch map shows where the presenter is, what is shown and what is not
   unregister();
 });
 
-test('the branch map marks a nested branch under the branch scene that offers it', () => {
+test('the branch map draws the anchor tree, so a nested branch is visible too', () => {
   const { runtime, unregister } = runtimeWithOverlays();
   const html = toHtml(renderMapOverlay(runtime.overlayContext()));
-  // bn_legal hangs off a scene inside bn_approvals, so it is not on the spine
-  // list; it is reachable from the jump index, and the map says so.
-  assert.ok(!html.includes('data-pp-branch="bn_legal"><span class="pp-map-anchor-label">Legal'),
-    'a nested branch is not offered from the spine');
-  assert.ok(html.includes('data-pp-branch="bn_approvals"'));
+
+  // bn_legal is offered from a scene inside bn_approvals. A branch a presenter
+  // cannot see is a branch they will not use, so it is drawn under its parent
+  // rather than left to the jump index.
+  const parentAt = html.indexOf('data-pp-branch="bn_approvals"');
+  const nestedAt = html.indexOf('data-pp-branch="bn_legal"');
+  assert.ok(parentAt >= 0 && nestedAt > parentAt, 'the nested branch must render inside its parent');
+  assert.ok(html.includes('pp-map-anchors--nested'));
+  assert.ok(textOf(renderMapOverlay(runtime.overlayContext())).includes('Legal has to see every claim'));
+
+  // And it is not promoted onto the spine, which offers only bn_approvals here.
+  const spineItem = html.slice(html.indexOf('data-pp-scene="sc_spine_1"'), html.indexOf('data-pp-scene="sc_spine_2"'));
+  assert.ok(spineItem.includes('bn_approvals'));
+  assert.deepEqual(spineItem.match(/data-pp-branch="[a-z_]+"/g), ['data-pp-branch="bn_approvals"', 'data-pp-branch="bn_legal"'],
+    'parent then child, in that order');
+  unregister();
+});
+
+test('the branch map survives an anchor cycle rather than recursing forever', () => {
+  const proof = objectionProof();
+  // Point the nested branch back at its own parent: a defective proof L11 will
+  // report, which the map must still render.
+  proof.branches.find((b) => b.id === 'bn_legal').scenes[0].branchAnchors = ['bn_approvals'];
+  const runtime = new Runtime(proof, { mode: 'presenter' });
+  const unregister = registerBranchOverlays(runtime);
+  assert.doesNotThrow(() => toHtml(renderMapOverlay(runtime.overlayContext())));
   unregister();
 });
 

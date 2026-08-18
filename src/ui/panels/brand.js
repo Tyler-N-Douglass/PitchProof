@@ -1,0 +1,376 @@
+/**
+ * The Brand panel (§7).
+ *
+ * §7 asks for four things the studio must show rather than merely hold, and
+ * this panel is where all four live:
+ *
+ *   - **every colour role with its computed contrast against its pair.** The
+ *     number comes from `brand/color.js`, never from an estimate; when the
+ *     colour lane is not wired the column reads `—` rather than a plausible
+ *     figure, because a made-up contrast ratio is worse than none.
+ *   - **every face with its resolved fallback and `metricDelta`.** The fallback
+ *     is what will actually render, and the delta is the number that predicts
+ *     the overflow §22.2 calls the defect that matters most.
+ *   - **low-confidence fields surfaced for review, and held out of an emit
+ *     until reviewed.** The review checkbox is the release; the emit gate reads
+ *     the same state.
+ *   - **manual override of any field, with the path recorded** in
+ *     `manualOverrides`, so the artifact's provenance story stays honest.
+ *
+ * @module ui/panels/brand
+ */
+
+import { h, cx } from '../../core/vdom.js';
+import {
+  badge, button, checkbox, empty, field, notice, pair, pairs, rawBox, section, select, swatch, toolbar,
+} from '../components.js';
+import { formatMetric, formatPercent, formatRatio, humanize } from '../format.js';
+import { BRAND_GROUPS, LOW_CONFIDENCE, pairedRole, reviewedGroups, unreviewedBrandGroups } from '../model.js';
+import { COLOR_ROLES, CONTRAST_AA_BODY, FOREGROUND_ROLES } from '../../core/contracts.js';
+import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
+
+/**
+ * @param {any} app
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+export function renderBrandPanel(app) {
+  const brand = app.proof.brand;
+  const reviewed = new Set(reviewedGroups(brand));
+  const pending = unreviewedBrandGroups(brand);
+
+  return h('div', { class: 'st-panel' },
+    renderExtract(app, brand),
+    pending.length ? renderReviewGate(app, brand, pending) : null,
+    renderColors(app, brand),
+    renderFaces(app, brand),
+    renderLogos(app, brand),
+    renderShapeAndImagery(app, brand),
+    renderConfidence(app, brand, reviewed),
+    renderOverrides(brand));
+}
+
+/**
+ * @param {any} app
+ * @param {any} brand
+ */
+function renderExtract(app, brand) {
+  const proxy = app.ui.settings.proxyBase;
+  return section({
+    title: 'Extract',
+    subtitle: 'A URL, or the files they sent you. Both degrade rather than dead-ending (§6).',
+    actions: toolbar(button({
+      act: 'brand.extract', variant: 'primary',
+      disabled: app.isBusy('brand.extract'),
+    }, app.isBusy('brand.extract') ? 'Extracting…' : 'Extract')),
+  },
+  field({
+    label: 'Site address', act: 'brand.urlDraft', value: app.draft('brand.url', brand.sourceUrl || ''),
+    placeholder: 'https://www.example.com', key: 'brand-url',
+    hint: proxy
+      ? `A direct fetch is tried first, then your proxy at ${proxy}.`
+      : 'A direct fetch is tried first. Most enterprise sites refuse it — that is normal, not an error. Set a CORS proxy in Settings, or drop the saved page below.',
+  }),
+  h('label', { class: 'st-field' },
+    h('span', { class: 'st-field-label' }, 'Or drop the saved page, a .har, a .mhtml, a deck or a PDF'),
+    h('input', {
+      class: 'st-input st-file', type: 'file', multiple: true,
+      [ACT_ATTR]: 'brand.extractFiles', [KEY_ATTR]: 'brand-files',
+    }),
+    h('span', { class: 'st-field-hint' }, 'Save the page from the browser (⌘S / Ctrl S) and drop the .html with its assets folder.')),
+  field({
+    label: 'Recorded source', act: 'brand.setSourceUrl', value: brand.sourceUrl || '',
+    key: 'brand-source', mono: true,
+    hint: 'What the artifact will say this brand was read from.',
+  }),
+  app.services.has('color') ? null : notice('warn', 'The colour lane is not wired into this build, so contrast is shown as “—” rather than guessed, and extraction is unavailable. Manual entry below still works.'));
+}
+
+/**
+ * The §7 gate, stated plainly: what is uncertain, why it matters, and the one
+ * control that releases it.
+ * @param {any} app
+ * @param {any} brand
+ * @param {{group: string, confidence: number}[]} pending
+ */
+function renderReviewGate(app, brand, pending) {
+  return section({
+    title: 'Waiting for your review',
+    subtitle: `§7 holds low-confidence fields out of an emit until you have looked at them.`,
+    actions: toolbar(button({ act: 'brand.reviewAll', variant: 'primary' }, 'I have checked all of these')),
+  },
+  notice('warn', h('div', null,
+    h('p', null, `${pending.length === 1 ? 'One group is' : `${pending.length} groups are`} below the ${Math.round(LOW_CONFIDENCE * 100)}% confidence floor. The emit stays closed until each is reviewed.`),
+    h('ul', { class: 'st-review-list' }, pending.map((entry) => h('li', { [KEY_ATTR]: entry.group },
+      h('strong', null, humanize(entry.group)),
+      ' — ',
+      formatPercent(entry.confidence),
+      ' confident. ',
+      reviewAdvice(entry.group)))))),
+  h('div', { class: 'st-review-checks' }, pending.map((entry) => checkbox({
+    label: `${humanize(entry.group)} checked`,
+    act: 'brand.review',
+    arg: entry.group,
+    checked: false,
+    hint: 'Marks this group reviewed. Editing a field does not review it — looking at it does.',
+  }))));
+}
+
+/** @param {string} group @returns {string} */
+function reviewAdvice(group) {
+  const advice = {
+    colors: 'Check the roles landed on the colours they actually use, and that every on-colour reads.',
+    faces: 'Check the fallback is the face that will really render, and look at the metric delta.',
+    logos: 'Check the mark is theirs, at the right variant, and that an inverse exists if a dark scene needs one.',
+    shape: 'Check the radius and border against a real component on their site.',
+    imagery: 'Check the treatment matches what they publish, not what the hero image happened to be.',
+  };
+  return advice[group] || 'Check it against the source before an emit relies on it.';
+}
+
+/**
+ * @param {any} app
+ * @param {any} brand
+ */
+function renderColors(app, brand) {
+  const colors = brand.colors || [];
+  const missing = COLOR_ROLES.filter((r) => !colors.some((c) => c.role === r));
+  return section({
+    title: 'Colour',
+    subtitle: 'Contrast is computed against the designated pair, never assumed (§7).',
+    actions: missing.length
+      ? h('div', { class: 'st-inline-add' },
+        h('select', {
+          class: 'st-input st-select st-input--compact',
+          [ACT_ATTR]: 'brand.addColor', 'aria-label': 'Add a colour role',
+          [KEY_ATTR]: 'brand-add-color',
+        },
+        h('option', { value: '', selected: true }, 'Add a role…'),
+        missing.map((r) => h('option', { value: r }, r))))
+      : null,
+  },
+  colors.length
+    ? h('table', { class: 'st-table st-table--colors' },
+      h('thead', null, h('tr', null,
+        h('th', null, 'Role'),
+        h('th', null, 'Swatch'),
+        h('th', null, 'Hex'),
+        h('th', null, 'Pair'),
+        h('th', null, 'Contrast'),
+        h('th', null, 'Source'),
+        h('th', null, ''))),
+      h('tbody', null, colors.map((token) => renderColorRow(app, brand, token))))
+    : empty('No colour roles yet. Extract a site, or add the roles by hand.'),
+  h('p', { class: 'st-note' }, `Every foreground role (${FOREGROUND_ROLES.join(', ')}) must reach ${CONTRAST_AA_BODY}:1 against its pair. Below that, the rehearsal sweep raises CONTRAST_FAIL at severity 1 and the emit is closed.`));
+}
+
+/**
+ * @param {any} app
+ * @param {any} brand
+ * @param {any} token
+ */
+function renderColorRow(app, brand, token) {
+  const pairRole = pairedRole(token.role);
+  const pairToken = pairRole ? (brand.colors || []).find((c) => c.role === pairRole) : null;
+  const live = pairToken ? app.services.contrast(token.hex, pairToken.hex) : null;
+  const ratio = live === null ? token.contrastWithPair : live;
+  const isForeground = FOREGROUND_ROLES.includes(token.role);
+  const fails = isForeground && typeof ratio === 'number' && ratio < CONTRAST_AA_BODY;
+  return h('tr', { class: cx('st-tr', fails && 'st-tr--bad'), [KEY_ATTR]: token.role },
+    h('td', { class: 'st-mono' }, token.role),
+    h('td', null, swatch(token.hex, pairToken ? pairToken.hex : '#000000', token.role.slice(0, 2))),
+    h('td', null, h('input', {
+      class: 'st-input st-input--hex st-mono',
+      type: 'text',
+      value: token.hex,
+      'aria-label': `${token.role} hex`,
+      [ACT_ATTR]: 'brand.setColor',
+      [ARG_ATTR]: token.role,
+      [KEY_ATTR]: `hex-${token.role}`,
+    })),
+    h('td', { class: 'st-mono st-dim' }, pairRole || '—'),
+    h('td', { class: cx('st-mono', fails && 'st-bad') },
+      formatRatio(ratio),
+      fails ? badge('below 4.5', 'bad') : null),
+    h('td', null, badge(token.source, token.source === 'manual' ? 'info' : token.source === 'derived' ? 'warn' : 'dim')),
+    h('td', { class: 'st-tr-actions' },
+      isForeground
+        ? button({ act: 'brand.deriveOnColor', arg: token.role, variant: 'ghost', title: 'Walk lightness in OKLCH until this reaches 4.5:1' }, 'Derive')
+        : null,
+      button({ act: 'brand.removeColor', arg: token.role, variant: 'quiet', title: `Remove ${token.role}` }, '×')));
+}
+
+/**
+ * @param {any} app
+ * @param {any} brand
+ */
+function renderFaces(app, brand) {
+  const faces = brand.faces || [];
+  return section({
+    title: 'Type',
+    subtitle: 'The fallback is what will actually render. The delta is what predicts the overflow.',
+    actions: toolbar(button({ act: 'brand.addFace', variant: 'ghost' }, 'Add a face')),
+  },
+  faces.length
+    ? h('div', { class: 'st-faces' }, faces.map((face, i) => h('div', { class: 'st-face', [KEY_ATTR]: `face-${i}` },
+      h('div', { class: 'st-face-head' },
+        field({
+          label: 'Family', act: 'brand.setFaceFamily', arg: String(i), value: face.family,
+          placeholder: 'Inter', key: `face-family-${i}`,
+        }),
+        select({
+          label: 'Role', act: 'brand.setFaceRole', arg: String(i), value: face.role,
+          options: [
+            { value: 'display', label: 'Display' },
+            { value: 'body', label: 'Body' },
+            { value: 'mono', label: 'Mono' },
+          ],
+          key: `face-role-${i}`,
+        }),
+        button({ act: 'brand.removeFace', arg: String(i), variant: 'quiet', title: 'Remove this face' }, '×')),
+      field({
+        label: 'Fallback stack', act: 'brand.setFaceStack', arg: String(i), mono: true,
+        value: (face.fallbackStack || []).join(', '),
+        key: `face-stack-${i}`,
+        hint: `Resolves to ${resolvedFace(face)} on a machine without the licensed file.`,
+      }),
+      pairs(
+        pair('Weights seen', h('span', { class: 'st-mono' }, (face.weightsSeen || []).join(', ') || '—')),
+        pair('Cap height', h('span', { class: 'st-mono' }, formatMetric(face.metricDelta ? face.metricDelta.capHeight : null))),
+        pair('x-height', h('span', { class: 'st-mono' }, formatMetric(face.metricDelta ? face.metricDelta.xHeight : null))),
+        pair('Average advance', h('span', {
+          class: cx('st-mono', face.metricDelta && Math.abs(face.metricDelta.avgAdvance - 1) > 0.06 ? 'st-warn' : null),
+        }, formatMetric(face.metricDelta ? face.metricDelta.avgAdvance : null))),
+      ),
+      face.metricDelta && Math.abs(face.metricDelta.avgAdvance - 1) > 0.06
+        ? notice('warn', `The fallback runs ${formatPercent(Math.abs(face.metricDelta.avgAdvance - 1), 1)} ${face.metricDelta.avgAdvance > 1 ? 'wider' : 'narrower'} than ${face.family || 'the requested face'}. That is the gap that overflows headlines after substitution — the sweep measures against the fallback, so run it before you rely on any layout.`)
+        : null,
+      checkbox({
+        label: 'I have a licence for this font file and may embed it',
+        act: 'brand.setFaceEmbeddable',
+        arg: String(i),
+        checked: !!face.embeddable,
+        hint: '§7: a foundry webfont is never fetched and embedded on your behalf. This asserts you supplied a file you have rights to.',
+      }))))
+    : empty('No faces detected yet.', button({ act: 'brand.addFace', variant: 'primary' }, 'Add one by hand')));
+}
+
+/** @param {any} face @returns {string} */
+function resolvedFace(face) {
+  const stack = face.fallbackStack || [];
+  return stack.length ? stack[stack.length > 1 ? 1 : 0] : 'the system default';
+}
+
+/**
+ * @param {any} app
+ * @param {any} brand
+ */
+function renderLogos(app, brand) {
+  const logos = brand.logos || [];
+  return section({
+    title: 'Logo',
+    subtitle: 'Inline SVG first, then the icon, then og:image, then the largest raster in the header (§7).',
+  },
+  logos.length
+    ? h('div', { class: 'st-logos' }, logos.map((logo) => h('div', { class: 'st-logo', [KEY_ATTR]: logo.id },
+      h('div', { class: cx('st-logo-art', logo.variant === 'inverse' && 'st-logo-art--inverse') },
+        logo.kind === 'svg' ? rawBox(logo.data, 'st-logo-svg') : h('img', {
+          class: 'st-logo-img', src: logo.data, alt: `${logo.variant} logo`,
+        })),
+      h('div', { class: 'st-logo-meta' },
+        select({
+          label: 'Variant', act: 'brand.setLogoVariant', arg: logo.id, value: logo.variant,
+          options: ['primary', 'mark', 'wordmark', 'inverse', 'favicon'].map((v) => ({ value: v, label: v })),
+          key: `logo-variant-${logo.id}`,
+        }),
+        pairs(
+          pair('Intrinsic', h('span', { class: 'st-mono' }, `${logo.intrinsic.w}×${logo.intrinsic.h}`)),
+          pair('Transparency', logo.hasTransparency ? badge('yes', 'ok') : badge('no', 'warn')),
+          pair('Kind', h('span', { class: 'st-mono' }, logo.kind)),
+        ),
+        toolbar(
+          button({ act: 'brand.deriveInverse', arg: logo.id, variant: 'ghost', title: 'Only possible when the mark is monochrome' }, 'Derive inverse'),
+          button({ act: 'brand.removeLogo', arg: logo.id, variant: 'quiet' }, 'Remove'))))))
+    : empty('No logo captured. Extraction picks one up from the page; otherwise drop the SVG they sent you.'),
+  logos.length && !logos.some((l) => l.variant === 'inverse')
+    ? notice('warn', 'There is no inverse variant. A dark full-bleed scene will need one, and an automatic inversion is only safe on a monochrome mark — ask them for the real asset.')
+    : null);
+}
+
+/**
+ * @param {any} app
+ * @param {any} brand
+ */
+function renderShapeAndImagery(app, brand) {
+  return section({
+    title: 'Shape and imagery',
+    subtitle: 'The modal radius, the modal border, the shadow tier, and how they photograph.',
+  },
+  h('div', { class: 'st-grid-2' },
+    field({
+      label: 'Corner radius (px)', act: 'brand.setRadius', type: 'number',
+      value: String(brand.shape.radiusPx), key: 'brand-radius',
+    }),
+    field({
+      label: 'Border width (px)', act: 'brand.setBorderWidth', type: 'number',
+      value: String(brand.shape.borderWidthPx), key: 'brand-border',
+    })),
+  h('div', { class: 'st-field', role: 'group', 'aria-label': 'Shadow level' },
+    h('span', { class: 'st-field-label' }, 'Shadow level'),
+    h('div', { class: 'st-segmented' }, [0, 1, 2, 3].map((level) => button({
+      act: 'brand.setShadow', arg: String(level), className: 'st-segment',
+      variant: brand.shape.shadowLevel === level ? 'primary' : 'ghost',
+      pressed: brand.shape.shadowLevel === level ? 'true' : 'false',
+    }, String(level))))),
+  h('div', { class: 'st-grid-2' },
+    select({
+      label: 'Imagery treatment', act: 'brand.setImageryTreatment', value: brand.imagery.treatment,
+      options: ['photographic', 'illustrative', 'mixed', 'unknown'].map((v) => ({ value: v, label: v })),
+      key: 'brand-imagery',
+    }),
+    field({
+      label: 'Saturation bias', act: 'brand.setSaturationBias', type: 'number',
+      value: String(brand.imagery.saturationBias), key: 'brand-saturation',
+      hint: '−1 desaturated, +1 saturated.',
+    })));
+}
+
+/**
+ * @param {any} app
+ * @param {any} brand
+ * @param {Set<string>} reviewed
+ */
+function renderConfidence(app, brand, reviewed) {
+  return section({
+    title: 'Confidence and review',
+    subtitle: 'Computed from cluster separation, sample size and agreement across sources — never hardcoded (§7).',
+  },
+  h('div', { class: 'st-conf' }, BRAND_GROUPS.map((group) => {
+    const value = Number(brand.confidence?.[group] ?? 0);
+    const low = value < LOW_CONFIDENCE;
+    const isReviewed = reviewed.has(group);
+    return h('div', { class: cx('st-conf-row', low && !isReviewed && 'st-conf-row--pending'), [KEY_ATTR]: group },
+      h('span', { class: 'st-conf-name' }, humanize(group)),
+      h('span', { class: 'st-conf-bar' }, h('span', {
+        class: cx('st-conf-fill', low ? 'st-conf-fill--low' : 'st-conf-fill--ok'),
+        style: { width: `${Math.max(2, Math.min(100, value * 100)).toFixed(1)}%` },
+      })),
+      h('span', { class: 'st-conf-value st-mono' }, formatPercent(value)),
+      low
+        ? checkbox({ label: 'Reviewed', act: 'brand.review', arg: group, checked: isReviewed })
+        : badge('above the floor', 'ok'));
+  })));
+}
+
+/**
+ * @param {any} brand
+ */
+function renderOverrides(brand) {
+  const overrides = brand.manualOverrides || [];
+  return section({
+    title: 'Manual overrides',
+    subtitle: 'Every field you changed by hand, recorded by path (§4 `manualOverrides`).',
+  },
+  overrides.length
+    ? h('ul', { class: 'st-paths' }, overrides.map((path) => h('li', { class: 'st-mono', [KEY_ATTR]: path }, path)))
+    : empty('Nothing has been overridden. Everything here is as extracted.'));
+}

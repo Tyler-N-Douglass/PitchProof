@@ -12,10 +12,11 @@
  * the one thing a global alignment structurally cannot see — a block that was
  * moved rather than deleted and re-added.
  *
- * Everything here is deterministic. Ties in the traceback resolve in a fixed
- * order (diagonal, then deletion, then insertion) and move recovery sorts its
- * candidates by score and then by index, so the same two inputs always produce
- * the same pairing.
+ * Everything here is deterministic. Ties in the backward traceback resolve in a
+ * fixed order — diagonal, then insertion, then deletion — which puts a dropped
+ * source block *before* the block that replaced it in the returned pairing, the
+ * way a unified diff reads. Move recovery sorts its candidates by score and then
+ * by index. The same two inputs always produce the same pairing.
  *
  * @module recipe/align
  */
@@ -204,8 +205,8 @@ export function alignBlocksDetailed(sourceBlocks, pastedBlocks, options = {}) {
     }
   }
 
-  // Traceback. Ties resolve diagonal → deletion → insertion, always, so the
-  // pairing is a function of the inputs and nothing else.
+  // Traceback, walked backwards. Ties resolve diagonal → insertion → deletion,
+  // always, so the pairing is a function of the inputs and nothing else.
   /** @type {[number|null, number|null][]} */
   const rev = [];
   /** @type {number[]} */
@@ -222,16 +223,16 @@ export function alignBlocksDetailed(sourceBlocks, pastedBlocks, options = {}) {
         continue;
       }
     }
-    if (i > 0 && Math.abs(f[i][j] - (f[i - 1][j] + GAP_PENALTY)) < EPS) {
-      rev.push([i - 1, null]);
-      revSim.push(0);
-      i -= 1;
-      continue;
-    }
-    if (j > 0) {
+    if (j > 0 && Math.abs(f[i][j] - (f[i][j - 1] + GAP_PENALTY)) < EPS) {
       rev.push([null, j - 1]);
       revSim.push(0);
       j -= 1;
+      continue;
+    }
+    if (i > 0) {
+      rev.push([i - 1, null]);
+      revSim.push(0);
+      i -= 1;
       continue;
     }
     // Unreachable for a well-formed matrix; guarded so a NaN can never spin.

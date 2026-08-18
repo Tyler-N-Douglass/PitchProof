@@ -122,8 +122,25 @@ export function diceCoefficient(a, b) {
  * @property {number} end
  * @property {string} digits      every digit in the token, in order
  * @property {string[]} groups    the token's digit runs, in order
- * @property {'plain'|'percent'|'currency'|'multiplier'} kind
+ * @property {'plain'|'percent'|'currency'|'multiplier'|'identifier'} kind
  */
+
+/**
+ * A digit that belongs to a *name* rather than to a quantity.
+ *
+ * `UCS-2`, `GSM-7`, `UTF-8`, `ISO-8601`, `H.264`, `MP3`, `Q4` are identifiers:
+ * the digit is part of what the thing is called, not a measurement of anything.
+ * Reading them as numerals made the §18.2 guard fire on an SMS budget report
+ * that named its own encoding, which is a false positive of exactly the kind
+ * that trains people to ignore a guard.
+ *
+ * The rule is deliberately narrow. The letters must be uppercase, must run
+ * straight into the digits or be joined by a single `-` or `.`, and must not be
+ * preceded by another letter or digit. `SAVE 20` does not match (a space is not
+ * a joiner), and a token already classified as a percentage, a currency amount
+ * or a multiplier is never reclassified — a unit means it is a claim.
+ */
+const IDENTIFIER_PREFIX = /(?:^|[^\p{L}\p{N}])[A-Z][A-Z0-9]{0,7}[-.]?$/u;
 
 const NUM_CORE = new RegExp(`\\d[\\d.,'’/:\\-${NUM_SPACES}${NUM_JOINERS}]*\\d|\\d`, 'g');
 
@@ -170,6 +187,8 @@ export function numericTokens(s) {
     } else if ((text[r] === 'x' || text[r] === 'X' || text[r] === '×') && !/[A-Za-z0-9]/.test(text[r + 1] || '')) {
       kind = 'multiplier'; end = r + 1;
     }
+
+    if (kind === 'plain' && IDENTIFIER_PREFIX.test(text.slice(0, start))) kind = 'identifier';
 
     const raw = text.slice(start, end);
     const groups = raw.match(/\d+/g) || [];

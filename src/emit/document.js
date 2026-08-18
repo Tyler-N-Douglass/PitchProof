@@ -35,22 +35,36 @@ export const MEDIA_ELEMENT_ID = 'pp-media';
 export const INERT_SCRIPT_TYPE = 'application/octet-stream';
 
 /**
- * A sequence that would end a `<script>` or `<style>` element early. Inline
- * script cannot be escaped generically — `<\/script` is valid inside a string
- * literal and invalid in a regex — so the emitter refuses rather than guessing.
+ * Sequences that end a raw-text element early.
+ *
+ * The HTML tokenizer only leaves script data on `</script`, and style data only
+ * on `</style` — so a `</style>` inside a JavaScript template literal is
+ * harmless, and refusing it would refuse the presenter window (D16), which
+ * writes a complete document into a second window as a string. `<!--` is
+ * refused inside script data because it opens the escaped-script-data state,
+ * where a later `<script` changes how the rest of the element parses.
+ *
+ * Escaping is not attempted. `<\/script` is valid inside a string literal and a
+ * syntax error inside a regular expression, so no single transform is safe in
+ * every position; the emitter refuses and names the offset instead of
+ * corrupting the artifact.
  */
-const ELEMENT_BREAKOUT = /<\/\s*(script|style)\b|<!--/i;
+const BREAKOUT = {
+  script: /<\/\s*script\b|<!--/i,
+  style: /<\/\s*style\b/i,
+};
 
 /**
  * @param {string} text
  * @param {string} what
+ * @param {'script'|'style'} owner
  */
-function assertNoBreakout(text, what) {
-  const m = ELEMENT_BREAKOUT.exec(String(text));
+function assertNoBreakout(text, what, owner) {
+  const m = BREAKOUT[owner].exec(String(text));
   if (m) {
     throw new Error(
-      `emit: ${what} contains ${JSON.stringify(m[0])} at offset ${m.index}, which would close its element early. `
-      + 'Inline script cannot be escaped safely in every position, so the emitter refuses rather than corrupting the artifact.',
+      `emit: ${what} contains ${JSON.stringify(m[0])} at offset ${m.index}, which would end its <${owner}> element early. `
+      + 'Inline code cannot be escaped safely in every position, so the emitter refuses rather than corrupting the artifact.',
     );
   }
 }
@@ -93,14 +107,14 @@ export function inlineRuntime(args) {
     bootSource = encoded.bootSource;
   }
 
-  assertNoBreakout(runtimeJs, 'the runtime bundle');
-  assertNoBreakout(bootSource, 'the artifact boot source');
-  assertNoBreakout(runtimeCss, 'the runtime stylesheet');
-  assertNoBreakout(themeCss, 'the brand theme');
-  assertNoBreakout(userCss, 'the user stylesheet');
-  assertNoBreakout(fontCss, 'the embedded font rules');
-  assertNoBreakout(payload, 'the model payload');
-  assertNoBreakout(mediaText, 'the media table');
+  assertNoBreakout(runtimeJs, 'the runtime bundle', 'script');
+  assertNoBreakout(bootSource, 'the artifact boot source', 'script');
+  assertNoBreakout(runtimeCss, 'the runtime stylesheet', 'style');
+  assertNoBreakout(themeCss, 'the brand theme', 'style');
+  assertNoBreakout(userCss, 'the user stylesheet', 'style');
+  assertNoBreakout(fontCss, 'the embedded font rules', 'style');
+  assertNoBreakout(payload, 'the model payload', 'script');
+  assertNoBreakout(mediaText, 'the media table', 'script');
 
   const prospect = (proof && proof.prospectName) || 'Proof';
   const lang = documentLanguage(proof);

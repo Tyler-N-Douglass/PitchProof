@@ -22,11 +22,15 @@ import assert from 'node:assert/strict';
 
 import { fnv1a32 } from '../../src/core/hash.js';
 import { toBlocks } from '../../src/specimen/blocks.js';
-import { stripChrome, restoreNode, locateMainRoot, siblingIndex } from '../../src/specimen/chrome.js';
+import {
+  classifyChrome, docFingerprint, excludeSelf, locateMainRoot, restoreNode, restoreNodes,
+  siblingIndex, stripChrome,
+} from '../../src/specimen/chrome.js';
 import { attrOf, bodyOf, cloneTree, elements, linkParents, textOf } from '../../src/specimen/dom.js';
 import { buildSpecimen, restoreAllBlocks, restoreBlock } from '../../src/specimen/specimen.js';
 import {
-  FIXTURES, PARSER_SOURCE, blockKey, groundTruthBlocks, loadCorpus, loadFixture, pct, scoreBlocks,
+  FIXTURES, PARSER_SOURCE, blockKey, groundTruthBlocks, loadCorpus, loadFixture,
+  parseFixtureHtml, pct, scoreBlocks,
 } from '../fixtures/specimen/corpus.mjs';
 
 /** §17.5's floor. Not to be lowered — fix the classifier instead. */
@@ -224,7 +228,8 @@ test('§8 stripping is reversible at the tree level — restoreNode puts a subtr
   const { body, removed } = stripChrome(fx.doc, {});
   assert.ok(removed.length > 0);
   const strippedText = textOf(body);
-  for (const entry of removed) assert.ok(restoreNode(entry), 'every removal is restorable');
+  assert.ok(restoreNode(removed[removed.length - 1]), 'a single removal is restorable on its own');
+  assert.equal(restoreNodes(removed.slice(0, -1)), removed.length - 1, 'every removal is restorable');
   const restoredText = textOf(body);
   const originalText = textOf(bodyOf(fx.doc));
   assert.notEqual(strippedText, restoredText, 'the strip actually removed something');
@@ -298,5 +303,66 @@ test('every removed entry carries the evidence a reviewer needs', () => {
     assert.ok(Array.isArray(entry.path), 'an index path for exact re-insertion');
     assert.ok(entry.signals && typeof entry.signals.landmark === 'number', 'the signal breakdown');
     assert.ok(Array.isArray(entry.detail), 'human-readable detail');
+  }
+});
+
+test('the page under analysis is excluded from its own sibling set, by identity and by fingerprint', () => {
+  const corpus = loadCorpus();
+  for (const fx of corpus) {
+    // The obvious caller mistake: hand over every page that was captured,
+    // including this one. Without self-exclusion every block "repeats" and the
+    // specimen comes back empty — a silent, total loss of the prospect's own
+    // content, which is the same wound as under-stripping (§22.3).
+    const withSelf = stripChrome(fx.doc, { siblings: corpus.map((o) => o.doc) });
+    const withoutSelf = stripChrome(fx.doc, { siblings: corpus.filter((o) => o !== fx).map((o) => o.doc) });
+    const a = toBlocks(withSelf.root, { media: [] }).map(blockKey);
+    const b = toBlocks(withoutSelf.root, { media: [] }).map(blockKey);
+    assert.deepEqual(a, b, `${fx.name}: passing the page itself as a sibling must change nothing`);
+    assert.equal(withSelf.siblingPages, corpus.length - 1);
+    assert.ok(withSelf.notes.some((n) => n.includes('were this page')), 'the exclusion is reported, not silent');
+  }
+
+  // A caller who re-parsed the same HTML holds a different object graph, so
+  // identity is not enough; the content fingerprint catches it.
+  const fx = corpus[0];
+  const twin = parseFixtureHtml(fx.html);
+  assert.equal(docFingerprint(twin), docFingerprint(fx.doc));
+  const reparsed = stripChrome(fx.doc, { siblings: [twin] });
+  assert.equal(reparsed.siblingPages, 0);
+  assert.deepEqual(
+    toBlocks(reparsed.root, { media: [] }).map(blockKey),
+    toBlocks(stripChrome(fx.doc, {}).root, { media: [] }).map(blockKey),
+  );
+
+  assert.deepEqual(excludeSelf([], fx.doc), []);
+  assert.equal(excludeSelf(corpus.map((o) => ({ doc: o.doc })), fx.doc).length, corpus.length - 1,
+    'RawCapture-shaped siblings are excluded on the same terms');
+});
+
+test('a sibling index that condemns the whole page trips the circuit breaker instead of emptying it', () => {
+  const fx = loadFixture('article.html');
+  const body = bodyOf(linkParents(cloneTree(fx.doc)));
+  // A caller that forces an index built from this very page bypasses
+  // self-exclusion; the classifier must still not return an empty specimen.
+  const forced = classifyChrome(body, { index: siblingIndex([fx.doc]) });
+  assert.ok(forced.notes.some((n) => n.includes('repeat signal disabled')), 'the fallback is reported');
+
+  const plain = classifyChrome(bodyOf(linkParents(cloneTree(fx.doc))), {});
+  assert.deepEqual(forced.removed.map((e) => e.selector), plain.removed.map((e) => e.selector),
+    'the fallback classification is exactly the single-page one');
+});
+
+test('a specimen built with every captured page as siblings keeps its content', () => {
+  const clock = () => '2026-02-12T09:00:00.000Z';
+  const corpus = loadCorpus();
+  const docs = corpus.map((o) => o.doc);
+  for (const fx of corpus) {
+    const capture = { kind: 'html', sourceUrl: fx.url, capturedAt: clock(), html: fx.html, doc: fx.doc, assets: [], meta: {} };
+    const specimen = buildSpecimen(capture, { clock, imageQuality: 0.85, siblings: docs });
+    const truth = groundTruthBlocks(fx.doc);
+    assert.deepEqual(specimen.blocks.map(blockKey), truth.map(blockKey),
+      `${fx.name}: the end-to-end specimen must be exactly the hand-labelled content`);
+    assert.ok(specimen.wordCount > 20, `${fx.name}: words survive self-in-siblings`);
+    assert.equal(specimen.chrome.siblingPages, corpus.length - 1);
   }
 });

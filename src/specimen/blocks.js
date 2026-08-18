@@ -182,10 +182,10 @@ function resolveMedia(node, index) {
  */
 export function blocksWithTrace(root, options = {}) {
   const index = mediaIndex(options.media);
-  /** @type {{block: any, node: any}[]} */
+  /** @type {{block: any, node: any, nodes: any[]}[]} */
   const out = [];
-  const emit = (block, node) => {
-    if (block && !isEmptyBlock(block)) out.push({ block, node });
+  const emit = (block, node, nodes) => {
+    if (block && !isEmptyBlock(block)) out.push({ block, node, nodes: nodes && nodes.length ? nodes : [node] });
   };
 
   /**
@@ -205,7 +205,13 @@ export function blocksWithTrace(root, options = {}) {
         return;
       }
     }
-    for (const text of splitOnBreaks(inlineString(buffer))) emit({ type: 'paragraph', text }, owner);
+    // Attribute the paragraph as precisely as the buffer allows: a run made of
+    // one element belongs to that element, so a stray inline node in block flow
+    // (a bare skip link, say) is traceable to itself rather than to whatever
+    // happened to contain it. Chrome stripping partitions blocks by this.
+    const primary = meaningful.length === 1 && isElement(meaningful[0]) ? meaningful[0] : owner;
+    const sources = [primary, ...meaningful];
+    for (const text of splitOnBreaks(inlineString(buffer))) emit({ type: 'paragraph', text }, primary, sources);
     buffer.length = 0;
   };
 

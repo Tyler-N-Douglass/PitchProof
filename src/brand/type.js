@@ -27,7 +27,7 @@ import {
   resolveFace, metricDelta, metricsFor, FALLBACK_CANDIDATES,
 } from '../core/text-metrics.js';
 import {
-  parseCssRules, parseDeclarations, splitComponents, splitTopLevel,
+  parseCssRules, parseDeclarations, splitComponents,
   parseLength, percentageOf, rootFontSize, DEFAULT_ROOT_FONT_SIZE_PX,
 } from './shape.js';
 
