@@ -1,0 +1,10 @@
+/* A body-only stylesheet: one family, set at copy sizes, no headline cut. */
+body {
+  font-family: "Public Sans", "Segoe UI", sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+p, li, dd, td { font-family: "Public Sans", "Segoe UI", sans-serif; font-size: 16px; }
+blockquote { font-family: "Public Sans", "Segoe UI", sans-serif; font-size: 18px; }
+.article__content p { font-family: "Public Sans", "Segoe UI", sans-serif; font-size: 17px; }

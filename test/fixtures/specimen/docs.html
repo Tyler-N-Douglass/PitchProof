@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Loop tuning | Northwind Studio documentation</title>
+<meta name="description" content="Tune an NX-series loop from a recorded step response.">
+<link rel="canonical" href="https://www.northwind-industrial.example/docs/studio/loops">
+</head>
+<body>
+  <a class="skip-link" href="#main" data-pp-truth="chrome">Skip to main content</a>
+  <header class="site-header" data-pp-truth="chrome">
+    <div class="utility-bar">
+      <ul class="utility-nav">
+        <li><a href="/support">Support</a></li>
+        <li><a href="/partners">Partner portal</a></li>
+        <li><a href="/investors">Investors</a></li>
+        <li><a href="/careers">Careers</a></li>
+        <li><a href="/contact">Contact sales</a></li>
+      </ul>
+      <div class="locale-picker"><button type="button">Global (English)</button></div>
+    </div>
+    <nav class="mega-nav" aria-label="Main">
+      <ul class="mega-nav__list">
+        <li class="mega-nav__item"><a href="/products">Products</a>
+          <div class="mega-nav__panel">
+            <ul><li><a href="/products/controllers">Controllers</a></li>
+                <li><a href="/products/drives">Variable speed drives</a></li>
+                <li><a href="/products/sensors">Sensors and instruments</a></li>
+                <li><a href="/products/safety">Safety systems</a></li></ul>
+            <ul><li><a href="/products/software">Plant software</a></li>
+                <li><a href="/products/services">Lifecycle services</a></li>
+                <li><a href="/products/spares">Spares and repairs</a></li></ul>
+          </div>
+        </li>
+        <li class="mega-nav__item"><a href="/solutions">Solutions</a>
+          <div class="mega-nav__panel">
+            <ul><li><a href="/solutions/uptime">Uptime assurance</a></li>
+                <li><a href="/solutions/energy">Energy optimisation</a></li>
+                <li><a href="/solutions/compliance">Compliance reporting</a></li>
+                <li><a href="/solutions/retrofit">Retrofit programmes</a></li></ul>
+          </div>
+        </li>
+        <li class="mega-nav__item"><a href="/industries">Industries</a>
+          <div class="mega-nav__panel">
+            <ul><li><a href="/industries/automotive">Automotive</a></li>
+                <li><a href="/industries/food">Food and beverage</a></li>
+                <li><a href="/industries/pharma">Pharmaceutical</a></li>
+                <li><a href="/industries/metals">Metals and mining</a></li></ul>
+          </div>
+        </li>
+        <li class="mega-nav__item"><a href="/resources">Resources</a></li>
+        <li class="mega-nav__item"><a href="/company">Company</a></li>
+      </ul>
+    </nav>
+  </header>
+  <nav class="breadcrumbs" aria-label="Breadcrumb" data-pp-truth="chrome">
+    <ol><li><a href="/">Home</a></li><li><a href="/docs">Documentation</a></li><li><a href="/docs/studio">Northwind Studio</a></li><li>Loop tuning</li></ol>
+  </nav>
+  <div class="docs-layout">
+    <nav class="sidebar docs-tree" aria-label="Documentation" data-pp-truth="chrome">
+      <ul>
+        <li><a href="/docs/studio/install">Installation</a></li>
+        <li><a href="/docs/studio/projects">Projects and libraries</a>
+          <ul><li><a href="/docs/studio/projects/import">Importing a project</a></li>
+              <li><a href="/docs/studio/projects/versions">Version control</a></li></ul></li>
+        <li><a href="/docs/studio/loops">Loop tuning</a>
+          <ul><li><a href="/docs/studio/loops/auto">Autotune</a></li>
+              <li><a href="/docs/studio/loops/manual">Manual tuning</a></li>
+              <li><a href="/docs/studio/loops/limits">Output limits</a></li></ul></li>
+        <li><a href="/docs/studio/alarms">Alarms</a></li>
+        <li><a href="/docs/studio/reports">Reports</a></li>
+        <li><a href="/docs/studio/api">Scripting API</a></li>
+      </ul>
+    </nav>
+    <main id="main">
+      <article data-pp-truth="content">
+        <h1>Loop tuning</h1>
+        <p>Northwind Studio tunes a loop from a step response it records itself. The procedure below applies to any single-input single-output loop on an NX-series controller running firmware 4.2 or later.</p>
+        <h2>Before you start</h2>
+        <ul>
+          <li>Put the loop in manual and let the process settle.</li>
+          <li>Confirm the output limits are the ones the plant expects, not the factory defaults.</li>
+          <li>Record the current gains, so the loop can be returned to its previous behaviour.</li>
+        </ul>
+        <h2>Running an autotune</h2>
+        <ol>
+          <li>Select the loop in the project tree and open the Tuning tab.</li>
+          <li>Choose a step size that the process can absorb without tripping an alarm.</li>
+          <li>Start the test and leave the loop alone until Studio reports a completed response.</li>
+          <li>Accept the proposed gains, or copy them into the manual fields and adjust.</li>
+        </ol>
+        <h2>Parameters</h2>
+        <table>
+          <thead><tr><th>Parameter</th><th>Range</th><th>Default</th></tr></thead>
+          <tbody>
+            <tr><td>Proportional band</td><td>0.1 – 500 %</td><td>100 %</td></tr>
+            <tr><td>Integral time</td><td>1 – 3600 s</td><td>120 s</td></tr>
+            <tr><td>Derivative time</td><td>0 – 900 s</td><td>0 s</td></tr>
+          </tbody>
+        </table>
+        <h2>Scripting the same test</h2>
+        <pre><code>loop = studio.loop("FIC-201")
+loop.autotune(step=2.5, timeout=600)
+loop.commit()</code></pre>
+        <p>The scripting interface reports the same completion codes as the interactive test, so a batch of loops can be tuned from one script and reviewed afterwards.</p>
+      </article>
+    </main>
+    <aside class="on-this-page toc" data-pp-truth="chrome">
+      <h4>On this page</h4>
+      <ul><li><a href="#before">Before you start</a></li>
+          <li><a href="#autotune">Running an autotune</a></li>
+          <li><a href="#parameters">Parameters</a></li>
+          <li><a href="#scripting">Scripting the same test</a></li></ul>
+    </aside>
+  </div>
+  <div class="support-widget chat-launcher" data-pp-truth="chrome">
+    <button type="button">Chat with us</button>
+    <p>How can we help today? An engineer is online.</p>
+  </div>
+  <footer class="site-footer" data-pp-truth="chrome">
+    <div class="footer-columns">
+      <div class="footer-column"><h4>Products</h4>
+        <ul><li><a href="/products/controllers">Controllers</a></li>
+            <li><a href="/products/drives">Variable speed drives</a></li>
+            <li><a href="/products/sensors">Sensors and instruments</a></li>
+            <li><a href="/products/software">Plant software</a></li></ul></div>
+      <div class="footer-column"><h4>Company</h4>
+        <ul><li><a href="/company/about">About Northwind</a></li>
+            <li><a href="/company/news">Newsroom</a></li>
+            <li><a href="/careers">Careers</a></li>
+            <li><a href="/investors">Investor relations</a></li></ul></div>
+      <div class="footer-column"><h4>Support</h4>
+        <ul><li><a href="/support/portal">Customer portal</a></li>
+            <li><a href="/support/downloads">Downloads</a></li>
+            <li><a href="/support/training">Training</a></li>
+            <li><a href="/support/contact">Contact support</a></li></ul></div>
+    </div>
+    <p class="legal">© 2026 Northwind Industrial Systems. All rights reserved. Privacy policy. Terms of use. Cookie notice.</p>
+  </footer>
+</body>
+</html>

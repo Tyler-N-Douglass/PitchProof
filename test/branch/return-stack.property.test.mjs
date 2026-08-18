@@ -309,3 +309,89 @@ test('a jump followed by a return restores the exact prior state, at every depth
     }
   }
 });
+
+/**
+ * The minimal deterministic reproduction of the defect the walks found, pinned.
+ *
+ * Three spine scenes; `bnA` (policy `anchor`) hangs off spine scene 1 and
+ * offers `bnB` (policy `nextSpineScene`). Jump, jump, one press of space, one
+ * press of back — five keystrokes a presenter makes without thinking — and the
+ * return stack's floor is a branch. From there `r`, the key a presenter reaches
+ * for to get back to the pitch, throws.
+ *
+ * This test asserts the **broken** behaviour on purpose, so the fence in the
+ * property test above cannot outlive the bug: when L2 lands the fix in
+ * `docs/disputes/L9-branches.md` §1, this test fails, and whoever sees it must
+ * (a) delete this test, (b) delete `stackFloorOffSpine`/`haltOn` from the walks
+ * above, and (c) replace them with the assertions written in the comment at the
+ * end of this test — which are the assertions this case *should* satisfy.
+ */
+test('KNOWN L2 DEFECT — the nextSpineScene auto-exit loses the lower return stack', () => {
+  const spine = [scene('sc_pin_0', 1), scene('sc_pin_1', 1), scene('sc_pin_2', 1)];
+  const inner = scene('sc_pin_a0', 1, { branchAnchors: ['bn_pin_b'] });
+  const outer = branch('bn_pin_a', 'The outer objection', [inner], 'anchor', []);
+  const nested = branch('bn_pin_b', 'The nested objection', [scene('sc_pin_b0', 1)], 'nextSpineScene', []);
+  spine[1].branchAnchors = ['bn_pin_a'];
+
+  const deck = buildDeck({
+    schemaVersion: 1,
+    id: contentId('proof', 'pinned-defect'),
+    prospectName: 'Pinned',
+    createdAt: '2026-02-01T09:00:00.000Z',
+    brand: brand(),
+    specimens: [],
+    renditions: [],
+    recipes: [],
+    spine,
+    branches: [outer, nested],
+    emitOptions: defaultEmitOptions(),
+  });
+
+  let state = initialState(deck);
+  state = navigate(deck, state, { type: 'goToScene', sceneId: 'sc_pin_1' });
+  state = navigate(deck, state, { type: 'jump', branchId: 'bn_pin_a' });
+  state = navigate(deck, state, { type: 'jump', branchId: 'bn_pin_b' });
+  assert.deepEqual(state.stack.map((f) => f.sequenceId), [SPINE, 'bn_pin_a'], 'the nested jump stacks two frames');
+
+  // Space past the last beat of the nested branch: `nextSpineScene` unwinds the
+  // whole stack, which is correct.
+  state = navigate(deck, state, { type: 'nextBeat' });
+  assert.equal(state.sequenceId, SPINE);
+  assert.deepEqual(state.stack, []);
+  assert.ok(state.exitedFrom, 'the exit is marked reversible (D15)');
+  assert.equal(state.exitedFrom.frame.returnPolicy, 'nextSpineScene');
+
+  // Back. D15 says this re-enters the branch where it was left. It does — but
+  // it restores only the top frame of the two that were popped.
+  state = navigate(deck, state, { type: 'prevBeat' });
+  assert.equal(state.sequenceId, 'bn_pin_b', 'back re-enters the branch (D15, correct)');
+  assert.deepEqual(
+    state.stack.map((f) => f.sequenceId),
+    ['bn_pin_a'],
+    'DEFECT: the restored stack is missing the spine frame beneath it',
+  );
+  assert.notEqual(state.stack[0].sequenceId, SPINE, 'DEFECT: the stack floor is a branch');
+
+  // And now the presenter is one keystroke from stranded: `r` throws.
+  assert.throws(
+    () => navigate(deck, state, { type: 'returnToSpine' }),
+    NavInvariantError,
+    'DEFECT: return-to-spine throws from the corrupted stack',
+  );
+  assert.throws(
+    () => navigate(deck, state, { type: 'prevScene' }),
+    NavInvariantError,
+    'DEFECT: stepping back again throws from the corrupted stack',
+  );
+
+  /*
+   * The assertions this case should satisfy once nav.js records the whole
+   * stack in `exitedFrom` (see docs/disputes/L9-branches.md §1):
+   *
+   *   assert.deepEqual(state.stack.map((f) => f.sequenceId), [SPINE, 'bn_pin_a']);
+   *   const home = navigate(deck, state, { type: 'returnToSpine' });
+   *   assert.equal(home.sequenceId, SPINE);
+   *   assert.equal(home.sceneIndex, 1);
+   *   assert.deepEqual(home.stack, []);
+   */
+});

@@ -1,0 +1,11 @@
+/* Documentation chrome: a body face, and a mono face reached only through a
+   monospace stack and code selectors. */
+body, .prose p { font-family: "Inter", system-ui, sans-serif; font-size: 16px; font-weight: 400; }
+
+pre, code, kbd, samp, .hljs {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 13.5px;
+  font-weight: 400;
+}
+
+.token__numeral { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; }

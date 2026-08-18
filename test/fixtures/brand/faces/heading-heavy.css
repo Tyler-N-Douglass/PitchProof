@@ -1,0 +1,30 @@
+/* A heading-heavy stylesheet: one display face carrying every headline, one
+   body face carrying copy. Modelled on the shape a marketing site's stylesheet
+   actually takes. */
+@font-face {
+  font-family: "Canela Deck";
+  src: url("/fonts/canela-deck-bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root { font-size: 100%; }
+
+h1, h2, h3, .hero__title, .section-heading {
+  font-family: "Canela Deck", Georgia, serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+h1, .hero__title { font-size: 64px; line-height: 1.05; }
+h2 { font-size: 40px; }
+h3, .section-heading { font-size: 28px; }
+
+body, p, li {
+  font-family: "Söhne", Helvetica, Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  font-weight: 400;
+}
+
+.eyebrow { font-family: "Canela Deck", Georgia, serif; font-size: 24px; font-weight: 700; }

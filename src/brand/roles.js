@@ -89,6 +89,35 @@ const SLOT_FOREGROUND = {
  * `max` is an upper bound (surfaces must not be colourful), `min` a lower bound
  * (accents must be).
  */
+/**
+ * Colourfulness is measured against the **cusp of the colour's own hue** — the
+ * most chromatic colour sRGB can express at that hue, at any lightness — rather
+ * than against the maximum available at the colour's own lightness.
+ *
+ * The difference matters, and getting it wrong is a real defect: a warm
+ * off-white like `#f7f3ee` carries 30% of the chroma available at its very high
+ * lightness, which sounds colourful, while carrying 5% of what its hue can do,
+ * which is what the eye sees. Measured the first way it qualifies as a brand
+ * primary; measured the second way it is correctly read as a tinted neutral.
+ *
+ * Memoised by hue to a tenth of a degree: the cusp search is a golden-section
+ * search over a binary search, and the pool asks for it once per candidate.
+ * @type {Map<number, number>}
+ */
+const CUSP_CACHE = new Map();
+
+/**
+ * Maximum chroma available anywhere in sRGB at a hue.
+ * @param {number} hue degrees
+ * @returns {number}
+ */
+export function cuspChroma(hue) {
+  const key = Math.round((((hue % 360) + 360) % 360) * 10);
+  let v = CUSP_CACHE.get(key);
+  if (v === undefined) { v = hueCusp(key / 10).C; CUSP_CACHE.set(key, v); }
+  return v;
+}
+
 export const CHROMA_BANDS = {
   surface: { max: 0.15 },
   surfaceAlt: { max: 0.15 },
@@ -224,7 +253,7 @@ export const ANCHOR_TINT_FRACTION = CHROMA_BANDS.surface.max / 2;
  * @property {[number, number, number]} lab
  * @property {number} luminance WCAG relative luminance
  * @property {number} weight area-derived weight, 0..1
- * @property {number} chromaFraction chroma as a fraction of the sRGB maximum here
+ * @property {number} chromaFraction chroma as a fraction of the most chromatic colour available at this hue
  * @property {number} ceiling highest contrast any colour can reach against this one
  * @property {'extracted'|'derived'} source
  * @property {number|null} clusterIndex
@@ -264,14 +293,14 @@ function clusterToColor(c) {
  */
 function makeCandidate(hex, weight, source, clusterIndex) {
   const oklch = hexToOklch(hex);
-  const maxC = maxChromaAt(oklch[0], oklch[2]);
+  const cuspC = cuspChroma(oklch[2]);
   return {
     hex,
     oklch,
     lab: hexToOklab(hex),
     luminance: luminanceOfHex(hex),
     weight,
-    chromaFraction: maxC > 0 ? Math.min(1, oklch[1] / maxC) : 0,
+    chromaFraction: cuspC > 0 ? Math.min(1, oklch[1] / cuspC) : 0,
     ceiling: contrastCeiling(hex),
     source,
     clusterIndex,
@@ -289,7 +318,8 @@ export function variantCandidates(seed) {
   const frac = seed.chromaFraction;
   /** @type {{hex: string}[]} */
   const out = [];
-  const atL = (nl) => oklchToHex([nl, frac * maxChromaAt(nl, H), H]);
+  const target = frac * cuspChroma(H);
+  const atL = (nl) => oklchToHex([nl, Math.min(target, maxChromaAt(nl, H)), H]);
   out.push({ hex: atL(L / 2) });
   out.push({ hex: atL((L + 1) / 2) });
   if (frac >= NEUTRAL_CHROMA_FRACTION) {
