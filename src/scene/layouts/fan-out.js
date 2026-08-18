@@ -24,7 +24,7 @@
 import { h } from '../../core/vdom.js';
 import { renderBlock, summarize } from '../blocks.js';
 import {
-  sceneHead, panelHead, provenanceLabel, emptyState,
+  sceneHead, panelHead, provenanceLabel, emptyState, waveGroup,
   specimenMeta, specimenTitle, renditionLabel, renditionMeta,
 } from '../parts.js';
 
@@ -101,7 +101,7 @@ function renderGrid(ctx, rends) {
     rends.map((rendition, index) => {
       const blocks = Array.isArray(rendition.blocks) ? rendition.blocks : [];
       const { title, blurb } = summarize(blocks);
-      const group = rends.length > WAVE_SIZE ? `fan/wave/${Math.floor(index / WAVE_SIZE)}` : `fan/${index}`;
+      const group = waveGroup('fan', index, rends.length, WAVE_SIZE);
       return h('article', {
         class: 'pp-fan-card',
         'data-pp-box': 'fanCard',

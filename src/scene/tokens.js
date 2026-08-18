@@ -77,6 +77,7 @@ export const GEOM = {
     'index-num-w': 32,
     'index-gap': 12,
     'index-row-gap': 10,
+    'map-legend-h': 56,
   },
   md: {
     'head-h': 104,
@@ -107,6 +108,7 @@ export const GEOM = {
     'index-num-w': 44,
     'index-gap': 14,
     'index-row-gap': 12,
+    'map-legend-h': 64,
   },
   lg: {
     'head-h': 120,
@@ -137,6 +139,7 @@ export const GEOM = {
     'index-num-w': 52,
     'index-gap': 16,
     'index-row-gap': 14,
+    'map-legend-h': 72,
   },
 };
 

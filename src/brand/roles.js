@@ -163,8 +163,23 @@ export const DUPLICATE_DELTA_E = 0.02;
 /** Below this chroma fraction a colour has no meaningful hue to separate. */
 const NEUTRAL_CHROMA_FRACTION = 0.15;
 
-/** Cap on the candidate pool; 14^5 = 537,824 leaves is the worst-case search. */
-export const POOL_CAP = 14;
+/** Cap on the candidate pool; 16^5 = 1,048,576 leaves bounds the worst-case search. */
+export const POOL_CAP = 16;
+
+/**
+ * How many extracted colours seed derived variants, and what those variants
+ * are. A brand with two colours has no material for a distinct accent, and the
+ * alternative is worse than deriving one: either two roles collapse onto the
+ * same fill, or a neutral lands in `primary` and the brand loses its colour.
+ *
+ * Each seed yields, at the seed's own hue:
+ *   - `deep` — lightness halved, the midpoint between the seed and black;
+ *   - `soft` — lightness halfway to white;
+ *   - `vivid` — the cusp of that hue, its most chromatic point in sRGB
+ *     (chromatic seeds only; a neutral has no cusp worth visiting).
+ * Every lightness here is a midpoint or a computed cusp, not a chosen number.
+ */
+export const MAX_VARIANT_SEEDS = 2;
 
 /**
  * Headroom applied when deriving. The guarantee itself is verified at exactly
@@ -257,11 +272,33 @@ function makeCandidate(hex, weight, source, clusterIndex) {
 }
 
 /**
- * Build the candidate pool: every cluster, plus pure white, pure black, and a
- * near-white and near-black carrying the brand's dominant hue. The anchors are
- * marked `derived` so the fidelity term prices their use; they exist so a brand
+ * Derived variants of one extracted colour, at the same hue. See
+ * `MAX_VARIANT_SEEDS` for why they exist and how each lightness is chosen.
+ * @param {Candidate} seed
+ * @returns {{hex: string}[]}
+ */
+export function variantCandidates(seed) {
+  const [L, , H] = seed.oklch;
+  const frac = seed.chromaFraction;
+  /** @type {{hex: string}[]} */
+  const out = [];
+  const atL = (nl) => oklchToHex([nl, frac * maxChromaAt(nl, H), H]);
+  out.push({ hex: atL(L / 2) });
+  out.push({ hex: atL((L + 1) / 2) });
+  if (frac >= NEUTRAL_CHROMA_FRACTION) {
+    const cusp = hueCusp(H);
+    out.push({ hex: oklchToHex([cusp.L, cusp.C, H]) });
+  }
+  return out;
+}
+
+/**
+ * Build the candidate pool: every cluster, plus pure white, pure black, a
+ * near-white and near-black carrying the brand's dominant hue, and lightness
+ * variants of the heaviest extracted colours. Everything but the clusters is
+ * marked `derived` so the fidelity term prices its use; they exist so a brand
  * that extracted no usable ground (a two-colour logo, a neon-only palette)
- * still gets a readable surface instead of a failed solve.
+ * still gets a readable, structurally distinct theme instead of a collapsed one.
  *
  * @param {readonly any[]} clusters
  * @returns {Candidate[]}
@@ -297,18 +334,31 @@ export function buildCandidatePool(clusters) {
   // Anchors carry the smallest weight in the pool so the area term never
   // prefers them; their value is structural, not evidential.
   const anchorWeight = Math.min(...extracted.map((c) => c.weight)) / (totalWeight * POOL_CAP);
+  /** @type {Candidate[]} */
+  const anchors = [];
   for (const hex of [light, dark, '#ffffff', '#000000']) {
     if (seen.has(hex)) continue;
-    seen.set(hex, pool.length);
-    pool.push(makeCandidate(hex, anchorWeight, 'derived', null));
+    seen.set(hex, anchors.length);
+    anchors.push(makeCandidate(hex, anchorWeight, 'derived', null));
   }
-  if (pool.length <= POOL_CAP) return pool;
-  // Over the cap: keep the anchors and the heaviest extracted colours.
-  const anchors = pool.filter((c) => c.source === 'derived');
-  const rest = pool.filter((c) => c.source === 'extracted')
+  /** @type {Candidate[]} */
+  const variants = [];
+  const seeds = extracted.slice()
     .sort((a, b) => (b.weight - a.weight) || (a.hex < b.hex ? -1 : 1))
-    .slice(0, POOL_CAP - anchors.length);
-  return rest.concat(anchors);
+    .slice(0, MAX_VARIANT_SEEDS);
+  for (const seed of seeds) {
+    for (const v of variantCandidates(seed)) {
+      if (seen.has(v.hex)) continue;
+      seen.set(v.hex, variants.length);
+      variants.push(makeCandidate(v.hex, anchorWeight, 'derived', null));
+    }
+  }
+  // Priority when the cap bites: the brand's own colours, then the structural
+  // anchors that guarantee a readable ground, then the convenience variants.
+  const ordered = extracted.slice()
+    .sort((a, b) => (b.weight - a.weight) || (a.hex < b.hex ? -1 : 1))
+    .concat(anchors, variants);
+  return ordered.slice(0, POOL_CAP);
 }
 
 /**
@@ -391,7 +441,10 @@ export function unaryCost(slot, ci, ctx) {
   if (band.max !== undefined && cand.chromaFraction > band.max) {
     chromaTerm = Math.min(CHROMA_EXCESS_CAP, (cand.chromaFraction - band.max) / band.max);
   } else if (band.min !== undefined && cand.chromaFraction < band.min) {
-    chromaTerm = (band.min - cand.chromaFraction) / band.min;
+    // Scaled by the same cap as the excess side: a role that requires chroma
+    // and gets none is exactly as wrong as a role that forbids chroma and gets
+    // twice its budget, so both sides of a band reach the same severity.
+    chromaTerm = CHROMA_EXCESS_CAP * (band.min - cand.chromaFraction) / band.min;
   }
 
   // 5. Area evidence.

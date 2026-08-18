@@ -46,6 +46,13 @@ const TOTAL_WEIGHT = WALK_WEIGHTS.reduce((n, w) => n + w.weight, 0);
  * @property {number} [steps]
  * @property {boolean} [anchoredOnly]  only jump to branches the current scene offers
  * @property {string} [stream]         substream name suffix, for independent walks off one seed
+ * @property {(state: import('../runtime/nav.js').NavState, action: object, previous: import('../runtime/nav.js').NavState) => boolean} [haltOn]
+ *   Stop the walk the moment a produced state satisfies this predicate. The
+ *   offending state is reported in `halted` rather than appended, so everything
+ *   in `states` is a state the caller has already accepted. Rehearsal uses it to
+ *   stop at the first anomaly instead of walking on through the wreckage; the
+ *   §17.8 property test uses it to fence a known reducer defect without
+ *   loosening a single assertion about everything else.
  */
 
 /**
@@ -56,7 +63,7 @@ const TOTAL_WEIGHT = WALK_WEIGHTS.reduce((n, w) => n + w.weight, 0);
  *
  * @param {import('../runtime/deck.js').Deck} deck
  * @param {WalkOptions} [options]
- * @returns {{states: import('../runtime/nav.js').NavState[], actions: object[], maxDepth: number, sequencesVisited: Set<string>, scenesVisited: Set<string>}}
+ * @returns {{states: import('../runtime/nav.js').NavState[], actions: object[], maxDepth: number, sequencesVisited: Set<string>, scenesVisited: Set<string>, halted: {step: number, state: import('../runtime/nav.js').NavState, action: object, previous: import('../runtime/nav.js').NavState}|null}}
  */
 export function randomWalkTrace(deck, options = {}) {
   const steps = Math.max(0, options.steps === undefined ? 200 : options.steps | 0);
@@ -76,9 +83,17 @@ export function randomWalkTrace(deck, options = {}) {
   const first = currentScene(deck, state);
   if (first) scenesVisited.add(first.id);
 
+  /** @type {{step: number, state: import('../runtime/nav.js').NavState, action: object, previous: import('../runtime/nav.js').NavState}|null} */
+  let halted = null;
+
   for (let i = 0; i < steps; i++) {
     const action = pickAction(deck, state, rng, branches, sceneIds, !!options.anchoredOnly);
+    const previous = state;
     state = navigate(deck, state, action);
+    if (options.haltOn && options.haltOn(state, action, previous)) {
+      halted = { step: i + 1, state, action, previous };
+      break;
+    }
     actions.push(action);
     states.push(state);
     if (state.stack.length > maxDepth) maxDepth = state.stack.length;
@@ -87,7 +102,7 @@ export function randomWalkTrace(deck, options = {}) {
     if (scene) scenesVisited.add(scene.id);
   }
 
-  return { states, actions, maxDepth, sequencesVisited, scenesVisited };
+  return { states, actions, maxDepth, sequencesVisited, scenesVisited, halted };
 }
 
 /**

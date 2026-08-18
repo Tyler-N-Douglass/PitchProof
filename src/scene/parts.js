@@ -188,6 +188,23 @@ export function countLabel(n, singular, plural) {
 }
 
 /**
+ * The beat group an item belongs to.
+ *
+ * Below the threshold every item is its own beat, because a presenter walking
+ * three variants wants to talk about each one. Above it, items reveal in waves:
+ * nine locale cards landing one keypress at a time is nine keypresses of dead
+ * air, and the point of nine cards is the nine, not the ninth.
+ * @param {string} prefix
+ * @param {number} index
+ * @param {number} total
+ * @param {number} [max]
+ * @returns {string}
+ */
+export function waveGroup(prefix, index, total, max = 4) {
+  return total > max ? `${prefix}/wave/${Math.floor(index / max)}` : `${prefix}/${index}`;
+}
+
+/**
  * A rendition's display label, falling back to its id rather than to an
  * invented name.
  * @param {import('../core/contracts.d.ts').Rendition|null} rendition

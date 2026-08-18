@@ -166,7 +166,7 @@ export const LOCALES = [
     addressOrder: ['building number + street', 'district', 'city postal code', 'country'],
     legalPlacement: 'footer',
     pluralCategories: ['zero', 'one', 'two', 'few', 'many', 'other'],
-    quotes: ['”', '“'],
+    quotes: ['«', '»'],
     spaceBeforeHighPunctuation: false,
   },
 ];
@@ -183,8 +183,8 @@ export function localeById(id) {
 const DATE_SLASH = /\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g;   // assumed US order: month/day/year
 const DATE_DOT = /\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b/g;     // assumed day.month.year
 const DATE_ISO = /\b(\d{4})-(\d{2})-(\d{2})\b/g;           // ISO 8601
-const GROUPED_NUMBER = /(?<![\d.,])(\d{1,3}(?:,\d{3})+)(\.\d+)?(?![\d.,])/g;
-const DECIMAL_NUMBER = /(?<![\d.,])(\d+)\.(\d+)(?![\d.,])/g;
+/** Any decimal number, grouped or not, in the source's en-US-shaped convention. */
+const ANY_NUMBER = /(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?![\d,]|\.\d)/g;
 
 /**
  * Reorder a date's own parts into a locale's order. No digit is created or
@@ -239,19 +239,25 @@ export function localizeText(text, locale) {
   out = out.replace(DATE_SLASH, (_m, a, b, y) => formatDate(locale, { month: a, day: b, year: y }));
   out = out.replace(DATE_DOT, (_m, a, b, y) => formatDate(locale, { day: a, month: b, year: y }));
 
-  out = out.replace(GROUPED_NUMBER, (_m, intPart, frac) => {
+  // Numbers are rewritten in one pass into placeholders, then substituted, so a
+  // regrouped integer can never be re-read as a decimal by a later rule.
+  /** @type {string[]} */
+  const slots = [];
+  out = out.replace(ANY_NUMBER, (_m, intPart, frac) => {
+    const grouped = intPart.includes(',');
     const digits = intPart.replace(/,/g, '');
-    const head = regroup(digits, locale.numberGroup);
-    return frac ? `${head}${locale.numberDecimal}${frac.slice(1)}` : head;
+    const head = grouped ? regroup(digits, locale.numberGroup) : digits;
+    const value = frac === undefined ? head : `${head}${locale.numberDecimal}${frac}`;
+    slots.push(value);
+    return `\u0000${slots.length - 1}\u0000`;
   });
-  out = out.replace(DECIMAL_NUMBER, (m, a, b) => (locale.numberDecimal === '.' ? m : `${a}${locale.numberDecimal}${b}`));
 
   // Currency placement. Only symbols already present are moved.
   if (locale.currencyPosition === 'after') {
     const gap = locale.currencySpace ? ' ' : '';
-    out = out.replace(/([$€£¥₹₽₩¢])\s?((?:\d[\d.,  ]*)?\d|\d)/g, (_m, sym, num) => `${num}${gap}${sym}`);
+    out = out.replace(/([$€£¥₹₽₩¢])\s?(\u0000\d+\u0000)/g, (_m, sym, num) => `${num}${gap}${sym}`);
   } else if (locale.currencySpace) {
-    out = out.replace(/([$€£¥₹₽₩¢])(?=\d)/g, '$1 ');
+    out = out.replace(/([$€£¥₹₽₩¢])(?=\u0000)/g, '$1 ');
   }
 
   // Quotation marks.
@@ -262,7 +268,7 @@ export function localizeText(text, locale) {
   if (locale.spaceBeforeHighPunctuation) {
     out = out.replace(/\s*([;:!?»])/g, `${NNBSP}$1`).replace(/(«)\s*/g, `$1${NNBSP}`);
   }
-  return out;
+  return out.replace(/\u0000(\d+)\u0000/g, (_m, i) => slots[Number(i)]);
 }
 
 /**

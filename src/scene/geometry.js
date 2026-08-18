@@ -133,7 +133,8 @@ export function fanColumns(bp, n) {
  */
 export function mapScale(bp) {
   const s = stageBox(bp);
-  return Math.min(s.bodyWidthPx / MAP_DESIGN.width, s.bodyHeightPx / MAP_DESIGN.height);
+  const canvasHeight = Math.max(0, s.bodyHeightPx - geom(breakpointId(bp), 'map-legend-h') - geom(breakpointId(bp), 'row-gap'));
+  return Math.min(s.bodyWidthPx / MAP_DESIGN.width, canvasHeight / MAP_DESIGN.height);
 }
 
 /**
@@ -167,7 +168,7 @@ function inset(widthPx, heightPx, padPx, border = PANEL_BORDER_PX) {
  *
  * @param {string} slot
  * @param {string|{id?: string}} bpIn
- * @param {{n?: number, unitWidth?: number, unitHeight?: number}} [params]
+ * @param {{n?: number, unitWidth?: number, unitHeight?: number, variant?: string}} [params]
  * @returns {BoxSize}
  */
 export function boxGeometry(slot, bpIn, params = {}) {
@@ -274,7 +275,10 @@ export function boxGeometry(slot, bpIn, params = {}) {
     // -------------------------------------------------------------- quoteCard
     case 'quoteBox': {
       const w = Math.min(s.bodyWidthPx, geom(bp, 'quote-max-w'));
-      return inset(w, s.bodyHeightPx, geom(bp, 'quote-pad'), 0);
+      // `variant: 'full'` is the headline-as-statement case, where the layout
+      // renders no header band and the card takes the whole content box.
+      const h0 = params.variant === 'full' ? s.contentHeightPx : s.bodyHeightPx;
+      return inset(w, h0, geom(bp, 'quote-pad'), 0);
     }
 
     // ---------------------------------------------------------- contentsIndex
@@ -292,6 +296,11 @@ export function boxGeometry(slot, bpIn, params = {}) {
     case 'mapCanvas': {
       const scale = mapScale(bp);
       return { widthPx: MAP_DESIGN.width * scale, heightPx: MAP_DESIGN.height * scale };
+    }
+    case 'mapLegend': {
+      const gap = geom(bp, 'fan-gap');
+      const cols = Math.max(1, Math.min(n, bp === 'sm' ? 1 : bp === 'md' ? 3 : 4));
+      return inset(trackWidth(s.contentWidthPx, cols, gap), geom(bp, 'map-legend-h'), geom(bp, 'card-pad'));
     }
     case 'mapText': {
       const scale = mapScale(bp);
@@ -316,5 +325,5 @@ export const SLOTS = [
   'sideMain', 'sideNote',
   'quoteBox',
   'indexRow', 'indexNumber',
-  'mapCanvas', 'mapText',
+  'mapCanvas', 'mapLegend', 'mapText',
 ];

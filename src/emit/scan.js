@@ -427,7 +427,8 @@ export function scanCss(css, options = {}) {
   }
 
   // Absolute URLs anywhere else in the sheet, including inside `src:` lists.
-  for (const f of scanAbsoluteUrls(src, offset)) {
+  // Comments are masked first: a URL nobody can reach is not a reference.
+  for (const f of scanAbsoluteUrls(masked, offset)) {
     if (!out.some((existing) => Math.abs(existing.index - f.index) < 8)) out.push(f);
   }
 
@@ -460,7 +461,14 @@ export function scanJs(js, options = {}) {
     }
   }
 
-  for (const f of scanAbsoluteUrls(src, offset)) out.push(f);
+  // URLs in code position, and URLs inside string literals. Comments are
+  // excluded on purpose: a URL in a comment is unreachable by construction, and
+  // failing on one would put the law at war with the documentation that
+  // explains it.
+  for (const f of scanAbsoluteUrls(masked.code, offset)) out.push(f);
+  for (const lit of masked.literals) {
+    for (const f of scanAbsoluteUrls(lit.value, 0)) out.push({ message: f.message, index: offset + lit.start });
+  }
 
   // A protocol-relative URL cannot be seen by the absolute-URL scan, and in JS
   // `//` is otherwise a comment — so it is only meaningful inside a literal.
