@@ -66,7 +66,11 @@ function statements(src) {
     if (EXPORT_START.test(line) && /^\s*export\s*\{/.test(line)) {
       let text = line;
       let n = i;
-      while (!/\}\s*;?\s*$/.test(text)) {
+      // An export list ends either at its closing brace or at the `from '…';`
+      // that follows it. Matching only the brace swallows the rest of the file
+      // when the list is a re-export, which is exactly what an index module is.
+      const terminated = (t) => /\}\s*(?:from\s*['"][^'"]+['"]\s*)?;?\s*$/.test(t);
+      while (!terminated(text)) {
         n += 1;
         if (n >= lines.length) throw new BundleError(`unterminated export list at line ${i + 1}`);
         text += `\n${lines[n]}`;
@@ -92,7 +96,7 @@ export function parseModule(file, src, root) {
   const id = toId(file, root);
   /** @type {string[]} */
   const deps = [];
-  /** @type {{exported: string, local: string}[]} */
+  /** @type {{exported: string, local: string, from?: string}[]} */
   const exported = [];
   /** @type {string[]} */
   const outLines = [];
@@ -125,11 +129,14 @@ export function parseModule(file, src, root) {
     if (st.kind === 'export-list') {
       const m = st.text.match(/^\s*export\s*\{([\s\S]*?)\}\s*(?:from\s*['"]([^'"]+)['"]\s*)?;?\s*$/);
       if (!m) throw new BundleError(`${id}:${st.line}: cannot parse export list`);
-      if (m[2]) throw new BundleError(`${id}:${st.line}: re-export from another module is not supported`);
+      // `export { a, b as c } from './x.js'` is how an index module republishes
+      // a lane's surface. The dependency is registered like any import and the
+      // binding is read from it in the module tail, after it has evaluated.
+      const from = m[2] ? addDep(m[2]) : null;
       const parts = m[1].split(',').map((s) => s.trim()).filter(Boolean);
       for (const part of parts) {
         const [local, name = local] = part.split(/\s+as\s+/).map((s) => s.trim());
-        exported.push({ exported: name, local });
+        exported.push({ exported: name, local, from });
       }
       // The assignment itself is emitted in the module tail, so an export list
       // placed above its declarations still binds the declared value.
@@ -154,7 +161,9 @@ export function parseModule(file, src, root) {
   }
 
   const tail = exported.length
-    ? `\n${exported.map((e) => `__exports[${JSON.stringify(e.exported)}] = ${e.local};`).join('\n')}\n`
+    ? `\n${exported.map((e) => (e.from
+      ? `__exports[${JSON.stringify(e.exported)}] = __require(${JSON.stringify(e.from)}).${e.local};`
+      : `__exports[${JSON.stringify(e.exported)}] = ${e.local};`)).join('\n')}\n`
     : '\n';
 
   return { id, file, body: `${outLines.join('\n')}${tail}`, deps, exports: dedupe(exported.map((e) => e.exported)) };

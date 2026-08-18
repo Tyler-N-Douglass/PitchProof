@@ -1,0 +1,285 @@
+/* src/runtime/runtime.css */
+/*
+ * The artifact stylesheet.
+ *
+ * Every custom property here is namespaced `--pp-*` (DECISIONS D11). The studio
+ * chrome uses `--st-*` and the two sets are disjoint — §15 calls a single shared
+ * variable between studio chrome and artifact output a bug, and
+ * test/ui/theme-isolation.test.mjs is what makes that a build failure rather
+ * than a convention.
+ *
+ * The values below are neutral defaults. The brand theme compiler (L5) writes
+ * the prospect's own values over them at emit time; the artifact never wears the
+ * studio's palette.
+ */
+
+:root {
+  --pp-primary: #1a1a1a;
+  --pp-on-primary: #ffffff;
+  --pp-secondary: #4a4a4a;
+  --pp-on-secondary: #ffffff;
+  --pp-surface: #ffffff;
+  --pp-on-surface: #16181d;
+  --pp-surface-alt: #f4f5f7;
+  --pp-on-surface-alt: #16181d;
+  --pp-accent: #2f5bd8;
+  --pp-on-accent: #ffffff;
+  --pp-border: #d9dce1;
+  --pp-success: #17693f;
+  --pp-warning: #8a5a00;
+  --pp-danger: #a32020;
+
+  --pp-font-display: system-ui, sans-serif;
+  --pp-font-body: system-ui, sans-serif;
+  --pp-font-mono: ui-monospace, monospace;
+
+  --pp-radius: 8px;
+  --pp-border-width: 1px;
+  --pp-shadow: none;
+
+  --pp-transition-ms: 200ms;
+  --pp-stage-pad: clamp(20px, 3.2vw, 56px);
+  --pp-scale: 1;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--pp-surface);
+  color: var(--pp-on-surface);
+  font-family: var(--pp-font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ------------------------------------------------------------------ stage */
+
+.pp-stage {
+  position: relative;
+  height: 100%;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--pp-surface);
+}
+
+.pp-stage-scene {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.pp-scene {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--pp-stage-pad);
+  scroll-behavior: smooth;
+}
+
+[data-pp-reduced-motion="true"] .pp-scene { scroll-behavior: auto; }
+
+/* --------------------------------------------------------------- reveals */
+
+[data-pp-el] {
+  transition:
+    opacity var(--pp-transition-ms) ease,
+    transform var(--pp-transition-ms) ease;
+}
+
+.pp-unrevealed {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  /* Hidden reveals keep their box so nothing reflows when a beat lands. A
+     layout that jumps as each beat arrives reads as a bug from the third row. */
+  visibility: hidden;
+  transition: none;
+}
+
+.pp-revealed {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-pp-el] { transition: none; }
+  .pp-unrevealed { transform: none; }
+}
+
+/* ----------------------------------------------------------- blank screen */
+
+.pp-blank {
+  position: absolute;
+  inset: 0;
+  background: var(--pp-primary);
+  z-index: 40;
+}
+
+.pp-stage--blank .pp-stage-scene { visibility: hidden; }
+
+/* ---------------------------------------------------------- branch badge */
+
+.pp-branch-badge {
+  position: absolute;
+  left: var(--pp-stage-pad);
+  bottom: 16px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--pp-surface-alt);
+  color: var(--pp-on-surface-alt);
+  border: var(--pp-border-width) solid var(--pp-border);
+  font-size: 13px;
+  max-width: min(60ch, 70vw);
+}
+
+.pp-branch-badge-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pp-branch-badge-key {
+  font-family: var(--pp-font-mono);
+  font-size: 11px;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+/* -------------------------------------------------------------- overlays */
+
+.pp-overlay-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: clamp(24px, 6vh, 80px) 24px;
+  background: color-mix(in srgb, var(--pp-on-surface) 45%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.pp-overlay {
+  width: min(760px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  background: var(--pp-surface);
+  color: var(--pp-on-surface);
+  border: var(--pp-border-width) solid var(--pp-border);
+  border-radius: var(--pp-radius);
+  box-shadow: var(--pp-shadow);
+  padding: 24px;
+}
+
+.pp-overlay-title {
+  margin: 0 0 16px;
+  font-family: var(--pp-font-display);
+  font-size: 20px;
+}
+
+.pp-overlay-foot {
+  margin: 20px 0 0;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.pp-help-groups {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.pp-help-group-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.pp-help-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+
+.pp-help-key {
+  font-family: var(--pp-font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pp-help-label { margin: 0; font-size: 14px; }
+
+/* ------------------------------------------------ provenance label (§9/§18) */
+
+/*
+ * The illustrative label. §18.1: the label "cannot be styled to invisibility",
+ * and the emitter checks the computed result against the final stylesheet. The
+ * floors below are the ones it enforces — a size floor of 11px and a real
+ * contrast pair — so this rule is not decoration, it is the law's implementation.
+ */
+.pp-provenance {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--pp-warning);
+  color: var(--pp-on-primary);
+  font-family: var(--pp-font-body);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  opacity: 1;
+  visibility: visible;
+}
+
+/* --------------------------------------------------- placeholder fallback */
+
+.pp-layout--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+}
+
+.pp-placeholder-card {
+  border: var(--pp-border-width) dashed var(--pp-border);
+  border-radius: var(--pp-radius);
+  padding: 28px 32px;
+  max-width: 60ch;
+  text-align: center;
+}
+
+.pp-placeholder-kicker {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--pp-danger);
+}
+
+.pp-placeholder-title { margin: 0 0 8px; font-family: var(--pp-font-display); }
+.pp-placeholder-sub { margin: 0 0 12px; opacity: 0.75; }
+.pp-placeholder-code { font-family: var(--pp-font-mono); font-size: 12px; }
+
+.pp-scene--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+}

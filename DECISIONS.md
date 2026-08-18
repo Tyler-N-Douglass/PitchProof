@@ -254,3 +254,87 @@ from a session rooted on an unrelated repository.
 **Decision.** PitchProof lives in `Tyler-N-Douglass/PitchProof` with the spec's
 `/src /test /scripts /dist` layout at the repository root. No PitchProof code
 lives in, or is shared with, the ContentOps repository.
+
+---
+
+## D14 — The three W3C namespace URIs are permitted in artifact script, as exact whole strings only
+
+**Unsettled by:** D10 permits `http://www.w3.org/2000/svg` and its siblings as
+`xmlns` attribute values. The runtime also needs the SVG namespace as a string
+argument to `createElementNS`, which D10 as written would reject.
+
+**Decision.** The network scanner permits exactly three strings —
+`http://www.w3.org/2000/svg`, `http://www.w3.org/1999/xlink`,
+`http://www.w3.org/1999/xhtml` — anywhere in the emitted document, as whole
+tokens. Any other occurrence of `http://` or `https://`, and any of these three
+appearing as a prefix of a longer URL, remains `NETWORK_REFERENCE`, severity 1.
+
+**Why.** They are namespace identifiers, not locations: no user agent has ever
+resolved them, and `document.createElementNS` requires the literal. The
+alternative — assembling the string from fragments so the scanner cannot see it
+— would be evasion, and a law you evade in your own source is not a law. Naming
+three exact strings keeps the rule absolute for everything else, and the runtime
+proof in `verify-offline.mjs` still has to pass with every request blocked.
+
+---
+
+## D15 — The automatic exit at the end of a branch is reversible
+
+**Unsettled by:** §11 requires a branch to exit to its anchor or the next spine
+scene; §10 requires backward navigation to be exact, and §17.9 asserts a state
+hash after forward-then-back equals the original for every beat of every scene.
+The two collide at the last beat of a branch: advancing exits the branch, and
+stepping back would land on the previous spine scene rather than back inside it.
+
+**Decision.** Advancing past the last beat of a branch returns, and records
+`exitedFrom` in the navigation state. The very next backward step re-enters the
+branch at the beat it was left, restoring the popped frame. Every other
+transition clears the marker, and an explicit `return`/`r` does not set it —
+that is a decision, not an accident. `exitedFrom` is deliberately excluded from
+`stateHash`, which is a digest of what is on screen.
+
+**Why.** Without it, one keypress at the end of a branch puts the branch
+permanently behind the presenter, and the §17.9 assertion is simply false for
+every branch-terminal beat. The alternative reading — that a branch's last beat
+should not auto-advance at all — protects the invariant by stranding the
+presenter, which is exactly the §22.4 failure. Making the exit reversible keeps
+"space always moves forward" *and* "back always undoes what forward just did".
+
+---
+
+## D16 — Presenter view is a directly written second window, not a channel
+
+**Unsettled by:** §12 requires presenter view to open "in a second window" and
+the artifact to work from `file://`, from a USB stick, and from an email
+attachment (§13).
+
+**Decision.** The presenter window is opened with no URL and its document is
+written directly by the parent, which then renders into it and listens to it.
+There is no `BroadcastChannel`, no `postMessage` protocol, and no second copy of
+the state.
+
+**Why.** A `file://` document has an opaque origin, so a channel between two
+windows is not reliably available — and a presenter view that works on a
+developer's local server and fails on the client's laptop is worse than none.
+Writing the document directly needs no origin at all, keeps one source of truth
+for the state, and adds nothing to the emitted bytes that the scanner has to
+forgive.
+
+---
+
+## D17 — Cross-lane integration is frozen in `API.md`
+
+**Unsettled by:** §19 says lanes communicate "through the frozen contracts",
+which cover the data model but not the function surfaces lanes call on each
+other.
+
+**Decision.** `API.md` declares the exact module path, export name and signature
+of every surface a lane may rely on, for L1 and L2 (already built) and for each
+of L3–L12 (to be built). A lane exports exactly what is declared and imports
+nothing else from another lane.
+
+**Why.** Nine lanes are written in parallel against code that does not exist
+yet. The §4 contracts settle what a `Specimen` is, but not what to call to get
+one. Without a declared function surface each lane invents its own, and
+integration becomes a rewrite. Declaring it up front costs one document and
+makes the fan-out actually parallel.
