@@ -162,6 +162,29 @@ const PRODUCED_BY_LABEL = {
 };
 
 /**
+ * A rendition's `notes` as something a client may see, or null.
+ *
+ * §4 gives `Rendition` one free-text field, and L7's `promoteProvenance` writes
+ * its promotion record into it ("promoted: verified by … on …"). That record is
+ * internal bookkeeping about who signed something off; putting it on screen in
+ * front of the client would be a small but real leak of the seller's process
+ * into the client's room. A note that opens with that marker is not rendered.
+ * Everything else the user wrote is rendered verbatim.
+ *
+ * Filed as a dispute against the contract (docs/disputes/L8-scenes.md): one
+ * field carrying both an annotation and an audit record is what forces this.
+ * @param {import('../core/contracts.d.ts').Rendition|null|undefined} rendition
+ * @returns {string|null}
+ */
+export function presentableNotes(rendition) {
+  if (!rendition || typeof rendition.notes !== 'string') return null;
+  const text = rendition.notes.trim();
+  if (!text) return null;
+  if (/^promoted\s*:/i.test(text)) return null;
+  return text;
+}
+
+/**
  * The state every layout needs and no layout should improvise: a scene with
  * nothing to show yet. It says which piece is missing, because the studio
  * preview is where this is seen and a blank panel there costs the user minutes.

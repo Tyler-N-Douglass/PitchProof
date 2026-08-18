@@ -21,8 +21,11 @@ let cached = null;
 /** @returns {{js: string, css: string}} */
 export function runtimeBundle() {
   if (cached) return cached;
+  // The composition root, not the bare runtime: `src/artifact.js` is what
+  // `scripts/build.mjs` bundles, and it is what an artifact actually carries —
+  // runtime plus L8's layouts plus L9's overlays, wired together.
   const { code } = bundle({
-    entry: join(SRC, 'runtime', 'index.js'),
+    entry: join(SRC, 'artifact.js'),
     root: SRC,
     global: 'PitchProofRuntime',
     banner: '/* PitchProof runtime — test bundle */',

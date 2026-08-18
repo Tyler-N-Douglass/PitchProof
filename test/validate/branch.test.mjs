@@ -33,14 +33,21 @@ function addBranch(proof, id, spec) {
   return proof;
 }
 
+/** The two fields `API.md` declares. L9 carries extra diagnostics beyond them. */
+const declaredCoverage = (deck) => {
+  const c = branchCoverage(deck);
+  return { unreachable: c.unreachable, noReturn: c.noReturn };
+};
+
 test('a well-formed deck has no coverage findings', async () => {
-  const coverage = branchCoverage(buildDeck(cleanProof()));
-  assert.deepEqual(coverage, { unreachable: [], noReturn: [] });
+  assert.deepEqual(declaredCoverage(buildDeck(cleanProof())), { unreachable: [], noReturn: [] });
   const findings = await preflight(cleanProof());
   assert.deepEqual(findings.filter((f) => f.code.startsWith('BRANCH_')), []);
 });
 
 test('an orphan branch — no anchor, no jump-index entry — is caught', async () => {
+  // L9 reports an orphan as both unreachable and unreturnable: with no anchor
+  // and no way in, there is no position for a return to resolve against either.
   const findings = await preflight(defectProof('BRANCH_UNREACHABLE'));
   const finding = findings.find((f) => f.code === 'BRANCH_UNREACHABLE');
   assert.ok(finding, 'the orphan was not caught');
@@ -105,8 +112,7 @@ test('a branch nested inside another branch resolves its return through its anch
     scenes: [scene('sc_legal0', 1, { headline: 'Claim rules' })],
     returnPolicy: 'anchor',
   });
-  const coverage = branchCoverage(buildDeck(proof));
-  assert.deepEqual(coverage, { unreachable: [], noReturn: [] }, 'a nested branch anchored off-spine still resolves');
+  assert.deepEqual(declaredCoverage(buildDeck(proof)), { unreachable: [], noReturn: [] }, 'a nested branch anchored off-spine still resolves');
   const findings = await preflight(proof);
   assert.deepEqual(findings.filter((f) => f.code.startsWith('BRANCH_')), []);
 });
@@ -118,7 +124,7 @@ test('the auto-fix for a stranded branch actually resolves it', async () => {
   assert.equal(fixes.length, 1);
   assert.match(fixes[0].label, /next spine scene/);
   const fixed = fixes[0].apply(proof);
-  assert.deepEqual(branchCoverage(buildDeck(fixed)).noReturn, []);
+  assert.deepEqual(declaredCoverage(buildDeck(fixed)).noReturn, []);
   const after = await preflight(fixed);
   assert.deepEqual(after.filter((f) => f.code === 'BRANCH_NO_RETURN'), []);
   // Purity: the proof handed in is untouched.
@@ -131,16 +137,14 @@ test('the auto-fix for an orphan branch makes it reachable', async () => {
   const fixes = autoFixes(proof, findings).filter((f) => f.finding.code === 'BRANCH_UNREACHABLE');
   assert.equal(fixes.length, 1);
   const fixed = fixes[0].apply(proof);
-  assert.deepEqual(branchCoverage(buildDeck(fixed)).unreachable, []);
+  assert.deepEqual(declaredCoverage(buildDeck(fixed)).unreachable, []);
   assert.deepEqual(proof.spine[0].branchAnchors, [], 'the original proof is untouched');
 });
 
 test('coverage is computed over the deck, so a branch id that is not in the deck is not invented', () => {
   const proof = copy(cleanProof());
   proof.spine[0].branchAnchors.push('bn_does_not_exist');
-  const coverage = branchCoverage(buildDeck(proof));
-  assert.deepEqual(coverage.unreachable, []);
-  assert.deepEqual(coverage.noReturn, []);
+  assert.deepEqual(declaredCoverage(buildDeck(proof)), { unreachable: [], noReturn: [] });
 });
 
 test('branch coverage findings are ordered and deterministic', async () => {

@@ -20,7 +20,7 @@ import { alignPair } from '../align.js';
 import { renderBlock } from '../blocks.js';
 import { blockText } from '../../core/contracts.js';
 import {
-  sceneHead, provenanceLabel, emptyState, waveGroup,
+  sceneHead, provenanceLabel, emptyState, waveGroup, presentableNotes,
   specimenMeta, specimenTitle, renditionLabel,
 } from '../parts.js';
 
@@ -93,8 +93,9 @@ function notesFor(ctx, mainBlocks) {
   const notes = [];
   rends.forEach((rendition, rIndex) => {
     const label = renditionLabel(rendition, rIndex);
-    if (typeof rendition.notes === 'string' && rendition.notes.trim()) {
-      notes.push({ row: 0, index: notes.length, label, kind: 'note', block: null, text: rendition.notes.trim(), rendition });
+    const written = presentableNotes(rendition);
+    if (written) {
+      notes.push({ row: 0, index: notes.length, label, kind: 'note', block: null, text: written, rendition });
     }
     const blocks = Array.isArray(rendition.blocks) ? rendition.blocks : [];
     const pairs = alignPair(mainBlocks, blocks);

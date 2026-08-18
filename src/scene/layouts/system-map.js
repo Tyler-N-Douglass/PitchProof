@@ -170,11 +170,10 @@ export function systemMap(ctx) {
           'data-pp-group': 'map/outputs',
           'data-pp-rendition': rendition.id,
         },
+        // Number, label, and — where §9 requires it — the provenance line. The
+        // chip is the labelled subtree for the output node of the same number.
         h('p', { class: 'pp-map-chip-label', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' },
           `${i + 1}. ${renditionLabel(rendition, i)}`),
-        renditionMeta(rendition)
-          ? h('p', { class: 'pp-map-chip-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, renditionMeta(rendition))
-          : null,
         provenanceLabel(rendition, ctx))),
         shown.length === 0
           ? h('li', { class: 'pp-map-chip pp-map-chip--empty', 'data-pp-box': 'mapLegend', 'data-pp-n': '1' },

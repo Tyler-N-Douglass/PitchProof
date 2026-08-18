@@ -29,8 +29,8 @@ import {
 import { attrOf, bodyOf, cloneTree, elements, linkParents, textOf } from '../../src/specimen/dom.js';
 import { buildSpecimen, restoreAllBlocks, restoreBlock } from '../../src/specimen/specimen.js';
 import {
-  FIXTURES, PARSER_SOURCE, blockKey, groundTruthBlocks, loadCorpus, loadFixture,
-  parseFixtureHtml, pct, scoreBlocks,
+  FIXTURES, PARSER_SOURCE, blockKey, fixtureHtml, groundTruthBlocks, loadCorpus,
+  loadFixture, parseFixtureHtml, pct, scoreBlocks,
 } from '../fixtures/specimen/corpus.mjs';
 
 /** §17.5's floor. Not to be lowered — fix the classifier instead. */
@@ -365,4 +365,27 @@ test('a specimen built with every captured page as siblings keeps its content', 
     assert.ok(specimen.wordCount > 20, `${fx.name}: words survive self-in-siblings`);
     assert.equal(specimen.chrome.siblingPages, corpus.length - 1);
   }
+});
+
+test('the measurement does not depend on which parser produced the tree', async () => {
+  // The corpus normally runs on L3's parser. The fixture-local builder exists
+  // so this lane could be scored before L3 landed; running the corpus through
+  // both proves the F1 above is a property of the classifier rather than of one
+  // parser's quirks — and keeps the fallback from rotting.
+  const { buildDoc } = await import('../fixtures/specimen/doc-builder.mjs');
+  const docs = FIXTURES.map((f) => ({ meta: f, doc: buildDoc(fixtureHtml(f.name)) }));
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
+  for (const entry of docs) {
+    const siblings = docs.filter((o) => o !== entry).map((o) => o.doc);
+    const { root } = stripChrome(entry.doc, { siblings });
+    const score = scoreBlocks(toBlocks(root, { media: [] }), groundTruthBlocks(entry.doc));
+    tp += score.tp; fp += score.fp; fn += score.fn;
+  }
+  const precision = tp / (tp + fp);
+  const recall = tp / (tp + fn);
+  const f1 = (2 * precision * recall) / (precision + recall);
+  console.log(`\n  chrome stripping — fixture-local parser: P=${pct(precision)} R=${pct(recall)} F1=${f1.toFixed(4)}\n`);
+  assert.ok(f1 >= F1_FLOOR, `F1 ${f1.toFixed(4)} under the fallback parser is below the §17.5 floor`);
 });

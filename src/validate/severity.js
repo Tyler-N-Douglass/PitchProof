@@ -117,6 +117,12 @@ export const NARROWABLE = {
     floor: 2,
     why: 'a dangling reference on a scene nothing in the deck reaches',
   },
+  BRANCH_NO_RETURN: {
+    floor: 2,
+    why: 'a branch that is merely unanchored — still reachable from the jump index, and it returns to the'
+      + ' position the jump was made from, so the presenter is not stranded; the declaration is incomplete,'
+      + ' not the navigation (L9\'s reading, relayed at integration)',
+  },
 };
 
 for (const code of Object.keys(NARROWABLE)) {

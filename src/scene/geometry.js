@@ -255,11 +255,13 @@ export function boxGeometry(slot, bpIn, params = {}) {
       const gap = geom(bp, 'fan-gap');
       const cols = fanColumns(bp, n);
       const rows = Math.max(1, Math.ceil(n / cols));
-      // `grid-auto-rows: minmax(0, 1fr)` on a full-height grid: every card gets
-      // an equal share of the height, which is what makes a count *felt*.
+      // `grid-auto-rows: minmax(--pp-sc-fan-card-min-h, 1fr)`: every card gets
+      // an equal share of the height — which is what makes a count *felt* — down
+      // to a floor, below which the grid overflows and the scene scrolls rather
+      // than showing nine cards too short to read.
       return inset(
         trackWidth(grid.widthPx, cols, gap),
-        trackWidth(grid.heightPx, rows, gap),
+        Math.max(geom(bp, 'fan-card-min-h'), trackWidth(grid.heightPx, rows, gap)),
         geom(bp, 'card-pad'),
       );
     }

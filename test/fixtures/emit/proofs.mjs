@@ -13,6 +13,7 @@ import { defaultEmitOptions } from '../../../src/core/contracts.js';
 import { base64Encode } from '../../../src/core/bytes.js';
 import { encodePng } from '../../../src/emit/png.js';
 import { Pcg32 } from '../../../src/core/prng.js';
+import { promoteProvenance } from '../../../src/recipe/index.js';
 
 const CAPTURED_AT = '2026-02-01T09:00:00.000Z';
 
@@ -191,12 +192,18 @@ export function emitProof(options = {}) {
     label: 'de-DE', producedBy: 'adapter', media: [m3],
   });
   const rdClient = rendition(contentId('rendition', 'client'), sp1.id, 'client-supplied', { label: 'Email variant' });
-  const rdVerified = rendition(contentId('rendition', 'verified'), sp2.id, options.verifiedProvenance || 'verified-by-user', {
-    label: 'PDP module',
-    notes: options.promotionNote === undefined
-      ? 'promoted by: t.douglass@northwind.example at 2026-02-14T10:12:00.000Z'
-      : options.promotionNote,
-  });
+  // A real promotion, written by L7's `promoteProvenance` — the only route to
+  // `verified-by-user` (§9). `options.promotionNote` replaces it with whatever
+  // an attacker would try instead, which is what the §22.6 tests need.
+  const rdVerified = options.promotionNote === undefined
+    ? promoteProvenance(
+      rendition(contentId('rendition', 'verified'), sp2.id, 'illustrative', { label: 'PDP module' }),
+      { by: 't.douglass@northwind.example', at: '2026-02-14T10:12:00.000Z' },
+    )
+    : rendition(contentId('rendition', 'verified'), sp2.id, options.verifiedProvenance || 'verified-by-user', {
+      label: 'PDP module',
+      notes: options.promotionNote,
+    });
   const rdTemplate = rendition(contentId('rendition', 'template'), sp2.id, 'illustrative', {
     label: 'SMS', producedBy: 'template',
   });

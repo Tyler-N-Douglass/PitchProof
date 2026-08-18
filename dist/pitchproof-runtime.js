@@ -4755,7 +4755,7 @@ __modules["scene/layouts/fan-out.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
 const { renderBlock, summarize } = __require("scene/blocks.js");
-const { sceneHead, panelHead, provenanceLabel, emptyState, waveGroup, specimenMeta, specimenTitle, renditionLabel, renditionMeta } = __require("scene/parts.js");
+const { sceneHead, panelHead, provenanceLabel, emptyState, waveGroup, specimenMeta, specimenTitle, renditionLabel } = __require("scene/parts.js");
 
 
 
@@ -4842,11 +4842,12 @@ function renderGrid(ctx, rends) {
         'data-pp-group': group,
         'data-pp-rendition': rendition.id,
       },
+      // The card carries the label, the content and — where §9 requires it —
+      // the provenance line. It deliberately does not carry the `producedBy`
+      // meta the other layouts show: a fan card is small, and the room's
+      // attention belongs on the client's own content in it.
       h('header', { class: 'pp-fan-card-head' },
-        h('p', { class: 'pp-fan-card-label', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' }, renditionLabel(rendition, index)),
-        renditionMeta(rendition)
-          ? h('p', { class: 'pp-fan-card-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, renditionMeta(rendition))
-          : null),
+        h('p', { class: 'pp-fan-card-label', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' }, renditionLabel(rendition, index))),
       h('div', { class: 'pp-fan-card-body' },
         title ? h('p', { class: 'pp-fan-card-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '2' }, title) : null,
         blurb ? h('p', { class: 'pp-fan-card-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2' }, blurb) : null,
@@ -5044,7 +5045,8 @@ function fullBleed(ctx) {
     'data-pp-group': 'head',
     'data-pp-rendition': pick.rendition ? pick.rendition.id : null,
   },
-  pick.source ? h('p', { class: 'pp-bleed-kicker', 'data-pp-tx': 'kicker' }, pick.source) : null,
+  h('div', { class: 'pp-bleed-overlay-inner' },
+    pick.source ? h('p', { class: 'pp-bleed-kicker', 'data-pp-tx': 'kicker' }, pick.source) : null,
   scene.headline
     ? h('h2', { class: 'pp-bleed-headline', 'data-pp-tx': 'displayXL', 'data-pp-clamp': '3' }, scene.headline)
     : null,
@@ -5054,9 +5056,9 @@ function fullBleed(ctx) {
   pick.caption
     ? h('p', { class: 'pp-bleed-caption', 'data-pp-tx': 'caption', 'data-pp-clamp': '2' }, pick.caption)
     : null,
-  !scene.headline && !scene.subhead && !pick.caption && !pick.source
-    ? emptyState('This scene has no headline yet.')
-    : null,
+    !scene.headline && !scene.subhead && !pick.caption && !pick.source
+      ? emptyState('This scene has no headline yet.')
+      : null),
   provenanceLabel(pick.rendition, ctx)));
 }
 
@@ -6234,6 +6236,7 @@ const GEOM = {
     'cell-pad': 6,
     'split-gap': 16,
     'fan-gap': 12,
+    'fan-card-min-h': 140,
     'fan-cols': 2,
     'fan-source-w': '100%',
     'fan-source-h': 140,
@@ -6253,7 +6256,7 @@ const GEOM = {
     'index-num-w': 32,
     'index-gap': 12,
     'index-row-gap': 10,
-    'map-legend-h': 96,
+    'map-legend-h': 120,
     'map-legend-cols': 1,
     'map-canvas-min-h': 180,
   },
@@ -6267,6 +6270,7 @@ const GEOM = {
     'cell-pad': 8,
     'split-gap': 24,
     'fan-gap': 18,
+    'fan-card-min-h': 150,
     'fan-cols': 3,
     'fan-source-w': 280,
     'fan-source-h': 140,
@@ -6286,7 +6290,7 @@ const GEOM = {
     'index-num-w': 44,
     'index-gap': 14,
     'index-row-gap': 12,
-    'map-legend-h': 88,
+    'map-legend-h': 104,
     'map-legend-cols': 3,
     'map-canvas-min-h': 240,
   },
@@ -6300,6 +6304,7 @@ const GEOM = {
     'cell-pad': 9,
     'split-gap': 32,
     'fan-gap': 24,
+    'fan-card-min-h': 160,
     'fan-cols': 4,
     'fan-source-w': 360,
     'fan-source-h': 140,
@@ -6319,8 +6324,8 @@ const GEOM = {
     'index-num-w': 52,
     'index-gap': 16,
     'index-row-gap': 14,
-    'map-legend-h': 88,
-    'map-legend-cols': 4,
+    'map-legend-h': 104,
+    'map-legend-cols': 5,
     'map-canvas-min-h': 280,
   },
 };
@@ -6741,11 +6746,13 @@ function boxGeometry(slot, bpIn, params = {}) {
       const gap = geom(bp, 'fan-gap');
       const cols = fanColumns(bp, n);
       const rows = Math.max(1, Math.ceil(n / cols));
-      // `grid-auto-rows: minmax(0, 1fr)` on a full-height grid: every card gets
-      // an equal share of the height, which is what makes a count *felt*.
+      // `grid-auto-rows: minmax(--pp-sc-fan-card-min-h, 1fr)`: every card gets
+      // an equal share of the height — which is what makes a count *felt* — down
+      // to a floor, below which the grid overflows and the scene scrolls rather
+      // than showing nine cards too short to read.
       return inset(
         trackWidth(grid.widthPx, cols, gap),
-        trackWidth(grid.heightPx, rows, gap),
+        Math.max(geom(bp, 'fan-card-min-h'), trackWidth(grid.heightPx, rows, gap)),
         geom(bp, 'card-pad'),
       );
     }
@@ -7202,11 +7209,10 @@ function systemMap(ctx) {
           'data-pp-group': 'map/outputs',
           'data-pp-rendition': rendition.id,
         },
+        // Number, label, and — where §9 requires it — the provenance line. The
+        // chip is the labelled subtree for the output node of the same number.
         h('p', { class: 'pp-map-chip-label', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' },
           `${i + 1}. ${renditionLabel(rendition, i)}`),
-        renditionMeta(rendition)
-          ? h('p', { class: 'pp-map-chip-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, renditionMeta(rendition))
-          : null,
         provenanceLabel(rendition, ctx))),
         shown.length === 0
           ? h('li', { class: 'pp-map-chip pp-map-chip--empty', 'data-pp-box': 'mapLegend', 'data-pp-n': '1' },
@@ -7839,6 +7845,10 @@ function collectTextBoxes(node, env) {
         if (typeof attrs['data-pp-ow'] === 'string') box.overflowWrap = attrs['data-pp-ow'];
         if (attrs['data-pp-clamp'] !== undefined && attrs['data-pp-clamp'] !== null) {
           box.maxLines = Number(attrs['data-pp-clamp']);
+          // A one-line clamp is `white-space: nowrap` plus an ellipsis in the
+          // stylesheet rather than a `-webkit-box`, so the run does not wrap and
+          // the detector should be checking its width, not its line count.
+          if (box.maxLines === 1 && box.whiteSpace === undefined) box.whiteSpace = 'nowrap';
         }
         box.fontStack = resolved.fontStack;
         box.containerId = next.containerId;

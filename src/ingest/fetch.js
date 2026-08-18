@@ -277,14 +277,28 @@ async function captureResponse(res, url, strategy, deps) {
 }
 
 /**
+ * The message for something that is not a fetchable address. It never echoes an
+ * internal value back at the user: a `[object Object]` in a failure message is
+ * a defect, not a diagnostic.
+ * @param {unknown} url
+ * @returns {string}
+ */
+function badUrlMessage(url) {
+  const printable = typeof url === 'string' && url.trim() ? `"${url.trim().slice(0, 80)}"` : '';
+  return printable
+    ? `${printable} is not an address I can fetch. A full address including https:// works best.`
+    : 'No address was given. Paste the full page URL, including https://.';
+}
+
+/**
  * Strategy 1 — direct fetch.
  * @param {string} url
  * @param {{http?: HttpFn, clock: () => string}} deps
  * @returns {Promise<import('../core/result.js').Result<RawCapture>>}
  */
 export async function fetchDirect(url, deps) {
-  const target = resolveUrl(null, url);
-  if (!target) return err(`"${url}" is not a URL I can fetch. A full address including https:// works best.`);
+  const target = typeof url === 'string' ? resolveUrl(null, url) : null;
+  if (!target) return err(badUrlMessage(url));
   if (typeof deps.http !== 'function') {
     return err('No network transport is configured, so the direct fetch was skipped. ' + nextStepsMessage(['direct-fetch']));
   }
@@ -315,8 +329,8 @@ export async function fetchViaProxy(url, deps) {
   if (!base) {
     return err('No CORS proxy is configured. Paste a proxy base URL you trust in Settings to enable this route.');
   }
-  const target = resolveUrl(null, url);
-  if (!target) return err(`"${url}" is not a URL I can fetch.`);
+  const target = typeof url === 'string' ? resolveUrl(null, url) : null;
+  if (!target) return err(badUrlMessage(url));
   if (typeof deps.http !== 'function') {
     return err('No network transport is configured, so the proxy route was skipped. ' + nextStepsMessage(['direct-fetch', 'cors-proxy']));
   }

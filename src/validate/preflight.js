@@ -23,7 +23,9 @@
 
 import { BREAKPOINTS, validateProofShape } from '../core/contracts.js';
 import { buildDeck } from '../runtime/deck.js';
+import { renderLayout, missingLayouts } from '../runtime/layouts.js';
 import { elementId } from '../core/ids.js';
+import { registerAllLayouts } from '../scene/index.js';
 import { RULES } from './rules.js';
 import { sortFindings } from './finding.js';
 import { contrastRatio } from './lane-brand.js';
@@ -160,6 +162,29 @@ export function measureDeck(proof, deck, breakpoints, deps) {
 }
 
 /**
+ * A scene renderer for the checks that have to look at rendered markup rather
+ * than at the model — L10's `assertProvenance`, which needs to find the
+ * illustrative label inside the subtree that carries the rendition.
+ *
+ * It renders through L2's layout registry, so preflight sees exactly the tree
+ * the artifact will paint. Layouts are registered on demand: the studio
+ * registers them at boot, but a headless sweep may be the first thing to run.
+ *
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @returns {(scene: any) => any}
+ */
+export function makeSceneRenderer(proof) {
+  const specimenById = new Map((proof.specimens || []).map((s) => [s.id, s]));
+  const renditionById = new Map((proof.renditions || []).map((r) => [r.id, r]));
+  /** @type {Map<string, any>} */
+  const mediaById = new Map();
+  for (const specimen of proof.specimens || []) for (const m of specimen.media || []) mediaById.set(m.id, m);
+  for (const rendition of proof.renditions || []) for (const m of rendition.media || []) mediaById.set(m.id, m);
+  if (missingLayouts().length > 0) registerAllLayouts();
+  return (scene) => renderLayout(layoutContextFor(proof, scene, specimenById, renditionById, mediaById));
+}
+
+/**
  * The §14 automated sweep.
  *
  * @param {import('../core/contracts.d.ts').Proof} proof
@@ -188,6 +213,7 @@ export async function runPreflight(proof, options = {}) {
   const measurements = measureDeck(proof, deck, breakpoints, deps);
 
   const ctx = {
+    renderScene: options.renderScene || makeSceneRenderer(proof),
     proof,
     deck,
     breakpoints,

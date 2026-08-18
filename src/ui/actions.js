@@ -298,14 +298,14 @@ export const ACTIONS = [
   },
   {
     id: 'project.setName', label: 'Rename the project', group: 'Project', palette: false, control: true,
-    mutates: true, sample: () => ({ value: 'Northwind proof' }),
+    mutates: true, sample: () => ({ value: 'Northwind proof — renamed' }),
     run: (app, _arg, ctx) => app.mutate('Rename project', (doc) => M.setProjectName(doc, value(ctx)), {
       coalesceKey: 'project.setName', scope: 'project',
     }),
   },
   {
     id: 'project.setProspect', label: 'Set the prospect name', group: 'Project', palette: false, control: true,
-    mutates: true, sample: () => ({ value: 'Northwind Industrial' }),
+    mutates: true, sample: () => ({ value: 'Northwind Industrial GmbH' }),
     run: (app, _arg, ctx) => app.mutate('Set prospect name', (doc) => M.setProspectName(doc, value(ctx)), {
       coalesceKey: 'project.setProspect', scope: 'project',
     }),
@@ -342,7 +342,7 @@ export const ACTIONS = [
   },
   {
     id: 'brand.extract', label: 'Extract brand from a URL', group: 'Brand',
-    mutates: true, sample: () => ({}),
+    mutates: true, sample: (app) => { app.setDraft('brand.url', 'https://www.northwind.example'); return {}; },
     run: async (app) => {
       const url = String(app.draft('brand.url', '')).trim();
       if (!url) { app.notify('warn', 'Type the prospect’s URL first.'); return; }
@@ -356,7 +356,7 @@ export const ACTIONS = [
   },
   {
     id: 'brand.extractFiles', label: 'Extract brand from files', group: 'Brand', palette: false, control: true,
-    mutates: true, sample: () => ({}),
+    mutates: true, sample: () => ({ element: fakeFileInput('brand.html') }),
     run: async (app, _arg, ctx) => {
       const files = ctx.element && ctx.element.files
         ? await readFiles(ctx.element.files)
@@ -562,7 +562,7 @@ export const ACTIONS = [
   },
   {
     id: 'specimen.capture', label: 'Capture a specimen from a URL', group: 'Specimens',
-    mutates: true, sample: () => ({}),
+    mutates: true, sample: (app) => { app.setDraft('specimen.url', 'https://www.northwind.example/coatings'); return {}; },
     run: async (app) => {
       const url = String(app.draft('specimen.url', '')).trim();
       if (!url) { app.notify('warn', 'Type a URL first.'); return; }
@@ -573,7 +573,7 @@ export const ACTIONS = [
   },
   {
     id: 'specimen.importFiles', label: 'Import specimen files', group: 'Specimens', palette: false, control: true,
-    mutates: true, sample: () => ({}),
+    mutates: true, sample: () => ({ element: fakeFileInput('page.html') }),
     run: async (app, _arg, ctx) => {
       const files = ctx.element && ctx.element.files
         ? await readFiles(ctx.element.files)
@@ -592,7 +592,7 @@ export const ACTIONS = [
   },
   {
     id: 'specimen.importPaste', label: 'Capture from pasted HTML', group: 'Specimens',
-    mutates: true, sample: () => ({}),
+    mutates: true, sample: (app) => { app.setDraft('specimen.html', '<html><body><h1>Hi</h1></body></html>'); return {}; },
     run: (app) => {
       const html = String(app.draft('specimen.html', ''));
       if (!html.trim()) { app.notify('warn', 'Paste the page source first.'); return undefined; }
@@ -925,10 +925,10 @@ export const ACTIONS = [
   },
   {
     id: 'scene.setSpecimen', label: 'Set a scene specimen', group: 'Scenes', palette: false, control: true,
-    mutates: true, sample: (app) => ({
-      arg: (app.proof.spine[0] || {}).id || 'sc_none',
-      value: (app.proof.specimens[0] || {}).id || '',
-    }),
+    mutates: true, sample: (app) => {
+      const target = (app.proof.spine || []).find((s) => !s.specimenId) || app.proof.spine[0] || {};
+      return { arg: target.id || 'sc_none', value: (app.proof.specimens[0] || {}).id || '' };
+    },
     run: (app, arg, ctx) => app.mutate('Set scene specimen', (doc) => M.patchScene(doc, String(arg), {
       specimenId: value(ctx) || null,
     }), { scope: 'scenes' }),
@@ -1018,7 +1018,7 @@ export const ACTIONS = [
   },
   {
     id: 'beat.setDwell', label: 'Set a pacing hint', group: 'Scenes', palette: false, control: true,
-    mutates: true, sample: (app) => ({ arg: `${(app.proof.spine[0] || {}).id || 'sc_none'}:0`, value: '20' }),
+    mutates: true, sample: (app) => ({ arg: `${(app.proof.spine[0] || {}).id || 'sc_none'}:0`, value: '35' }),
     run: (app, arg, ctx) => {
       const { id, index } = idIndex(arg);
       const seconds = Number(value(ctx));
@@ -1080,7 +1080,7 @@ export const ACTIONS = [
   {
     id: 'branch.addAlias', label: 'Add an alias to a branch', group: 'Branches', palette: false, control: true,
     mutates: true, sample: (app) => {
-      app.setDraft('branch.alias', 'sign-off');
+      app.setDraft('branch.alias', 'procurement gate');
       return { arg: (app.proof.branches[0] || {}).id || 'bn_none' };
     },
     run: (app, arg) => {
@@ -1191,7 +1191,17 @@ export const ACTIONS = [
   },
   {
     id: 'rehearse.autoFix', label: 'Apply an auto-fix', group: 'Rehearse', palette: false, control: true,
-    mutates: true, sample: () => ({ arg: '0' }),
+    mutates: true,
+    sample: (app) => {
+      if (!(app.ui.sweep.findings || []).length) {
+        app.ui.sweep = {
+          ...app.ui.sweep,
+          findings: [{ id: 'fd_sample', severity: 2, code: 'BEAT_EMPTY', message: 'A beat reveals nothing.', locus: {}, autoFixAvailable: true }],
+          at: app.clock(),
+        };
+      }
+      return { arg: '0' };
+    },
     run: (app, arg) => {
       const fixes = app.services.autoFixes(app.proof, app.ui.sweep.findings);
       const fix = fixes[Number(arg) || 0];
@@ -1453,6 +1463,26 @@ function addCapture(app, capture, label) {
   if (!built.ok) { app.notify('bad', built.error, { sticky: true }); return; }
   app.select({ specimenId: built.value.id });
   app.mutate(label, (doc) => M.addSpecimen(doc, built.value), { scope: 'specimens' });
+}
+
+
+/**
+ * A stand-in for a `<input type=file>` with files on it, used by the samples the
+ * undo test drives. It exists in the registry rather than in the test because a
+ * sample has to be able to produce a *real* mutation, and an import action's
+ * mutation depends on having files.
+ * @param {string} name
+ * @returns {any}
+ */
+export function fakeFileInput(name) {
+  return {
+    value: '',
+    files: [{
+      name,
+      type: 'text/html',
+      arrayBuffer: async () => new TextEncoder().encode('<html><body><h1>Sample</h1></body></html>').buffer,
+    }],
+  };
 }
 
 /**

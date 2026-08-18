@@ -4,69 +4,47 @@
  * §4 says `provenance` must "NEVER default to 'verified-by-user'". §9 says the
  * only route to it is an explicit user promotion, and API.md gives L7 the
  * function that performs one: `promoteProvenance(rendition, {by, at})`, which
- * "records who and when" in `rendition.notes`.
+ * records who and when.
  *
  * The emitter cannot take the claim on trust. A rendition that says
  * `verified-by-user` with nothing behind it is the §22.6 failure exactly — a
  * proof implying that generated sample content is the client's approved copy —
- * and §9 puts the enforcement here rather than in the UI. So the emitter reads
- * the record itself.
+ * and §9 puts the enforcement here rather than in the UI.
  *
- * The reader is deliberately tolerant about *form* and strict about *content*:
- * it accepts a structured `promotion` field or a note, and in either case it
- * requires both a person and a timestamp. A note that says "promoted" and
- * nothing else is not a record of anything.
+ * **The reader is L7's, not the emitter's.** `hasPromotionRecord` comes from
+ * `src/recipe/index.js`, which owns the record format. Two readers of one
+ * format is one reader too many: the moment they disagree, the artifact ships
+ * either an unlabelled lie or a false refusal, and neither lane would know
+ * which of them was wrong. L7's reader is also stricter than a note-scraper can
+ * be — a record is bound to the id of the rendition it was written for, so a
+ * record copied from one rendition onto another does not verify.
+ *
+ * What this module adds is the emitter's *judgement* on top of that reading:
+ * which renditions must carry a label, and which claims were never earned.
  *
  * @module emit/promotion
  */
 
-/**
- * @typedef {object} PromotionRecord
- * @property {string} by
- * @property {string} at
- * @property {'field'|'note'} source
- */
-
-const NOTE_PATTERNS = [
-  /promoted\s+by\s*[:=]?\s*([^\n;|]+?)\s+(?:on|at)\s*[:=]?\s*([0-9][^\s\n;|]*)/i,
-  /promoted\s*[:=]\s*([^\n;|]+?)\s+(?:on|at)\s*[:=]?\s*([0-9][^\s\n;|]*)/i,
-  /verified\s+by\s*[:=]?\s*([^\n;|]+?)\s+(?:on|at)\s*[:=]?\s*([0-9][^\s\n;|]*)/i,
-];
+import { hasPromotionRecord as recipeHasPromotionRecord, readPromotionRecord } from '../recipe/index.js';
 
 /**
- * Read a promotion record off a rendition, or return null.
+ * The promotion record that currently stands for a rendition, or null.
  * @param {import('../core/contracts.d.ts').Rendition} rendition
- * @returns {PromotionRecord|null}
+ * @returns {{by: string, at: string, of: string, from: string}|null}
  */
 export function promotionRecord(rendition) {
   if (!rendition || typeof rendition !== 'object') return null;
-
-  const structured = /** @type {any} */ (rendition).promotion;
-  if (structured && typeof structured === 'object') {
-    const by = typeof structured.by === 'string' ? structured.by.trim() : '';
-    const at = typeof structured.at === 'string' ? structured.at.trim() : '';
-    if (by && at) return { by, at, source: 'field' };
-  }
-
-  const notes = typeof rendition.notes === 'string' ? rendition.notes : '';
-  if (!notes) return null;
-
-  const asJson = /"promotedBy"\s*:\s*"([^"]+)"[\s\S]*?"promotedAt"\s*:\s*"([^"]+)"/.exec(notes);
-  if (asJson) return { by: asJson[1].trim(), at: asJson[2].trim(), source: 'note' };
-
-  for (const re of NOTE_PATTERNS) {
-    const m = re.exec(notes);
-    if (m && m[1].trim() && m[2].trim()) return { by: m[1].trim(), at: m[2].trim(), source: 'note' };
-  }
-  return null;
+  return readPromotionRecord(rendition);
 }
 
 /**
+ * Does this rendition carry a promotion record that verifies against itself?
  * @param {import('../core/contracts.d.ts').Rendition} rendition
  * @returns {boolean}
  */
 export function hasPromotionRecord(rendition) {
-  return promotionRecord(rendition) !== null;
+  if (!rendition || typeof rendition !== 'object') return false;
+  return recipeHasPromotionRecord(rendition);
 }
 
 /**

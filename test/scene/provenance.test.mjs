@@ -22,7 +22,7 @@ import { normalizeEmitOptions, SCENE_LAYOUTS } from '../../src/core/contracts.js
 import {
   buildScene, renderSceneTree, measureScene, PROVENANCE_LABEL_CLASS, needsProvenanceLabel,
 } from '../../src/scene/index.js';
-import { layoutCases, contextFor, specimen, rendition, localeFanout } from '../fixtures/scene/content.mjs';
+import { layoutCases, contextFor, specimen, rendition, localeFanout, channelVariants } from '../fixtures/scene/content.mjs';
 
 /** Every element carrying a class, as a flat list with its ancestry. */
 function findAll(tree, predicate) {
@@ -203,4 +203,23 @@ test('a rendition rendered in two places in one layout is labelled in both', () 
     const labels = findAll(node, isLabel);
     assert.ok(labels.length > 0, `a rendition subtree for ${node.a['data-pp-rendition']} carries no label`);
   }
+});
+
+test('a promotion record never reaches the screen', () => {
+  // §4 gives `Rendition` one notes field and L7 writes its promotion record
+  // into it. That record is the seller's bookkeeping, not the client's content.
+  const rends = channelVariants();
+  const promoted = rends.find((r) => r.provenance === 'verified-by-user');
+  assert.match(promoted.notes, /^promoted:/, 'the fixture carries a promotion record');
+  const spec = specimen();
+  for (const layout of SCENE_LAYOUTS) {
+    const scene = buildScene({ layout, specimen: spec, renditions: rends, headline: 'Notes' });
+    const html = toHtml(renderSceneTree(scene, contextFor(scene, { specimen: spec, renditions: rends })));
+    assert.ok(!html.includes('promoted:'), `${layout} rendered a promotion record`);
+    assert.ok(!html.includes('t.douglass'), `${layout} rendered who promoted it`);
+  }
+  // …while a note the user actually wrote is rendered verbatim.
+  const scene = buildScene({ layout: 'sideNote', specimen: spec, renditions: rends, headline: 'Notes' });
+  const html = toHtml(renderSceneTree(scene, contextFor(scene, { specimen: spec, renditions: rends })));
+  assert.ok(html.includes('Subject line held to 48 characters'), 'a real note is shown');
 });

@@ -50,6 +50,7 @@
   --pp-sc-bleed-pad: 16px;
   --pp-sc-card-pad: 10px;
   --pp-sc-cell-pad: 6px;
+  --pp-sc-fan-card-min-h: 140px;
   --pp-sc-fan-cols: 2;
   --pp-sc-fan-gap: 12px;
   --pp-sc-fan-source-gap: 16px;
@@ -63,7 +64,7 @@
   --pp-sc-list-marker-w: 14px;
   --pp-sc-map-canvas-min-h: 180px;
   --pp-sc-map-legend-cols: 1;
-  --pp-sc-map-legend-h: 96px;
+  --pp-sc-map-legend-h: 120px;
   --pp-sc-note-gap: 12px;
   --pp-sc-note-pad: 12px;
   --pp-sc-note-w: 100%;
@@ -116,6 +117,7 @@
     --pp-sc-bleed-pad: 22px;
     --pp-sc-card-pad: 12px;
     --pp-sc-cell-pad: 8px;
+    --pp-sc-fan-card-min-h: 150px;
     --pp-sc-fan-cols: 3;
     --pp-sc-fan-gap: 18px;
     --pp-sc-fan-source-gap: 24px;
@@ -129,7 +131,7 @@
     --pp-sc-list-marker-w: 16px;
     --pp-sc-map-canvas-min-h: 240px;
     --pp-sc-map-legend-cols: 3;
-    --pp-sc-map-legend-h: 88px;
+    --pp-sc-map-legend-h: 104px;
     --pp-sc-note-gap: 24px;
     --pp-sc-note-pad: 14px;
     --pp-sc-note-w: 260px;
@@ -183,6 +185,7 @@
     --pp-sc-bleed-pad: 28px;
     --pp-sc-card-pad: 14px;
     --pp-sc-cell-pad: 9px;
+    --pp-sc-fan-card-min-h: 160px;
     --pp-sc-fan-cols: 4;
     --pp-sc-fan-gap: 24px;
     --pp-sc-fan-source-gap: 32px;
@@ -195,8 +198,8 @@
     --pp-sc-index-row-gap: 14px;
     --pp-sc-list-marker-w: 18px;
     --pp-sc-map-canvas-min-h: 280px;
-    --pp-sc-map-legend-cols: 4;
-    --pp-sc-map-legend-h: 88px;
+    --pp-sc-map-legend-cols: 5;
+    --pp-sc-map-legend-h: 104px;
     --pp-sc-note-gap: 32px;
     --pp-sc-note-pad: 16px;
     --pp-sc-note-w: 320px;
@@ -703,6 +706,7 @@
 
 .pp-fan {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--pp-sc-fan-source-h) minmax(0, 1fr);
   gap: var(--pp-sc-fan-source-gap);
   min-height: 0;
@@ -728,7 +732,7 @@
 .pp-fan-grid {
   display: grid;
   grid-template-columns: repeat(var(--pp-sc-fan-cols), minmax(0, 1fr));
-  grid-auto-rows: minmax(0, 1fr);
+  grid-auto-rows: minmax(var(--pp-sc-fan-card-min-h), 1fr);
   gap: var(--pp-sc-fan-gap);
   min-height: 0;
   height: 100%;
@@ -1007,7 +1011,6 @@
   color: var(--pp-on-surface);
 }
 .pp-map-chip-label { margin: 0; }
-.pp-map-chip-meta { margin: 2px 0 0; opacity: 0.62; }
 .pp-map-chip--empty { border-style: dashed; }
 
 /* ---------------------------------------------------- layout: contentsIndex */

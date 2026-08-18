@@ -376,6 +376,26 @@ const branchUnreachable = {
   },
 };
 
+/**
+ * §11's return failures, separated by cause.
+ *
+ * L9 reports *why* a branch has no resolved return, and the causes are not
+ * equally serious. A branch with no scenes, or a proof with no spine, or an
+ * anchor chain that never reaches the spine, leaves a presenter with nowhere to
+ * go — §22.4's failure exactly, and severity 1. A branch that is merely
+ * **unanchored** is different: it is still reachable from the jump index, and a
+ * jump returns to the position it was made from, so nobody is stranded. What is
+ * missing is the declaration, not the way back. That narrows to severity 2 (L9's
+ * reading, relayed at integration and recorded in `docs/decisions/L11-validate.md`).
+ */
+const RETURN_REASONS = {
+  'no-scenes': { severity: 1, why: 'it has no scenes at all, so there is no last scene to return from', fix: null },
+  'nothing-to-return-from': { severity: 1, why: 'it has no scenes at all, so there is no last scene to return from', fix: null },
+  'empty-spine': { severity: 1, why: 'its return policy is "nextSpineScene" and the spine is empty', fix: null },
+  'anchor-chain-never-reaches-spine': { severity: 1, why: 'its return policy is "nextSpineScene" but its anchor chain never reaches the spine', fix: 'anchor-policy' },
+  unanchored: { severity: 2, why: 'no scene anchors it, so the deck does not declare where it belongs', fix: 'anchor-scene' },
+};
+
 /** @type {Rule} */
 const branchNoReturn = {
   code: 'BRANCH_NO_RETURN',
@@ -386,26 +406,49 @@ const branchNoReturn = {
   run(ctx) {
     const coverage = ctx.deps.branchCoverage(ctx.deck);
     const byId = new Map((ctx.proof.branches || []).map((b) => [b.id, b]));
+    const detailById = new Map(((coverage.details) || []).map((d) => [d.branchId, d]));
     const spineLength = (ctx.proof.spine || []).length;
+
     return sortFindings((coverage.noReturn || []).map((branchId) => {
       const branch = byId.get(branchId);
-      const policy = branch ? branch.returnPolicy : 'anchor';
-      const empty = branch ? (branch.scenes || []).length === 0 : false;
-      const reason = empty
-        ? 'it has no scenes at all, so there is no last scene to return from'
-        : policy === 'anchor'
-          ? 'its return policy is "anchor" and no scene anchors it, so there is no anchor to return to'
-          : 'its return policy is "nextSpineScene" and the spine is empty';
-      const remedy = spineLength > 0 && !empty
-        ? 'Auto-fix switches it to "nextSpineScene", which always resolves while the spine has scenes.'
-        : 'Give the branch scenes and give the proof a spine to return to.';
+      const detail = detailById.get(branchId);
+      const reasons = (detail && detail.reasons) || [];
+      // The most serious reason decides, so a branch that is both unanchored and
+      // empty is reported at the severity the emptiness earns.
+      let worst = { severity: /** @type {1|2} */ (1), why: 'its return target cannot be resolved', fix: null };
+      let found = false;
+      for (const reason of reasons) {
+        const known = RETURN_REASONS[reason];
+        if (!known) continue;
+        if (!found || known.severity < worst.severity) { worst = known; found = true; }
+      }
+      const canFix = worst.fix === 'anchor-policy'
+        || (worst.fix === 'anchor-scene' && spineLength > 0);
+      const remedy = worst.fix === 'anchor-policy'
+        ? 'Auto-fix returns it to its anchor instead, which is a position that exists.'
+        : worst.fix === 'anchor-scene'
+          ? (spineLength > 0
+            ? 'Auto-fix anchors it to the opening scene so the deck declares where it belongs; move the anchor to wherever the objection actually lands.'
+            : 'Give the proof a spine for the branch to hang off.')
+          : 'Give the branch scenes, and give the proof a spine to return to.';
+      const consequence = worst.severity === 1
+        ? 'A presenter who jumps into it mid-pitch is stranded there.'
+        : 'The presenter can still reach it from the jump index and still gets back, but the deck never says where it belongs.';
       return makeFinding({
         code: 'BRANCH_NO_RETURN',
+        severity: worst.severity === 1 ? undefined : 2,
         locus: { branchId },
         key: `noreturn:${branchId}`,
-        autoFixAvailable: spineLength > 0 && !empty,
-        message: `Branch "${branch ? branch.objection || branchId : branchId}" cannot return to the spine: ${reason}. A presenter who jumps into it mid-pitch is stranded there. ${remedy}`,
-        detail: { branchId, returnPolicy: policy, sceneCount: branch ? (branch.scenes || []).length : 0, spineLength },
+        autoFixAvailable: canFix,
+        message: `Branch "${branch ? branch.objection || branchId : branchId}" has no resolved return: ${worst.why}. ${consequence} ${remedy}`,
+        detail: {
+          branchId,
+          returnPolicy: branch ? branch.returnPolicy : null,
+          sceneCount: branch ? (branch.scenes || []).length : 0,
+          spineLength,
+          reasons,
+          fixKind: canFix ? worst.fix : null,
+        },
       });
     }));
   },
@@ -486,7 +529,17 @@ const provenanceUnlabeled = {
     }
 
     if (typeof ctx.html === 'string' && ctx.html.length > 0) {
-      for (const finding of ctx.deps.assertProvenance(proof, ctx.html, ctx.css || '') || []) {
+      const emitFindings = ctx.deps.assertProvenance(proof, ctx.html, ctx.css || '', {
+        renderScene: ctx.renderScene,
+        labelDisableRequested: options.labelIllustrativeContent === false,
+        mode: options.mode,
+      }) || [];
+      for (const finding of emitFindings) {
+        // The promotion-record and label-option checks are the two preflight
+        // already makes from the model above, with an auto-fix attached. Taking
+        // L10's copy as well would report one defect twice.
+        const check = finding.locus && finding.locus.check;
+        if (check === 'promotion-record' || check === 'label-option') continue;
         out.push(makeFinding({
           code: FINDING_CODES.includes(finding.code) ? finding.code : 'PROVENANCE_UNLABELED',
           locus: finding.locus,
@@ -563,10 +616,19 @@ const networkReference = {
       }
     }
 
-    /** @param {string|undefined} text @param {string} source */
-    const scanDocument = (text, source) => {
+    /**
+     * L10's scanner reads a *document*, because that is what it guards at emit.
+     * A stylesheet and a script reach the artifact as a `<style>` and a
+     * `<script>` element, so preflight hands them over in the shape they will
+     * take rather than as loose text the scanner has no rule for.
+     * @param {string|undefined} text @param {string} source @param {'html'|'css'|'js'} kind
+     */
+    const scanDocument = (text, source, kind) => {
       if (typeof text !== 'string' || text.length === 0) return;
-      for (const finding of ctx.deps.scanForNetworkReferences(text) || []) {
+      const document = kind === 'css' ? `<style>${text}</style>`
+        : kind === 'js' ? `<script>${text}</script>`
+          : text;
+      for (const finding of ctx.deps.scanForNetworkReferences(document) || []) {
         out.push(makeFinding({
           code: FINDING_CODES.includes(finding.code) ? finding.code : 'NETWORK_REFERENCE',
           locus: finding.locus,
@@ -576,10 +638,10 @@ const networkReference = {
         }));
       }
     };
-    scanDocument(ctx.runtimeJs, 'runtime script');
-    scanDocument(ctx.runtimeCss, 'runtime stylesheet');
-    scanDocument(ctx.html, 'rendered document');
-    scanDocument(ctx.css, 'emitted stylesheet');
+    scanDocument(ctx.runtimeJs, 'runtime script', 'js');
+    scanDocument(ctx.runtimeCss, 'runtime stylesheet', 'css');
+    scanDocument(ctx.html, 'rendered document', 'html');
+    scanDocument(ctx.css, 'emitted stylesheet', 'css');
 
     return sortFindings(out);
   },

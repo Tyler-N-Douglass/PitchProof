@@ -181,18 +181,37 @@ const FIXERS = {
 
   BRANCH_NO_RETURN(proof, finding) {
     const d = finding.detail || {};
-    if (!d.branchId) return null;
-    if (!((proof.spine || []).length > 0)) return null;
+    if (!d.branchId || !d.fixKind) return null;
     const branch = (proof.branches || []).find((b) => b.id === d.branchId);
     if (!branch || (branch.scenes || []).length === 0) return null;
-    if (branch.returnPolicy === 'nextSpineScene') return null;
+
+    if (d.fixKind === 'anchor-policy') {
+      // The branch has anchors; the policy was pointing somewhere that does not
+      // resolve. Return it to the anchor it actually has.
+      if (branch.returnPolicy === 'anchor') return null;
+      return {
+        label: `Return branch "${branch.objection || branch.id}" to its anchor`,
+        apply(current) {
+          const next = clone(current);
+          for (const b of next.branches || []) if (b.id === d.branchId) b.returnPolicy = 'anchor';
+          return next;
+        },
+      };
+    }
+
+    // 'anchor-scene': the branch is unanchored, so the deck never says where it
+    // belongs. Anchoring it to the opening scene is the smallest edit that makes
+    // the declaration complete, and the seller can move it.
+    const spine = proof.spine || [];
+    if (spine.length === 0) return null;
     return {
-      label: `Return branch "${branch.objection || branch.id}" to the next spine scene`,
+      label: `Anchor branch "${branch.objection || branch.id}" to the opening scene ${spine[0].id}`,
       apply(current) {
         const next = clone(current);
-        for (const b of next.branches || []) {
-          if (b.id === d.branchId) b.returnPolicy = 'nextSpineScene';
-        }
+        const target = (next.spine || [])[0];
+        if (!target) return next;
+        if (!Array.isArray(target.branchAnchors)) target.branchAnchors = [];
+        if (!target.branchAnchors.includes(d.branchId)) target.branchAnchors.push(d.branchId);
         return next;
       },
     };

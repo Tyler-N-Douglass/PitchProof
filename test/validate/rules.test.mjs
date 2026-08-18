@@ -113,8 +113,11 @@ test('the clean proof stays clean with a rendered document and runtime attached'
 
 /** Codes whose fixture legitimately entails a second finding, and why. */
 const ENTAILED = {
-  TEXT_OVERFLOW: ['FONT_UNAVAILABLE'],       // the overflow is caused by the substitution
-  SIZE_BUDGET_EXCEEDED: ['ASSET_OVERSIZE'],  // one asset is most of the overage
+  TEXT_OVERFLOW: ['FONT_UNAVAILABLE'],        // the overflow is caused by the substitution
+  SIZE_BUDGET_EXCEEDED: ['ASSET_OVERSIZE'],   // one asset is most of the overage
+  // A branch with no way in has no position for a return to resolve against
+  // either, so §11's two coverage failures arrive together (L9's reading).
+  BRANCH_UNREACHABLE: ['BRANCH_NO_RETURN'],
 };
 
 for (const code of FINDING_CODES) {
@@ -288,7 +291,8 @@ test('NETWORK_REFERENCE catches the model, the runtime and the rendered document
   assert.ok(leaks.length >= 2, 'both the script src and the @import must be reported');
   assert.ok(leaks.every((f) => f.severity === 1));
   assert.ok(leaks.some((f) => f.message.startsWith('rendered document:')));
-  assert.ok(leaks.some((f) => f.message.startsWith('emitted stylesheet:')));
+  assert.ok(leaks.some((f) => f.message.startsWith('emitted stylesheet:')),
+    'a stylesheet reaches the artifact as a <style> element, and must be scanned as one');
 
   const runtime = await preflight(cleanProof(), { runtimeJs: 'fetch("/telemetry");' });
   assert.ok(runtime.some((f) => f.code === 'NETWORK_REFERENCE' && f.message.startsWith('runtime script:')));
