@@ -720,6 +720,10 @@ silently discarded between the template that set it and the layout that reads
 it. That is the failure mode of every optional extension, so `carryDirection`
 now runs in both, and a test asserts it.
 
+*Superseded in kind by D-L7-21.* Adding `carryDirection` fixed the instance and
+left the shape intact: the third extension, `pre`, was lost the same way. The
+rebuild helpers now carry by default and name only what they own.
+
 **The adapter, too.** `runAdapter` for an RTL market sets `Rendition.dir` from
 the market named in the label — an endpoint asked for `ar-SA` may return real
 Arabic, and nothing else in that path would tell a layout to lay it out right to
@@ -766,3 +770,94 @@ Unlike the two cases above, the argument there is genuinely balanced: the
 `<pre>`'s *contents* are the prospect's, so `raw` is defensible, but the `<pre>`
 wrapper is the capturer's and the "Source markup, shown as text" caption is
 therefore half true. Reported across the lane boundary rather than fixed here.
+
+---
+
+## D-L7-21 — A block rebuild carries by default and names only what it owns (finding C8, third instance; reported by L6)
+
+**Unsettled by:** §4 freezes the `ContentBlock` union and permits optional
+extensions. Nothing says what a transform must do with a field it has never
+heard of.
+
+**The finding.** `mapBlockText`'s paragraph case rebuilt the block as
+`{type: 'paragraph', text: fn(block.text)}`, and `carryDirection` copied only
+`dir` and `lang`. So a `pre: true` paragraph — L6's capture of a `<pre>`, or this
+lane's own pasted code block from D-L7-19 — lost its preformatted flag the moment
+a template mapped its text. A client's aligned parameter table survived capture,
+survived the specimen, and then lost its alignment because a recipe touched it.
+
+**Decision. The default is inverted. A rebuild carries every field of its source
+forward, and declares only the fields it *owns* — the ones it just recomputed, or
+the ones it falsified.** `carryFields(from, onto, except)` implements it;
+`cloneBlock` names no field but `type` and passes no `except` at all;
+`mapBlockText` passes the text-bearing fields for that block type.
+
+**Why this is the class fix and the last one.** Three findings — `dir`, `lang`,
+`pre` — were one defect wearing three names, and each was closed by adding a name
+to a whitelist. A whitelist of carried fields is a list that must be edited
+whenever the contract grows, and §4's contracts are *designed* to grow by
+optional extension (`API.md` Part 3b). The list will always lag the contract,
+and the lag is silent: nothing throws, nothing warns, a structural fact simply
+stops being true one function call downstream. Inverting the default removes the
+edit. The fourth extension arrives already handled.
+
+**Why carrying by default is safe, and where it would not be.** The objection to
+a blind spread is real: a transform can carry a field that is no longer *true* of
+its result. `dir` is still true after a text map; a cached width would not be. So
+the exceptions stay explicit, and `except` holds two kinds:
+
+1. **What the transform recomputed.** Already on the result, or deliberately
+   omitted — `mapBlockText` drops an empty `attribution` rather than mapping
+   `''`, and the carry must not restore the source value underneath that
+   decision. This is why `except` is a list and not just `Object.keys(onto)`.
+2. **What the transform falsified** — a value derived from the exact characters
+   of the text it replaced: a cached width, a measured line count, a hash of the
+   old string.
+
+**Category 2 is empty today, and that is a claim, not an omission.** Every field
+§4 and Part 3b declare is a *structural* fact about the block — `level`,
+`ordered`, `header`, `href`, `ref`, `dir`, `lang`, `pre` — and a structural fact
+survives having its text rewritten. A right-to-left paragraph is still
+right-to-left when the budget shortens it; a preformatted code sample is still
+preformatted when `locale-fanout` reformats its numbers. The test for what
+belongs in category 2 is one sentence: *is this value computed from the text I am
+about to replace?* The day a lane adds such a field, it goes in the calling
+transform's `except` list, and the mechanism is already tested against a
+hypothetical `measuredWidthPx`.
+
+**Carrying is a copy, not a reference.** `cloneBlock` exists so a rendition never
+shares a mutable object with the specimen it came from. An unknown extension
+holding an array or an object would reintroduce exactly that aliasing bug if it
+were carried by reference, so `carryFields` copies JSON-shaped values through.
+That is also why `cloneBlock` no longer names `items` or `rows`: the deep copy
+handles them as it handles anything else.
+
+**`carryDirection` survives, narrowed.** It is now the *only* place in the module
+that names `dir` and `lang`, and it is deliberately still a whitelist, because
+its `from` is not the block being rebuilt — it is a caller asserting a direction
+and a language, and an assertion is validated before it is written. `withDirection`
+is its one caller. The distinction is the rule: **validate a claim, carry a
+rebuild.**
+
+**Every other rebuild site in the lane, checked against the rule.** L6 found one;
+it was not the last.
+
+| Site | Was | Now |
+|---|---|---|
+| `blocks.js` `cloneBlock` | named `type`, `ordered`, `items`, `header`, `rows`, plus `dir`/`lang` | names `type`; carries and deep-copies the rest |
+| `blocks.js` `mapBlockText` | named every field per type, plus `dir`/`lang` | owns the text-bearing fields; carries the rest |
+| `budget.js` `withText` | **third live instance** — named `level`, `href`, `attribution` and dropped `dir`, `lang` and `pre`, so a budget-trimmed SMS variant of a right-to-left page came back unmarked and a trimmed code sample came back as prose | owns the one field it rewrote |
+| `locale-fanout.js` `mirrorTable` | named `header` and `rows`; `directed()` happened to re-apply `dir`/`lang` afterwards, which hid the same defect for the next extension | owns `rows` |
+| `blocks.js` `slot`, `sectionHeading`; every `{type: …}` literal in the eight templates | — | **originate** blocks from strings rather than rebuilding one; there is no source field to carry, and the rule does not apply |
+| `paste.js`, `blocksFromFragment`/`blocksFromText` | — | **parsers**, same reasoning: they build blocks from markup, not from blocks |
+| `adapter.js` `blocksFromAdapterPayload` | — | passes an endpoint's validated blocks through by reference, so extensions already survive. Left alone deliberately: it is the one path whose input is untrusted, and the whitelist that would be correct there is exactly the maintained list this decision is about removing. `validateBlock` checks the fields §4 requires and is indifferent to extras; `assertNoAdapterSecrets` walks the whole structure, unknown keys included, so a key echoed back in a field nobody has heard of is still caught. |
+
+**Regression tests.** `test/recipe/recipes.test.mjs` — a `pre: true` block through
+`cloneBlock`, `mapBlockText`, all eight block types, a full `locale-fanout` render
+and an `enforceBudget` truncation; a *hypothetical* extension (`footnoteRefs`,
+`emphasis`) asserted to survive all of them and to be carried by copy rather than
+by reference, so the fourth optional field is not a fourth recurrence; and the
+`except` mechanism exercised against a `measuredWidthPx` that must be dropped.
+The hypothetical-field assertion is written as `deepEqual` against the whole
+block on purpose — if it ever has to be edited to add a name, the fix has
+regressed to a whitelist.

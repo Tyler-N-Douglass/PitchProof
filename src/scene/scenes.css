@@ -114,6 +114,7 @@
   --pp-sc-fs-note-label: 9px;
   --pp-sc-fs-panel-meta: 10px;
   --pp-sc-fs-panel-title: 13px;
+  --pp-sc-fs-pre: 11px;
   --pp-sc-fs-quote: 20px;
   --pp-sc-fs-step-index: 11px;
   --pp-sc-fs-step-label: 13px;
@@ -191,6 +192,7 @@
     --pp-sc-fs-note-label: 10px;
     --pp-sc-fs-panel-meta: 11px;
     --pp-sc-fs-panel-title: 15px;
+    --pp-sc-fs-pre: 13px;
     --pp-sc-fs-quote: 28px;
     --pp-sc-fs-step-index: 13px;
     --pp-sc-fs-step-label: 15px;
@@ -269,6 +271,7 @@
     --pp-sc-fs-note-label: 11px;
     --pp-sc-fs-panel-meta: 12px;
     --pp-sc-fs-panel-title: 17px;
+    --pp-sc-fs-pre: 14px;
     --pp-sc-fs-quote: 34px;
     --pp-sc-fs-step-index: 14px;
     --pp-sc-fs-step-label: 17px;
@@ -338,6 +341,13 @@
 .pp-scene [data-pp-tx="body"] {
   font-family: var(--pp-font-body);
   font-size: var(--pp-sc-fs-body);
+  line-height: 1.5;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.pp-scene [data-pp-tx="pre"] {
+  font-family: var(--pp-font-mono);
+  font-size: var(--pp-sc-fs-pre);
   line-height: 1.5;
   font-weight: 400;
   letter-spacing: 0;
@@ -536,6 +546,14 @@
 .pp-scene [data-pp-clamp="6"] { -webkit-line-clamp: 6; }
 .pp-scene [data-pp-clamp="8"] { -webkit-line-clamp: 8; }
 .pp-scene [data-pp-ws="nowrap"] { white-space: nowrap; }
+/* Preformatted source text: the newlines and the runs of spaces the prospect
+   wrote are the content (§18.3), and `pre-wrap` rather than `pre` because a
+   line wider than the stage has to wrap into the column — at `sm` a `pre` would
+   push a horizontal scrollbar under the scene, or be cut with nothing on screen
+   to say so. `layoutText` models the same rule: hard newlines split lines, the
+   rest wraps greedily, and `measureScene` reports the `pre-wrap` so the
+   detector counts the lines the browser will draw. */
+.pp-scene [data-pp-ws="pre-wrap"] { white-space: pre-wrap; }
 .pp-scene [data-pp-ow="break-word"] { overflow-wrap: break-word; }
 .pp-scene [data-pp-ow="anywhere"] { overflow-wrap: anywhere; }
 
@@ -616,6 +634,13 @@
 .pp-block { min-width: 0; }
 .pp-h { margin: 0; color: var(--pp-on-surface); }
 .pp-p { margin: 0; }
+/* A `<pre>` the capture kept: `ContentBlock.pre` (API.md Part 3b, D-L6-20). It
+   is rendered as a `<pre>` because that is what it is — the element carries the
+   fact to a screen reader and to anything that copies out of the artifact. Its
+   type comes from the `pre` role and its wrapping from `data-pp-ws`; all this
+   rule does is take away the UA margin, which the stage geometry never budgeted
+   for. */
+.pp-pre { margin: 0; }
 .pp-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
 .pp-list-item,
 .pp-list-more {

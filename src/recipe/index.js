@@ -104,7 +104,7 @@ export { LOCALES, localeById, localizeText, formatContractRows, legalPlacementLa
 
 export {
   slot, mediaFor, cloneBlock, mapBlockText, legalLine, bodyBlocks, leadHeadline, leadParagraph, leadCta, finish,
-  withDirection, carryDirection, TOOL_LANG,
+  withDirection, carryDirection, carryFields, TOOL_LANG,
 } from './blocks.js';
 
 export {

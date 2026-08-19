@@ -444,13 +444,96 @@ export function advanceDeltaOf(face) {
 }
 
 /**
+ * The identity of one overflowing box, as a string.
+ *
+ * **This is the answer to CRITIQUE-2 C1's second half (L8-D10).** The key used
+ * to be `box.elementId` alone, and `elementId` is the nearest *revealable
+ * ancestor* — the thing a beat reveals — so every text run inside one panel
+ * shares it. A headline and a body paragraph that both overflow in the same
+ * cell minted the same finding id, `sortFindings` dropped one as a duplicate,
+ * and the seller was shown one defect where there were two. Nineteen findings
+ * vanished that way on the corpus proof.
+ *
+ * Four things identify the box, and each is a function of the *layout and the
+ * scene model* rather than of the measurement:
+ *
+ *  - **`elementId`** — which revealable element it lives under. This is what a
+ *    consumer needs to jump to it, and it is minted by `elementId(sceneId,
+ *    path)` from the scene's id and the box's structural path, so it is the
+ *    same string on every render of the same scene.
+ *  - **`role`** — the `data-pp-tx` role the layout stamped. A headline and a
+ *    subhead under one element differ here, which is the collapse this fixes.
+ *  - **`ordinal`** — the box's position among the boxes sharing that
+ *    `(elementId, role)` pair, in document order. Two bullets in one list, or
+ *    two cells with the same role in one panel, differ here. `(elementId, role,
+ *    ordinal)` is unique within a measurement by construction.
+ *  - **the breakpoint**, added by the caller, because §4's `locus` cannot carry
+ *    one and the same box at `sm` and at `lg` is two defects with two fixes
+ *    (docs/disputes/L11-validate.md #1, #8).
+ *
+ * **Why this is stable across a re-render.** Nothing in it is measured. Not the
+ * excess, not the line count, not the resolved face, and — deliberately — not
+ * the text. A proof re-swept after a font substitution, a breakpoint change or
+ * a threshold change produces the same ids for the same defects, which is what
+ * L11-D13 requires of every finding and what lets the studio's dismissals and
+ * blocking list survive a sweep. Text is excluded for a sharper reason than
+ * consistency: the way a seller *fixes* an overflow is by editing the copy, so
+ * a text-derived id would churn hardest in exactly the workflow the id exists
+ * to support — every keystroke would mint a new finding, and a dismissal would
+ * never outlive the edit that provoked it.
+ *
+ * `containerId` and `slot` are deliberately **not** in the key, though both are
+ * reported in `detail`. `containerId` is `slot#n` with `n` counted over the
+ * whole scene, so inserting an unrelated panel earlier in the layout renumbers
+ * every later box of that slot — churn with no gain, since `(elementId, role,
+ * ordinal)` is already unique.
+ *
+ * @param {BoxMeasurement} box
+ * @param {number} ordinal  position among boxes sharing this `(elementId, role)`
+ * @returns {string}
+ */
+export function boxKey(box, ordinal) {
+  const el = box && typeof box.elementId === 'string' && box.elementId ? box.elementId : '-';
+  const role = String((box && box.role) || 'text');
+  const n = Number.isFinite(ordinal) && ordinal >= 0 ? Math.floor(ordinal) : 0;
+  return `${el}|${role}|${n}`;
+}
+
+/**
+ * The `(elementId, role)` ordinal of every box in a measurement, in document
+ * order — `SceneMeasurement.boxes` is the order `collectTextBoxes` walked the
+ * rendered tree, which is the order the browser lays them out.
+ *
+ * Scoping the counter to the pair rather than to the whole box list is what
+ * keeps an id local: adding a paragraph to one panel renumbers that panel's
+ * paragraphs and nothing else, where a flat index would renumber every box
+ * after it in the scene.
+ *
+ * @param {BoxMeasurement[]} boxes
+ * @returns {number[]} parallel to `boxes`
+ */
+export function boxOrdinals(boxes) {
+  /** @type {Map<string, number>} */
+  const seen = new Map();
+  return (boxes || []).map((box) => {
+    const el = box && typeof box.elementId === 'string' && box.elementId ? box.elementId : '-';
+    const pair = `${el}|${String((box && box.role) || 'text')}`;
+    const n = seen.get(pair) || 0;
+    seen.set(pair, n + 1);
+    return n;
+  });
+}
+
+/**
  * Findings for one text box at one breakpoint.
  *
  * @param {BoxMeasurement} box
  * @param {object} where
  * @param {string} where.sceneId
  * @param {string} where.breakpoint
- * @param {number} where.index
+ * @param {number} where.index          the box's position in the measurement
+ * @param {number} [where.ordinal]      its position among boxes sharing its `(elementId, role)`;
+ *                                      defaults to 0, which is right for a box measured alone
  * @param {import('../core/contracts.d.ts').BrandSystem|null|undefined} brand
  * @returns {any[]}
  */
@@ -463,7 +546,8 @@ export function detectBoxOverflow(box, where, brand) {
   const laid = layOutBox(box, brand);
   const { face, style, full, lineHeightPx, renderedLines, renderedHeightPx, lostLines } = laid;
   const containerH = Number(box.containerHeightPx) > 0 ? Number(box.containerHeightPx) : 0;
-  const key = box.elementId || `${box.role || 'text'}#${where.index}`;
+  const ordinal = Number.isFinite(where.ordinal) ? Number(where.ordinal) : 0;
+  const key = boxKey(box, ordinal);
   const nowrap = box.whiteSpace === 'nowrap' || box.whiteSpace === 'pre';
   const truncation = truncationMode(box);
 
@@ -475,6 +559,13 @@ export function detectBoxOverflow(box, where, brand) {
     breakpoint: where.breakpoint,
     elementId: box.elementId || null,
     role: box.role || null,
+    // The three fields that, with `elementId` and `role`, name *which* box this
+    // is. `orderInElement` is the disambiguator the key turns on; `containerId`
+    // and `slot` are L8's declared extensions (API.md Part 3 → L8) and are
+    // reported so a consumer can group siblings without re-measuring.
+    orderInElement: ordinal,
+    containerId: typeof box.containerId === 'string' ? box.containerId : null,
+    slot: typeof box.slot === 'string' ? box.slot : null,
     requestedFamily: face.requested,
     resolvedFamily: face.resolved,
     textOverflow: truncation.mode,
@@ -600,9 +691,10 @@ export function detectOverflow(measurement, brand) {
   const breakpoint = String(measurement.breakpoint || '');
   /** @type {any[]} */
   const out = [];
+  const ordinals = boxOrdinals(measurement.boxes);
   measurement.boxes.forEach((box, index) => {
     if (!box) return;
-    out.push(...detectBoxOverflow(box, { sceneId, breakpoint, index }, brand));
+    out.push(...detectBoxOverflow(box, { sceneId, breakpoint, index, ordinal: ordinals[index] }, brand));
   });
   return sortFindings(out);
 }

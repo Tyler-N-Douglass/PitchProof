@@ -132,12 +132,17 @@ export function mediaFor(blocks, specimen) {
 export const TOOL_LANG = 'en';
 
 /**
- * Copy the optional direction extensions from one block onto another.
+ * Copy the optional direction extensions from an explicit claim onto a block.
  *
- * `cloneBlock` and `mapBlockText` rebuild their result field by field so a
- * template can never alias the specimen's arrays. That rebuild used to drop any
- * field §4 does not name, which is precisely how an optional extension gets
- * silently lost between the template that set it and the layout that reads it.
+ * This is the **narrow** helper, and it is deliberately a whitelist: `from` here
+ * is not the block being rebuilt, it is a caller *asserting* a direction and a
+ * language, so the two values are validated before they are written. It is the
+ * only place in this module that names `dir` and `lang`, and the only place that
+ * should.
+ *
+ * A rebuild — `cloneBlock`, `mapBlockText`, and every other transform that
+ * reconstructs a block — must use `carryFields` instead. See its comment for why
+ * the direction of the default is the whole point.
  *
  * @template {object} T
  * @param {any} from
@@ -149,6 +154,107 @@ export function carryDirection(from, onto) {
   if (from && typeof from.lang === 'string' && from.lang) /** @type {any} */(onto).lang = from.lang;
   return onto;
 }
+
+/**
+ * Copy a JSON-shaped value, so a carried field never aliases its source.
+ *
+ * §4's blocks are JSON — they are hashed into a rendition id and serialised into
+ * the artifact — so arrays and plain objects are the only containers a block
+ * field can hold, and both are copied through. Anything else is a value.
+ *
+ * @param {any} value
+ * @returns {any}
+ */
+function copyValue(value) {
+  if (Array.isArray(value)) return value.map(copyValue);
+  if (value && typeof value === 'object') {
+    const proto = Object.getPrototypeOf(value);
+    if (proto === Object.prototype || proto === null) {
+      /** @type {Record<string, any>} */
+      const out = {};
+      for (const key of Object.keys(value)) out[key] = copyValue(value[key]);
+      return out;
+    }
+  }
+  return value;
+}
+
+/**
+ * Carry every field of a block forward onto its rebuilt form, except the ones
+ * the transform has already dealt with.
+ *
+ * **This is the class fix for C8's second half, and the direction of the default
+ * is the entire point.** A rebuild that lists the fields it carries loses every
+ * field added after it was written, and §4's contracts are explicitly designed
+ * to grow by optional extension (`API.md` Part 3b). That failure mode has now
+ * been found three times in this one module — `dir`, then `lang`, then `pre` —
+ * and each time the fix was to add a name to a whitelist, which is a fix for the
+ * instance and not for the class. Carrying by default ends the sequence: the
+ * fourth extension arrives here already handled, and nobody has to remember.
+ *
+ * The reason a whitelist was attractive is real: a transform that spreads
+ * blindly can carry a field that is no longer *true* of its result. So the
+ * exceptions are explicit, per transform, and short — `except` holds:
+ *
+ * 1. **The fields the transform recomputed.** They are already on `onto`, or the
+ *    transform deliberately omitted them (`mapBlockText` drops an empty
+ *    `attribution` rather than mapping `''`), and in neither case may the source
+ *    value be resurrected underneath the transform's decision.
+ * 2. **The fields the transform falsifies** — a value derived from the specific
+ *    characters of the text, which a text map makes stale: a cached width, a
+ *    measured line count, a hash of the old string.
+ *
+ * Category 2 is empty today, and that is a claim about §4 and Part 3b rather
+ * than an omission. Every field either contract declares is a *structural* fact
+ * about the block — `level`, `ordered`, `header`, `href`, `ref`, `dir`, `lang`,
+ * `pre` — and a structural fact survives having its text rewritten. A right-to-
+ * left paragraph is still right-to-left when it is shortened; a preformatted
+ * code sample is still preformatted when it is localised. The day a lane adds a
+ * derived field, it belongs in the calling transform's `except` list, next to
+ * the fields that transform already owns, and the rule for spotting it is the
+ * sentence above: *is this value computed from the text I am about to replace?*
+ *
+ * Carrying is also a *copy*, not a reference. `cloneBlock` exists so a rendition
+ * never shares a mutable object with the specimen it came from, and an unknown
+ * extension holding an array would reintroduce exactly that bug if it were
+ * carried by reference. `copyValue` is why `cloneBlock` no longer names
+ * `items` or `rows`.
+ *
+ * @template {object} T
+ * @param {any} from   the block being rebuilt
+ * @param {T} onto     the partially rebuilt result
+ * @param {readonly string[]} [except] fields this transform owns or falsifies
+ * @returns {T}
+ */
+export function carryFields(from, onto, except = []) {
+  if (!from || typeof from !== 'object') return onto;
+  for (const key of Object.keys(from)) {
+    if (key in onto) continue;
+    if (except.includes(key)) continue;
+    /** @type {any} */(onto)[key] = copyValue(from[key]);
+  }
+  return onto;
+}
+
+/**
+ * The text-bearing fields of each block type: the ones `mapBlockText` rewrites,
+ * and therefore the ones it owns and `carryFields` must not restore behind it.
+ *
+ * `raw` maps nothing. Its `html` is captured source, and a text transform aimed
+ * at prose would corrupt markup; it is carried verbatim like any other field.
+ *
+ * @type {Record<string, readonly string[]>}
+ */
+const TEXT_FIELDS = {
+  heading: ['text'],
+  paragraph: ['text'],
+  list: ['items'],
+  quote: ['text', 'attribution'],
+  table: ['rows'],
+  cta: ['label'],
+  media: ['caption'],
+  raw: [],
+};
 
 /**
  * Return a copy of a block carrying an explicit writing direction and, when one
@@ -172,47 +278,57 @@ export function carryDirection(from, onto) {
  */
 export function withDirection(block, attrs = {}) {
   const out = /** @type {any} */(cloneBlock(block));
-  if (DIRECTIONS.includes(/** @type {any} */(attrs.dir))) out.dir = attrs.dir;
-  if (typeof attrs.lang === 'string' && attrs.lang) out.lang = attrs.lang;
-  else if (attrs.lang === null) delete out.lang;
+  carryDirection(attrs, out);
+  if (attrs.lang === null) delete out.lang;
   return out;
 }
 
 /**
  * Clone a block, so no rendition ever shares a mutable object with the specimen
  * it was derived from.
+ *
+ * It names no field but `type`, and it drops nothing: a copy of a block is the
+ * same block, so there is nothing a clone can falsify. Every optional extension
+ * — declared, or added next week — comes across, deeply.
+ *
  * @template {import('../core/contracts.d.ts').ContentBlock} T
  * @param {T} block
  * @returns {T}
  */
 export function cloneBlock(block) {
-  switch (block.type) {
-    case 'list': return /** @type {any} */(carryDirection(block, { type: 'list', ordered: block.ordered, items: block.items.slice() }));
-    case 'table': return /** @type {any} */(carryDirection(block, { type: 'table', header: block.header, rows: block.rows.map((r) => r.slice()) }));
-    default: return /** @type {any} */({ ...block });
-  }
+  return /** @type {any} */(carryFields(block, { type: block.type }));
 }
 
 /**
- * Apply a text transform to every text run of a block, preserving its type.
+ * Apply a text transform to every text run of a block, preserving its type —
+ * and preserving everything else about it that is still true, which is all of
+ * it (`carryFields`).
+ *
  * @param {import('../core/contracts.d.ts').ContentBlock} block
  * @param {(s: string) => string} fn
  * @returns {import('../core/contracts.d.ts').ContentBlock}
  */
 export function mapBlockText(block, fn) {
+  const owned = TEXT_FIELDS[block.type];
+  if (!owned) return cloneBlock(block);
+  /** @type {any} */
+  let out;
   switch (block.type) {
-    case 'heading': return carryDirection(block, { type: 'heading', level: block.level, text: fn(block.text) });
-    case 'paragraph': return carryDirection(block, { type: 'paragraph', text: fn(block.text) });
-    case 'list': return carryDirection(block, { type: 'list', ordered: block.ordered, items: block.items.map(fn) });
-    case 'quote': return carryDirection(block, block.attribution
+    case 'heading': out = { type: 'heading', level: block.level, text: fn(block.text) }; break;
+    case 'paragraph': out = { type: 'paragraph', text: fn(block.text) }; break;
+    case 'list': out = { type: 'list', ordered: block.ordered, items: block.items.map(fn) }; break;
+    case 'quote': out = block.attribution
       ? { type: 'quote', text: fn(block.text), attribution: fn(block.attribution) }
-      : { type: 'quote', text: fn(block.text) });
-    case 'table': return carryDirection(block, { type: 'table', header: block.header, rows: block.rows.map((r) => r.map(fn)) });
-    case 'cta': return carryDirection(block, { type: 'cta', label: fn(block.label), href: block.href });
-    case 'media': return carryDirection(block, block.caption ? { type: 'media', ref: block.ref, caption: fn(block.caption) } : { type: 'media', ref: block.ref });
-    case 'raw': return carryDirection(block, { type: 'raw', html: block.html });
-    default: return block;
+      : { type: 'quote', text: fn(block.text) }; break;
+    case 'table': out = { type: 'table', header: block.header, rows: block.rows.map((r) => r.map(fn)) }; break;
+    case 'cta': out = { type: 'cta', label: fn(block.label), href: block.href }; break;
+    case 'media': out = block.caption
+      ? { type: 'media', ref: block.ref, caption: fn(block.caption) }
+      : { type: 'media', ref: block.ref }; break;
+    case 'raw': out = { type: 'raw' }; break;
+    default: return cloneBlock(block);
   }
+  return carryFields(block, out, owned);
 }
 
 /**

@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import {
   SEED_RECIPES, recipeById, recipeAccepts, recipesFor, renderRecipe, renderAll,
   channelBudget, CHANNEL_BUDGETS, LOCALES, hasPromotionRecord, verifyProvenance,
-  buildRendition, renditionId, cloneBlock, mapBlockText,
+  buildRendition, renditionId, cloneBlock, mapBlockText, carryFields, enforceBudget,
 } from '../../src/recipe/index.js';
 import { structureOf } from '../../src/recipe/templates/locale-fanout.js';
 import { readBudgetNote } from '../../src/recipe/templates/channel-variants.js';
@@ -307,6 +307,122 @@ test('C8: direction survives the block helpers that rebuild a block field by fie
   assert.deepEqual(cloneBlock(list), list);
   const table = { type: 'table', header: true, rows: [['a', 'b']], dir: 'rtl', lang: 'en-US' };
   assert.deepEqual(mapBlockText(table, (t) => t), table);
+});
+
+test('C8 (L6 follow-on): `pre` survives every rebuild, and so does the field nobody has invented yet', () => {
+  // The instance L6 found. A `<pre>` captured by L6, or a fenced block parsed by
+  // this lane's `paste.js`, arrives as `{type:'paragraph', text, pre: true}`
+  // (`API.md` Part 3b). `mapBlockText` used to rebuild the paragraph as
+  // `{type, text}` and drop the flag, so a client's aligned parameter table
+  // survived capture and the specimen, then lost its alignment the moment a
+  // template touched its text.
+  const code = { type: 'paragraph', text: 'timeout  = 30\nretries  = 3', pre: true, dir: 'ltr', lang: 'en-US' };
+  assert.deepEqual(cloneBlock(code), code);
+  assert.deepEqual(mapBlockText(code, (t) => t.toUpperCase()), {
+    type: 'paragraph', text: 'TIMEOUT  = 30\nRETRIES  = 3', pre: true, dir: 'ltr', lang: 'en-US',
+  });
+
+  // The class. `dir`, then `lang`, then `pre` were three findings against one
+  // shape: a rebuild that names the fields it carries loses every field added
+  // after it was written, and §4's contracts grow by optional extension. So the
+  // rebuild now carries by default, and a field this test invents — which no
+  // module has heard of — must come through untouched. If this assertion has to
+  // be edited to add a name, the fix regressed to a whitelist.
+  const future = {
+    type: 'heading', level: 2, text: 'Parameters', pre: true,
+    footnoteRefs: ['fn_1', 'fn_2'], emphasis: { weight: 700, tracking: -0.01 },
+  };
+  const mapped = mapBlockText(future, (t) => `${t}!`);
+  assert.deepEqual(mapped, { ...future, text: 'Parameters!' });
+
+  // And carried by *copy*: an unknown extension holding an array would otherwise
+  // reintroduce the aliasing bug `cloneBlock` exists to prevent.
+  assert.notEqual(mapped.footnoteRefs, future.footnoteRefs);
+  assert.notEqual(mapped.emphasis, future.emphasis);
+  mapped.footnoteRefs.push('fn_3');
+  mapped.emphasis.weight = 400;
+  assert.deepEqual(future.footnoteRefs, ['fn_1', 'fn_2']);
+  assert.equal(future.emphasis.weight, 700);
+
+  const cloned = cloneBlock(future);
+  assert.deepEqual(cloned, future);
+  assert.notEqual(cloned.footnoteRefs, future.footnoteRefs);
+  assert.notEqual(cloned.emphasis, future.emphasis);
+
+  // Every block type, not just the paragraph the bug was reported against.
+  const byType = [
+    { type: 'heading', level: 3, text: 'h' },
+    { type: 'paragraph', text: 'p' },
+    { type: 'list', ordered: true, items: ['i'] },
+    { type: 'quote', text: 'q', attribution: 'a' },
+    { type: 'table', header: false, rows: [['c']] },
+    { type: 'cta', label: 'l', href: '/x' },
+    { type: 'media', ref: 'md_hero', caption: 'c' },
+    { type: 'raw', html: '<p>r</p>' },
+  ];
+  for (const base of byType) {
+    const marked = { ...base, pre: true, dir: 'rtl', lang: 'en-US', unheardOf: 7 };
+    assert.deepEqual(cloneBlock(marked), marked, `cloneBlock drops nothing on ${base.type}`);
+    const out = mapBlockText(marked, (t) => t);
+    assert.equal(out.pre, true, `mapBlockText keeps pre on ${base.type}`);
+    assert.equal(out.dir, 'rtl', `mapBlockText keeps dir on ${base.type}`);
+    assert.equal(out.lang, 'en-US', `mapBlockText keeps lang on ${base.type}`);
+    assert.equal(out.unheardOf, 7, `mapBlockText keeps an unknown extension on ${base.type}`);
+  }
+});
+
+test('C8 (L6 follow-on): carrying by default still lets a transform drop what it falsifies', () => {
+  // Carry-by-default is only safe because the exceptions stay explicit. Two
+  // kinds go in a transform's `except` list: the fields it recomputed, and the
+  // fields it falsified — a value derived from the exact characters of the text
+  // it just replaced. The second kind is empty across §4 and Part 3b today
+  // (`level`, `ordered`, `header`, `href`, `ref`, `dir`, `lang`, `pre` are all
+  // structural facts that survive a rewrite), so this exercises the mechanism
+  // the day one arrives.
+  const withCache = { type: 'paragraph', text: 'One line.', pre: true, measuredWidthPx: 412 };
+  assert.deepEqual(
+    carryFields(withCache, { type: 'paragraph', text: 'Another line.' }, ['text', 'measuredWidthPx']),
+    { type: 'paragraph', text: 'Another line.', pre: true },
+  );
+
+  // A transform's own decision is never overwritten from underneath it: an empty
+  // attribution stays omitted rather than being restored unmapped.
+  const emptyAttr = mapBlockText({ type: 'quote', text: 'q', attribution: '' }, (t) => t.toUpperCase());
+  assert.deepEqual(emptyAttr, { type: 'quote', text: 'Q' });
+  const emptyCaption = mapBlockText({ type: 'media', ref: 'md_hero', caption: '' }, (t) => t);
+  assert.deepEqual(emptyCaption, { type: 'media', ref: 'md_hero' });
+});
+
+test('C8 (L6 follow-on): a preformatted block keeps its flag through a whole template render', () => {
+  // End to end, which is where the bug actually bit: capture keeps `pre`, the
+  // specimen keeps `pre`, and then a recipe maps the text.
+  const base = retailSpecimen();
+  const specimen = {
+    ...base,
+    blocks: base.blocks.slice(0, 2).concat(
+      [{ type: 'paragraph', text: 'region      = eu-west\nconcurrency = 4', pre: true }],
+      base.blocks.slice(2),
+    ),
+  };
+  const isSample = (b) => b.type === 'paragraph' && /concurrency/.test(b.text);
+
+  const renditions = renderRecipe('locale-fanout', specimen).value;
+  for (const rendition of renditions) {
+    const sample = rendition.blocks.find(isSample);
+    assert.ok(sample, `${rendition.label} still carries the code sample`);
+    assert.equal(sample.pre, true, `${rendition.label} still calls it preformatted`);
+  }
+  const ar = renditions.find((r) => r.label === 'ar-SA');
+  const arSample = ar.blocks.find(isSample);
+  assert.equal(arSample.dir, 'rtl', 'the C8 extensions and `pre` coexist on one block');
+
+  // §13's budget trimming is a rebuild too, and used to drop the same fields.
+  const long = { type: 'paragraph', text: 'x'.repeat(400), pre: true, dir: 'rtl', lang: 'en-US' };
+  const trimmed = enforceBudget([long], 'sms', { truncate: true, includeReport: false }).blocks[0];
+  assert.ok(trimmed.text.length < 400, 'the budget actually shortened it');
+  assert.equal(trimmed.pre, true);
+  assert.equal(trimmed.dir, 'rtl');
+  assert.equal(trimmed.lang, 'en-US');
 });
 
 test('C8: buildRendition refuses a direction or language it cannot put in an attribute', () => {

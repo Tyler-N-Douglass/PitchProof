@@ -16,7 +16,9 @@
  *    an artifact whose markup carries a live URL is a `NETWORK_REFERENCE` even
  *    if nothing clicks it. A `raw` block is rendered as *text*, never as
  *    markup (§8 makes raw HTML an explicit per-specimen opt-in the studio
- *    grants, and a layout is not where that decision gets made).
+ *    grants, and a layout is not where that decision gets made). A paragraph
+ *    marked `pre` keeps its whitespace, because there the newlines and the
+ *    columns *are* the content — see `preformat`.
  *  - **Every run of text sits inside an element carrying `data-pp-tx`.** That
  *    attribute is what `scenes.css` styles and what `measureScene` reads back,
  *    so a text node that escaped it would be invisible to §22.2's detector.
@@ -131,12 +133,29 @@ export function blockBody(block, o) {
       }, String(block.text ?? ''));
     }
 
-    case 'paragraph':
+    case 'paragraph': {
+      // `pre` (API.md Part 3b) says the whitespace in this text is the
+      // prospect's content rather than their source formatting: it came out of
+      // a `<pre>`, where the newlines and the runs of spaces are what makes a
+      // parameter table a table. Rendered as a `<pre>` in the mono role with
+      // `white-space: pre-wrap`, and the `pre-wrap` is reported to the detector
+      // (`data-pp-ws`) so `layoutText` counts the same lines the browser draws.
+      // A layout that never looked at `pre` still renders a paragraph, which is
+      // the safe degradation Part 3b promises.
+      if (block.pre === true) {
+        return h('pre', {
+          class: 'pp-pre',
+          'data-pp-tx': 'pre',
+          'data-pp-ws': 'pre-wrap',
+          'data-pp-clamp': o.clampParagraph || null,
+        }, preformat(block.text));
+      }
       return h('p', {
         class: 'pp-p',
         'data-pp-tx': 'body',
         'data-pp-clamp': o.clampParagraph || null,
       }, String(block.text ?? ''));
+    }
 
     case 'list': {
       const items = Array.isArray(block.items) ? block.items : [];
@@ -284,7 +303,14 @@ export function summarize(blocks) {
   for (const b of list) {
     if (!b) continue;
     if (!title && b.type === 'heading' && b.text) title = String(b.text);
-    else if (!blurb && b.type === 'paragraph' && b.text) blurb = String(b.text);
+    // A `pre` block can be the only text a rendition has, so it summarises
+    // like any other paragraph — refusing would print "No content blocks on
+    // this rendition" over a card that holds a code sample, which is false.
+    // Its whitespace is collapsed here because a summary is set in the deck's
+    // own prose type with `white-space: normal`, where the browser collapses it
+    // too: collapsing in the model as well is what keeps the measured width the
+    // rendered width. The block itself is still rendered preformatted.
+    else if (!blurb && b.type === 'paragraph' && b.text) blurb = b.pre === true ? collapse(b.text) : String(b.text);
     else if (!blurb && b.type === 'list' && Array.isArray(b.items) && b.items.length) blurb = String(b.items[0]);
     else if (!blurb && b.type === 'quote' && b.text) blurb = String(b.text);
     if (title && blurb) break;
@@ -295,11 +321,74 @@ export function summarize(blocks) {
   return { title, blurb, ...firstFlow(list) };
 }
 
+/** Runs of whitespace to one space — what `white-space: normal` does on screen.
+ * @param {string} text @returns {string} */
+function collapse(text) {
+  return String(text ?? '').replace(/\s+/g, ' ').trim();
+}
+
 /** @param {string[]} row @param {number} cols @returns {string[]} */
 function padRow(row, cols) {
   const out = row.map((c) => String(c ?? ''));
   while (out.length < cols) out.push('');
   return out.slice(0, cols);
+}
+
+/**
+ * The tab stop preformatted text is laid out on, in character cells.
+ *
+ * Four rather than the HTML default of eight: a captured code sample is often
+ * the widest run on the stage, and at `sm` the stage is 350px, which is about
+ * 48 mono cells at the `pre` role's size. Eight-cell stops spend a sixth of
+ * that line on one level of indentation.
+ */
+export const PRE_TAB_COLUMNS = 4;
+
+/**
+ * Preformatted text, ready to be measured and rendered as the same string.
+ *
+ * Two normalisations, and both exist so that the model and the browser agree
+ * about a character rather than so that the text reads better:
+ *
+ *  - **Line endings.** A CRLF capture would leave a carriage return at the end
+ *    of every line: `layoutText` splits on `\n` and would measure the `\r` as
+ *    a glyph the browser draws as nothing.
+ *  - **Tabs.** A tab is the one character whose advance is not a property of
+ *    the font: the browser advances to the next `tab-size` stop, and the model
+ *    has no notion of tab stops at all, so it would report a shorter line than
+ *    the browser draws — under-reporting, the one direction §22.2 forbids.
+ *    Expanding to the stops here makes the two measure the same string. In a
+ *    monospace face the result is glyph-for-glyph what the browser would have
+ *    drawn for the tab; in a proportional one — a brand whose `mono` face is
+ *    not actually monospaced — it is at least a length both sides agree on.
+ *
+ * A leading newline is dropped for the same reason: an HTML parser drops the
+ * one directly after `<pre>`, so a model that kept it would count a line the
+ * artifact does not have. Everything else — the indentation, the runs of
+ * spaces that line a parameter table up, the blank lines — is the prospect's
+ * and is kept (§18.3).
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function preformat(text) {
+  const src = String(text ?? '').replace(/\r\n?/g, '\n').replace(/^\n/, '');
+  if (!src.includes('\t')) return src;
+  return src.split('\n').map(expandTabs).join('\n');
+}
+
+/**
+ * One line, with its tabs expanded to the next `PRE_TAB_COLUMNS` stop.
+ * @param {string} line
+ * @returns {string}
+ */
+function expandTabs(line) {
+  let out = '';
+  for (const ch of line) {
+    if (ch !== '\t') { out += ch; continue; }
+    out += ' '.repeat(PRE_TAB_COLUMNS - (out.length % PRE_TAB_COLUMNS));
+  }
+  return out;
 }
 
 /**

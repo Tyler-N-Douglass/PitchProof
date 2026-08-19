@@ -41,7 +41,7 @@
 import { LOCALES, localizeText, formatContractRows, legalPlacementLabel, sourceLanguage } from '../locales.js';
 import {
   finish, bodyBlocks, legalLine, mapBlockText, cloneBlock, sectionHeading, slot,
-  withDirection, TOOL_LANG,
+  withDirection, carryFields, TOOL_LANG,
 } from '../blocks.js';
 import { flatten } from '../text.js';
 
@@ -61,12 +61,17 @@ export const RECIPE = {
 
 /**
  * Reverse the cells of every row, for a right-to-left rendition.
+ *
+ * Another rebuild, so it carries by default rather than naming what it keeps
+ * (`carryFields`). Reversing the column order changes the row arrays and nothing
+ * else about the block, so `rows` is the only field it owns.
+ *
  * @param {import('../../core/contracts.d.ts').ContentBlock} block
  * @returns {import('../../core/contracts.d.ts').ContentBlock}
  */
 function mirrorTable(block) {
   if (block.type !== 'table') return block;
-  return { type: 'table', header: block.header, rows: block.rows.map((r) => r.slice().reverse()) };
+  return carryFields(block, { type: 'table', header: block.header, rows: block.rows.map((r) => r.slice().reverse()) }, ['rows']);
 }
 
 /**

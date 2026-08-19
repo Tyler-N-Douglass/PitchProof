@@ -77,6 +77,19 @@ export function sourceBlocks() {
       ],
     },
     { type: 'quote', text: 'We stopped keeping a spare motor on every line the year we changed over.', attribution: 'Maintenance lead, national grocery DC' },
+    // A captured `<pre>`: `ContentBlock.pre` (API.md Part 3b). The columns are
+    // lined up with spaces, which is the whole reason the prospect wrote it
+    // inside a `<pre>` and the reason a layout that renders it in a
+    // proportional face with `white-space: normal` has lost the content.
+    {
+      type: 'paragraph',
+      pre: true,
+      text: 'drive = studio.unit("ND-640")\n'
+        + 'drive.autotune(step=2.5, timeout=600)\n'
+        + 'drive.commit()\n'
+        + '# step     2.5   torque ramp increment, Nm\n'
+        + '# timeout  600   seconds before the run gives up',
+    },
     { type: 'heading', level: 3, text: 'Ordering' },
     { type: 'paragraph', text: 'Configure a unit against your existing gearbox flange, or send us the drawing and we will confirm the fit before you order.' },
     { type: 'cta', label: 'Request a fit check', href: null },

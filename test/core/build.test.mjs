@@ -131,21 +131,41 @@ test('every core module bundles and still behaves', () => {
   assert.equal(tm.measureText('Hello', { family: 'Helvetica', fontSizePx: 1000 }), 2278);
 });
 
-test('the whole build is deterministic across two runs', () => {
-  const a = buildAll();
-  const b = buildAll();
-  assert.deepEqual([...a.outputs.keys()].sort(), [...b.outputs.keys()].sort());
-
+test('the whole build is deterministic across two runs', (t) => {
   // Two `buildAll()` calls that disagree have two very different explanations:
   // the build is not a pure function of its inputs, or somebody wrote to `src/`
   // between them. During a parallel lane build the second is overwhelmingly the
   // likelier — and that is exactly the circumstance in which the first must not
-  // be waved away, so the two are separated rather than guessed at.
-  const differing = [...a.outputs.keys()].filter((name) => a.outputs.get(name) !== b.outputs.get(name));
-  if (differing.length && a.fingerprint !== b.fingerprint) {
-    assert.fail(
-      `src/ changed while this test ran, so ${differing.join(', ')} describe two different working trees. `
-      + 'This is not a determinism result either way — re-run on a quiet tree.');
+  // be waved away, so the two are told apart by fingerprint rather than guessed
+  // at.
+  //
+  // A moving tree is retried rather than failed. Reporting it as a failure says
+  // there is a defect when there is only a race, and three of those in a row
+  // teaches everyone to ignore this test — which is worse than the flake. But
+  // it is not skipped silently either: a skip that says nothing is how a
+  // verification rots, so the last attempt's evidence goes in the message.
+  const ATTEMPTS = 3;
+  /** @type {string[]} */
+  let differing = [];
+  /** @type {string[]} */
+  const moved = [];
+
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
+    const a = buildAll();
+    const b = buildAll();
+    assert.deepEqual([...a.outputs.keys()].sort(), [...b.outputs.keys()].sort());
+
+    differing = [...a.outputs.keys()].filter((name) => a.outputs.get(name) !== b.outputs.get(name));
+    if (!differing.length) return;                       // deterministic, done
+    if (a.fingerprint === b.fingerprint) break;          // sources held still: a real failure
+
+    moved.push(`attempt ${attempt}: ${differing.join(', ')}`);
+  }
+
+  if (moved.length === ATTEMPTS) {
+    return t.skip(
+      `src/ changed under every one of ${ATTEMPTS} attempts, so each pair of builds describes two different `
+      + `working trees and none is a determinism result. Re-run on a quiet tree. (${moved.join('; ')})`);
   }
   assert.deepEqual(differing, [], `${differing.join(', ')} differ between two builds of identical sources`);
 });

@@ -667,6 +667,23 @@ const beatEmpty = {
     const out = [];
     const rendered = ctx.renderedElementIds || new Map();
     for (const { scene, branchId } of allScenes(ctx.proof)) {
+      // A beat's stable handle is its own id, and §4 requires the field without
+      // requiring it to be unique or non-empty. `beat.id || i` therefore had two
+      // ways to collapse two beats into one finding — two beats declaring the
+      // same id, and an id-less beat at index 3 colliding with a beat whose id
+      // is literally `"3"` — and a collapsed key is a suppressed finding, which
+      // is CRITIQUE-2 C1's second half wearing a different hat (L11-D27). The
+      // prefix separates the two namespaces and the ordinal separates repeats,
+      // so a scene whose beat ids are unique — every scene the tool builds —
+      // keeps the id it had.
+      const beatSeen = new Map();
+      /** @param {any} beat @param {number} i */
+      const beatKey = (beat, i) => {
+        const name = beat && typeof beat.id === 'string' && beat.id !== '' ? `#${beat.id}` : `@${i}`;
+        const n = beatSeen.get(name) || 0;
+        beatSeen.set(name, n + 1);
+        return `${scene.id}:${name}:${n}`;
+      };
       // A scene where no beat reveals anything is the still-frame shape the
       // beat engine renders whole (runtime/beats.js `sceneRevealsNothing`).
       // That is a layout choice, not a defect.
@@ -675,11 +692,12 @@ const beatEmpty = {
       (scene.beats || []).forEach((beat, i) => {
         const reveals = beat.reveals || [];
         const total = (scene.beats || []).length;
+        const where = beatKey(beat, i);
         if (reveals.length === 0) {
           out.push(makeFinding({
             code: 'BEAT_EMPTY',
             locus: { sceneId: scene.id, branchId: branchId || undefined },
-            key: `beat:${scene.id}:${beat.id || i}`,
+            key: `beat:${where}`,
             autoFixAvailable: total > 1,
             message: `Beat ${i + 1} of ${total} in scene ${scene.id} reveals nothing, while other beats in the same scene do. Pressing forward there changes nothing on screen — a dead keypress in front of the room. Auto-fix removes the beat.`,
             detail: { sceneId: scene.id, beatId: beat.id || null, beatIndex: i, beatCount: total, kind: 'no-reveals' },
@@ -695,7 +713,7 @@ const beatEmpty = {
         out.push(makeFinding({
           code: 'BEAT_EMPTY',
           locus: { sceneId: scene.id, branchId: branchId || undefined },
-          key: `beat-dangling:${scene.id}:${beat.id || i}`,
+          key: `beat-dangling:${where}`,
           autoFixAvailable: total > 1,
           message: `Beat ${i + 1} of ${total} in scene ${scene.id} reveals ${reveals.length} element id${reveals.length === 1 ? '' : 's'} the ${scene.layout} layout does not render (${dangling.slice(0, 3).join(', ')}${dangling.length > 3 ? ', …' : ''}), out of the ${known.size} it does. Pressing forward there changes nothing on screen. Re-point the beat at an element the layout renders, or auto-fix removes it.`,
           detail: {

@@ -625,3 +625,81 @@ reports the ratio through `estimate()` and enforces a real capacity, which
 separates the two axes it had been conflating. No assertion was weakened; the
 refusal path is still tested, deliberately, through `failWith`.
 
+
+---
+
+## L12-26 — `raw` and `pre` are two questions, and the block editor was asking the wrong one
+
+**Names:** CRITIQUE-2 C8 (L6's follow-on), API.md Part 3b.
+
+**Unsettled by:** §15 asks for a block editor and §8 for a raw opt-in. Neither
+says which blocks edit in a monospace face, because until this pass there was
+only one kind that did.
+
+**Decision.** `src/ui/model.js` publishes the two predicates separately, and the
+specimen block editor asks each of them for the thing it actually answers:
+
+- `blockIsPreformatted(block)` — `block.pre === true`, and nothing else. It
+  decides the no-wrap treatment (`.st-block-text--pre`: `white-space: pre`, a
+  sideways scroll instead of a soft wrap), the `pre` marker in the block head,
+  the word "preformatted" in the field's `aria-label`, and the row count, which
+  is now measured in lines rather than in wrapped characters.
+- `blockUsesMonospace(block)` — preformatted **or** `type === 'raw'`. It decides
+  the face alone.
+
+Nothing else in the panels or the inspector read `type === 'raw'`; the only
+other two sites (`applyBlockText`, `blockEditableText`) use it to find the field
+that carries a block's text, which is the question `raw` really answers. The
+inspector's one `raw` branch is `rawOptIn`, which is the presentation question
+and stays where it is. `blockSummary` goes on collapsing whitespace and is
+correct to: the recipe alignment surface draws it as one truncated row in a
+two-column grid, where a preserved tab stop would break the grid rather than
+show one.
+
+**Why.** L6 converted a captured `<pre>` from a `raw` block to
+`{type: 'paragraph', text, pre: true}`, and the reasoning is why the old key was
+never right rather than merely now wrong. There was no captured markup in that
+block: `rawTextOf` had already discarded every element and kept text nodes only,
+so the `<pre>` wrapper was L6's own markup, built after the prospect's had been
+thrown away. It bypassed §8's opt-in gate. And because `NETWORK_REFERENCE` scans
+`raw` blocks as strings, three of four realistic code samples — an embed
+snippet, a JS sample containing `fetch(`, a CSS sample containing `url(...)` —
+became severity-1 emit blockers whose printed remedy was "drop the raw block",
+i.e. delete the client's own content to unblock the build.
+
+So `raw` means *untrusted markup a layout must not present* and `pre` means
+*this text's whitespace carries meaning*. They had the same answer for as long as
+one carrier served both, and the editor's `block.type === 'raw'` was reading a
+coincidence. The cost of leaving it was specific: a spec table or a
+configuration snippet from the prospect's own page edited in a proportional
+face, so a seller reflowing a parameter table broke its columns without seeing
+it happen. Soft wrap is the same defect one step further on, which is why the
+face is not the whole fix — a preformatted field that wraps is still lying about
+where the lines end.
+
+Keeping `raw` on the monospace side is deliberate rather than inertia: markup
+source is read by structure too. But it does **not** get `white-space: pre`,
+because markup is not whitespace-significant, and that split is the assertion
+that would catch a future collapse of the two back into one.
+
+Guarded in `test/ui/critique-2.test.mjs` against the rendered tree, not the
+panel source — the empty-state rule, for the same reason: a class name in a
+comment is not on screen. Four tests: the `pre` paragraph gets the face, the
+three treatments (prose, `pre`, `raw`) stay distinguishable, the editor is sized
+in lines, and no panel applies the preformatted treatment to anything but an
+editor.
+
+**Two things checked while in here, neither of which needed a change.**
+
+`attachUserFont` moved into API.md Part 3's L5 fence, which closes **D-L12-9**:
+`test/ui/lane-conformance.test.mjs` reads that fence and now requires the
+adapter to call it or explain it, and `src/ui/services.js:380` has called it
+since C3. The test agrees, with no note added to `LANE_SURFACE_NOTES`.
+
+`/` leaving `BREAK_AFTER` changes what the live overflow preview reports for any
+text containing a slash — a URL, most visibly. It needs nothing here: the studio
+holds no break table of its own, and `services.sceneOverflow` runs L8's
+`measureScene` and L11's `detectOverflow`, the same two calls the sweep makes.
+The scene editor's "Text fit" section therefore moved with the corrected engine
+in the same pass the sweep did, which is the whole point of the two surfaces
+sharing one measurement.

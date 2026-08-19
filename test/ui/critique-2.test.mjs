@@ -33,7 +33,8 @@ import assert from 'node:assert/strict';
 import { StudioApp } from '../../src/ui/app.js';
 import { ACTIONS, actionIndex, fakeFontInput } from '../../src/ui/actions.js';
 import { makeServices, artifactFonts } from '../../src/ui/services.js';
-import { unfoundedFontClaims } from '../../src/ui/model.js';
+import { rawOptIn, unfoundedFontClaims } from '../../src/ui/model.js';
+import { ACT_ATTR, ARG_ATTR } from '../../src/ui/render.js';
 import { PANELS } from '../../src/ui/panels/index.js';
 import { emitBlockers } from '../../src/ui/gate.js';
 import { ProjectStore } from '../../src/core/storage.js';
@@ -490,7 +491,13 @@ async function specimensWithPre() {
     { type: 'paragraph', text: PRE_TEXT, pre: true },
     { type: 'raw', html: '<p>markup the layout must not present</p>' },
   ];
-  app.select({ specimenId: id });
+  app.select({
+    specimenId: id,
+    renditionId: app.proof.renditions[0].id,
+    recipeId: app.proof.recipes[0].id,
+    sceneId: app.proof.spine[0].id,
+    branchId: app.proof.branches[0].id,
+  });
   app.ui.section = 'specimens';
   return { app, tree: PANELS.specimens(app), id };
 }

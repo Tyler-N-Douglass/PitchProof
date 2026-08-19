@@ -229,6 +229,13 @@ export const TYPE_ROLES = {
   bh2: { face: 'display', sizes: { sm: 15, md: 18, lg: 21 }, lineHeight: 1.25, weight: 700 },
   bh3: { face: 'display', sizes: { sm: 13, md: 15, lg: 17 }, lineHeight: 1.3, weight: 600 },
   body: { face: 'body', sizes: { sm: 12, md: 14, lg: 16 }, lineHeight: 1.5, weight: 400 },
+  // Preformatted source text (`ContentBlock.pre`). Monospace because the whole
+  // reason the prospect wrote it inside a `<pre>` is that the columns line up,
+  // and a proportional face is exactly the dress that loses the alignment. One
+  // step below `body` at every breakpoint: a mono face at the same nominal size
+  // reads larger than the prose beside it, and a code sample is the run most
+  // likely to be the widest thing on the stage.
+  pre: { face: 'mono', sizes: { sm: 11, md: 13, lg: 14 }, lineHeight: 1.5, weight: 400 },
   listItem: { face: 'body', sizes: { sm: 12, md: 14, lg: 16 }, lineHeight: 1.45, weight: 400 },
   quote: { face: 'display', sizes: { sm: 20, md: 28, lg: 34 }, lineHeight: 1.3, weight: 500, letterSpacingEm: -0.01 },
   attribution: { face: 'body', sizes: { sm: 12, md: 14, lg: 15 }, lineHeight: 1.4, weight: 600 },

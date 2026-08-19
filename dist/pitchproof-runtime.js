@@ -2850,12 +2850,22 @@ function blockBody(block, o) {
       }, String(block.text ?? ''));
     }
 
-    case 'paragraph':
+    case 'paragraph': {
+
+      if (block.pre === true) {
+        return h('pre', {
+          class: 'pp-pre',
+          'data-pp-tx': 'pre',
+          'data-pp-ws': 'pre-wrap',
+          'data-pp-clamp': o.clampParagraph || null,
+        }, preformat(block.text));
+      }
       return h('p', {
         class: 'pp-p',
         'data-pp-tx': 'body',
         'data-pp-clamp': o.clampParagraph || null,
       }, String(block.text ?? ''));
+    }
 
     case 'list': {
       const items = Array.isArray(block.items) ? block.items : [];
@@ -2970,7 +2980,8 @@ function summarize(blocks) {
   for (const b of list) {
     if (!b) continue;
     if (!title && b.type === 'heading' && b.text) title = String(b.text);
-    else if (!blurb && b.type === 'paragraph' && b.text) blurb = String(b.text);
+
+    else if (!blurb && b.type === 'paragraph' && b.text) blurb = b.pre === true ? collapse(b.text) : String(b.text);
     else if (!blurb && b.type === 'list' && Array.isArray(b.items) && b.items.length) blurb = String(b.items[0]);
     else if (!blurb && b.type === 'quote' && b.text) blurb = String(b.text);
     if (title && blurb) break;
@@ -2980,10 +2991,31 @@ function summarize(blocks) {
   return { title, blurb, ...firstFlow(list) };
 }
 
+function collapse(text) {
+  return String(text ?? '').replace(/\s+/g, ' ').trim();
+}
+
 function padRow(row, cols) {
   const out = row.map((c) => String(c ?? ''));
   while (out.length < cols) out.push('');
   return out.slice(0, cols);
+}
+
+const PRE_TAB_COLUMNS = 4;
+
+function preformat(text) {
+  const src = String(text ?? '').replace(/\r\n?/g, '\n').replace(/^\n/, '');
+  if (!src.includes('\t')) return src;
+  return src.split('\n').map(expandTabs).join('\n');
+}
+
+function expandTabs(line) {
+  let out = '';
+  for (const ch of line) {
+    if (ch !== '\t') { out += ch; continue; }
+    out += ' '.repeat(PRE_TAB_COLUMNS - (out.length % PRE_TAB_COLUMNS));
+  }
+  return out;
 }
 
 function stripTags(html) {
@@ -3009,6 +3041,8 @@ __exports["blockBody"] = blockBody;
 __exports["renderBlocks"] = renderBlocks;
 __exports["firstOfType"] = firstOfType;
 __exports["summarize"] = summarize;
+__exports["PRE_TAB_COLUMNS"] = PRE_TAB_COLUMNS;
+__exports["preformat"] = preformat;
 __exports["stripTags"] = stripTags;
 };
 __modules["scene/parts.js"] = function (__exports, __require) {
@@ -4150,7 +4184,7 @@ function measureText(text, style) {
   return w;
 }
 
-const BREAK_AFTER = new Set(['-', '‐', '‒', '–', '—', '/', '​', '­']);
+const BREAK_AFTER = new Set(['-', '‐', '‒', '–', '—', '​', '­']);
 
 function segments(text) {
 
@@ -4559,6 +4593,8 @@ const TYPE_ROLES = {
   bh2: { face: 'display', sizes: { sm: 15, md: 18, lg: 21 }, lineHeight: 1.25, weight: 700 },
   bh3: { face: 'display', sizes: { sm: 13, md: 15, lg: 17 }, lineHeight: 1.3, weight: 600 },
   body: { face: 'body', sizes: { sm: 12, md: 14, lg: 16 }, lineHeight: 1.5, weight: 400 },
+
+  pre: { face: 'mono', sizes: { sm: 11, md: 13, lg: 14 }, lineHeight: 1.5, weight: 400 },
   listItem: { face: 'body', sizes: { sm: 12, md: 14, lg: 16 }, lineHeight: 1.45, weight: 400 },
   quote: { face: 'display', sizes: { sm: 20, md: 28, lg: 34 }, lineHeight: 1.3, weight: 500, letterSpacingEm: -0.01 },
   attribution: { face: 'body', sizes: { sm: 12, md: 14, lg: 15 }, lineHeight: 1.4, weight: 600 },

@@ -18,6 +18,7 @@
 
 import { blockText } from '../core/contracts.js';
 import { flatten, splitAtChars } from './text.js';
+import { carryFields } from './blocks.js';
 
 /**
  * Mean English word length, 4.7 letters (Brown corpus), plus one space.
@@ -476,16 +477,29 @@ export function enforceBudget(blocks, budget, options = {}) {
 }
 
 /**
+ * The same block with its one text run replaced by a shortened form.
+ *
+ * A third instance of C8's rebuild bug lived here: this used to name the fields
+ * it kept, so a budget-trimmed block lost `dir`, `lang` and `pre` — an SMS
+ * variant of a right-to-left page came back unmarked, and a trimmed code sample
+ * came back as prose. It carries by default now, like every other rebuild in
+ * this lane; the only fields it owns are the one it just rewrote.
+ *
+ * Shortening the text falsifies nothing else about the block. It is still a
+ * heading, still at that level, still pointed at that href, still right to left.
+ *
  * @param {import('../core/contracts.d.ts').ContentBlock} block
  * @param {string} text
  * @returns {import('../core/contracts.d.ts').ContentBlock}
  */
 function withText(block, text) {
   switch (block.type) {
-    case 'heading': return { type: 'heading', level: block.level, text };
-    case 'paragraph': return { type: 'paragraph', text };
-    case 'cta': return { type: 'cta', label: text, href: block.href };
-    case 'quote': return block.attribution ? { type: 'quote', text, attribution: block.attribution } : { type: 'quote', text };
+    case 'heading': return carryFields(block, { type: 'heading', level: block.level, text }, ['text']);
+    case 'paragraph': return carryFields(block, { type: 'paragraph', text }, ['text']);
+    case 'cta': return carryFields(block, { type: 'cta', label: text, href: block.href }, ['label']);
+    case 'quote': return block.attribution
+      ? carryFields(block, { type: 'quote', text, attribution: block.attribution }, ['text'])
+      : carryFields(block, { type: 'quote', text }, ['text', 'attribution']);
     default: return block;
   }
 }
