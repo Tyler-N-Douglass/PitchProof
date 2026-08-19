@@ -681,3 +681,43 @@ extensions, named/namespace/default imports, `export function|class|const|let|va
 `export { a, b as c }`, and `export { a } from './x.js'`. It refuses bare
 imports, `export *`, `export default`, dynamic `import()`, and import cycles.
 **Write source it can compile.**
+
+---
+
+## Part 5 — Surfaces the lanes published beyond Part 3
+
+Part 3 declared the minimum each lane had to publish. Lanes published more, and
+some of those extras are load-bearing across lanes. These are declared here and
+checked by `test/integration/api-conformance.test.mjs`, so a lane cannot quietly
+withdraw something another lane depends on.
+
+| Lane | Module | Export | Who needs it |
+|---|---|---|---|
+| L3 | `ingest/index.js` | `ingestFile`, `ingestFiles` | L12's drop dispatch |
+| L3 | `ingest/index.js` | `importPageImages` | D9's explicit page-image path |
+| L3 | `ingest/index.js` | `parseXml`, `serialize`, `plainTree` | The XML reader, and an acyclic copy of a `DocNode` tree (dispute 29) |
+| L3 | `ingest/index.js` | `imageSize`, `sniffMime`, `toDataUri` | L6's media capture |
+| L4 | `brand/color.js` | `extractPalette` | The one-call pipeline L5's `buildBrandSystem` consumes |
+| L4 | `brand/color.js` | `colorConfidenceDetail` | §7's low-confidence review surface |
+| L4 | `brand/color.js` | `ContrastSolveError` | `solveRoles` throws it; callers must handle it |
+| L5 | `brand/theme.js` | `attachUserFont` | The only route to `embeddable: true` (§7) |
+| L5 | `brand/theme.js` | `assertNoStudioVars` | D11 made mechanical: throws on any `--st-` name in artifact CSS |
+| L6 | `specimen/index.js` | `unresolvedMediaRefs` | L11's `ASSET_MISSING` |
+| L6 | `specimen/index.js` | `setRawHtmlOptIn`, `rawFallbackBlocks` | §8's per-specimen raw opt-in |
+| L6 | `specimen/index.js` | `markEdited` | §18.3's "if a specimen was edited, the artifact says so" |
+| L6 | `specimen/index.js` | `inferKind`, `blocksWithTrace`, `restoreAllBlocks` | L12's specimen panel |
+| L7 | `recipe/index.js` | `renderRecipe`, `renderAll`, `RECIPE_TEMPLATES` | **How a caller actually gets renditions out of a recipe.** L12 depends on it |
+| L7 | `recipe/index.js` | `hasPromotionRecord`, `verifyProvenance`, `renditionsRequiringLabel`, `PROMOTION_RECORD_RE` | L10 and L11 must detect a `verified-by-user` claim carrying no promotion record |
+| L7 | `recipe/index.js` | `assertNoAdapterSecrets`, `assertNoFabricatedFacts` | §9 and §18.2 enforcement points |
+| L9 | `branch/index.js` | `installBranchInputBridge` | Required for `/` to work; the composition root calls it |
+| L9 | `branch/index.js` | `branchGraph`, `nestingDepths`, `highlightRuns` | L11's coverage grading and the jump overlay |
+| L10 | `emit/index.js` | `scanModelAssets` | A `MediaRef` or logo pointing at the network, reported rather than dropped |
+| L10 | `emit/index.js` | `artifactRuntimeSource` | The composition-root bundle the artifact carries |
+
+### Known gap
+
+`classifyImagery` needs `ImageSample`s and no published surface builds them.
+`sampleFromPng` exists in `src/brand/imagery.js` but is not re-exported from
+`brand/theme.js`, so the studio cannot reach it: imagery comes back `unknown`
+with zero confidence and is held by the §7 review gate rather than guessed.
+Filed as dispute 35 and L12's `D-L12-3`.

@@ -306,3 +306,28 @@ test('no lane reaches into another lane past its published surface', async (t) =
   }
   assert.deepEqual(violations, [], violations.join('\n'));
 });
+
+/**
+ * Part 5 of `API.md`: surfaces a lane published beyond its declared minimum
+ * that another lane now depends on. A lane cannot quietly withdraw one.
+ */
+const PUBLISHED_EXTRAS = [
+  { lane: 'L3 Ingest', module: 'src/ingest/index.js', exports: { ingestFile: 'fn', ingestFiles: 'fn', importPageImages: 'fn', parseXml: 'fn', serialize: 'fn', plainTree: 'fn', imageSize: 'fn', sniffMime: 'fn', toDataUri: 'fn' } },
+  { lane: 'L4 Brand colour', module: 'src/brand/color.js', exports: { extractPalette: 'fn', colorConfidenceDetail: 'fn', ContrastSolveError: 'class' } },
+  { lane: 'L5 Brand theme', module: 'src/brand/theme.js', exports: { attachUserFont: 'fn', assertNoStudioVars: 'fn' } },
+  { lane: 'L6 Specimen', module: 'src/specimen/index.js', exports: { unresolvedMediaRefs: 'fn', setRawHtmlOptIn: 'fn', rawFallbackBlocks: 'fn', markEdited: 'fn', inferKind: 'fn', blocksWithTrace: 'fn', restoreAllBlocks: 'fn' } },
+  { lane: 'L7 Recipes', module: 'src/recipe/index.js', exports: { renderRecipe: 'fn', renderAll: 'fn', RECIPE_TEMPLATES: 'value', hasPromotionRecord: 'fn', verifyProvenance: 'fn', renditionsRequiringLabel: 'fn', PROMOTION_RECORD_RE: 'value', assertNoAdapterSecrets: 'fn', assertNoFabricatedFacts: 'fn' } },
+  { lane: 'L9 Branches', module: 'src/branch/index.js', exports: { installBranchInputBridge: 'fn', branchGraph: 'fn', nestingDepths: 'fn', highlightRuns: 'fn' } },
+  { lane: 'L10 Emitter', module: 'src/emit/index.js', exports: { scanModelAssets: 'fn', artifactRuntimeSource: 'fn' } },
+];
+
+for (const surface of PUBLISHED_EXTRAS) {
+  test(`${surface.lane}: ${surface.module} still publishes what other lanes depend on`, async (t) => {
+    const { pending, missing } = await checkSurface(surface);
+    if (pending) {
+      if (STRICT) assert.fail(`${surface.module} has not landed (INTEGRATION_STRICT=1)`);
+      return t.skip(`${surface.module} has not landed yet`);
+    }
+    assert.deepEqual(missing, [], `${surface.module} withdrew a surface another lane depends on (API.md Part 5):\n  ${missing.join('\n  ')}`);
+  });
+}
