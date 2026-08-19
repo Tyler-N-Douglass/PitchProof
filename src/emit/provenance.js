@@ -1,5 +1,6 @@
 /**
- * Provenance enforcement, in the emit path (§9, §18.1, §22.6).
+ * The §18 honesty laws about the rendered artifact, enforced in the emit path
+ * (§9, §18.1, §18.3, §22.6).
  *
  * §22.6 names this "the single reputational risk in this product": a proof that
  * implies generated sample content is the client's approved copy. §9 says
@@ -8,7 +9,20 @@
  * emit)". Everything in this module exists to make those sentences into code
  * that refuses.
  *
- * Four things are checked, and each one is a distinct attack:
+ * §18.3 — *"The prospect's own content is presented unmodified on the 'before'
+ * side. If a specimen was edited, the artifact says so"* — is the same law with
+ * a different subject, and it is enforced here for the same reason. The model
+ * records the edit (L6's `markEdited`), L11's `ASSET_MISSING` fix calls it when
+ * it removes the prospect's own content, and L8 renders `.pp-edited` for it in
+ * all eight layouts. None of that is worth anything if nothing checks that the
+ * marker arrived: a layout that stopped rendering it, or a brand stylesheet
+ * that faded it, would ship in silence — and what ships is a client being shown
+ * material the presenting team changed, as if it were their own page as
+ * captured. That is §22.6's sentence with "generated sample content" replaced
+ * by "edited client content", so it is graded where §22.6 puts it: severity 1,
+ * `PROVENANCE_UNLABELED`, emit refused (E43).
+ *
+ * Six things are checked, and each one is a distinct attack:
  *
  *   1. **The claim.** A rendition marked `verified-by-user` with no promotion
  *      record behind it is not verified by anyone (`emit/promotion.js`).
@@ -20,11 +34,19 @@
  *      teaches them nothing about the law they just ran into.
  *   3. **The markup.** Every rendition that needs a label must have one inside
  *      the scene subtree that renders it.
- *   4. **The stylesheet.** The label has to survive the *final* CSS — runtime,
+ *   4. **The stylesheet.** The marker has to survive the *final* CSS — runtime,
  *      brand theme, and any user CSS — with a computed contrast of at least
  *      4.5:1 against its own background, a computed font size of at least 11px,
  *      and no rule anywhere that hides it: `display:none`, `visibility:hidden`,
- *      `opacity:0`, zero size, a clip, or a position off the screen.
+ *      `opacity:0`, zero size, a clip, or a position off the screen. This runs
+ *      over **every** class in `PROTECTED_MARKERS`, not over the provenance
+ *      label alone, because the detector never read a class name in the first
+ *      place — it reads a chain and a cascade (E41).
+ *   5. **The edit record.** Every scene whose specimen was edited after capture
+ *      must render `.pp-edited` inside that specimen's subtree, checked with
+ *      L8's own `markedSpecimenIds` against the tree the artifact will show.
+ *   6. **The file.** The opening scene is pre-rendered into the document, so
+ *      both markers are looked for in the emitted bytes as well as in the tree.
  *
  * **The honest limits of check 4** — the same list is in
  * `docs/decisions/L10-emit.md`, and every one of them fails safe:
@@ -54,9 +76,20 @@ import { CONTRAST_AA_BODY } from '../core/contracts.js';
 import { parseStylesheet, computeCascade, backgroundColorOf, resolveLengthPx, resolveLineHeightPx } from './css.js';
 import { parseColor, contrastRatio, compositeOver, toHex } from './color-value.js';
 import { requiresProvenanceLabel, isUnearnedVerification, promotionRecord } from './promotion.js';
+import {
+  PROVENANCE_LABEL_CLASS, EDITED_MARK_CLASS,
+  specimenEdited, editRecordCount, markedSpecimenIds,
+} from '../scene/index.js';
 
-/** The class L8 puts on every provenance label (`PROVENANCE_LABEL_CLASS`). */
-export const PROVENANCE_LABEL_CLASS = 'pp-provenance';
+/**
+ * The two classes §18 protects, read from L8 rather than spelled again here
+ * (E40). `PROVENANCE_LABEL_CLASS` used to be a string literal in this file, and
+ * a second spelling of a class name is a defect waiting for someone to rename
+ * the first one: the emitter would look for a label that no longer exists,
+ * find none, and refuse every proof — or, if the rename went the other way,
+ * find one that nothing styles and pass everything.
+ */
+export { PROVENANCE_LABEL_CLASS, EDITED_MARK_CLASS };
 
 /** §18.1's size floor, in CSS px. */
 export const MIN_LABEL_FONT_PX = 11;
@@ -123,6 +156,85 @@ const CLIPPING_OVERFLOW = new Set(['hidden', 'clip']);
 
 /** Attribute a layout may use to scope a rendition's subtree. */
 export const RENDITION_ATTR = 'data-pp-rendition';
+
+/** Attribute a layout uses to scope a specimen's subtree (L8's `markedSpecimenIds`). */
+export const SPECIMEN_ATTR = 'data-pp-specimen';
+
+/**
+ * The attribute `editedMark()` puts on the pill, naming the specimen it is
+ * about. A **second, independent attribution**, not the primary one: the
+ * primary reader is L8's own `markedSpecimenIds`, which walks
+ * `data-pp-specimen` scopes.
+ *
+ * Both are read because either alone would refuse a marker a client can see.
+ * `stack` renders one `data-pp-specimen` scope per step, so "there is a
+ * `.pp-edited` somewhere in this scene" is not enough to conclude the *scene's*
+ * specimen was marked — but a pill that names the specimen in its own attribute
+ * says so whether or not the layout wrapped it in a scope. The law is about a
+ * client being told, so it refuses a marker that is missing or unreadable, not
+ * one that is attributed unconventionally.
+ */
+export const EDITED_FOR_ATTR = 'data-pp-edited-for';
+
+/**
+ * The markers §18 will not let a stylesheet take away — **a set, not a
+ * special case** (E41).
+ *
+ * `judgeLabelStyle` and `judgeLabelRoom` never read a class name: they are
+ * handed an ancestor chain and a cascade and they answer *"can this text be
+ * read"*. The class only ever decided which elements got asked. So the
+ * generalisation is not a rewrite of the detector, it is a widening of its
+ * input — and the twenty-odd routes P8 and C9 closed against `.pp-provenance`
+ * (`display:none`, `opacity:0`, a one-pixel clipping box, `-1em` tracking,
+ * `scale(0.2)`, `-webkit-text-fill-color`, `filter:blur`, an ancestor's
+ * `filter` at zero alpha, a contrast attack through the theme's own custom
+ * properties) close against `.pp-edited` with no second implementation and no
+ * second list to keep in step.
+ *
+ * Each entry carries the noun the refusal should use and the law it is
+ * refusing under, because "display:none on the label" is the wrong sentence to
+ * print about the edit marker and §18.1 is the wrong section to cite for it.
+ * A third marker is one more entry here.
+ *
+ * @type {{className: string, noun: string, law: string, what: string}[]}
+ */
+export const PROTECTED_MARKERS = [
+  {
+    className: PROVENANCE_LABEL_CLASS,
+    noun: 'the label',
+    title: 'The provenance label',
+    law: '§18.1',
+    what: 'illustrative content presented without its label',
+    emptyText: 'A label that says nothing labels nothing',
+    nonRemovable: '§18.1 makes the label non-removable, and that includes styling it away.',
+  },
+  {
+    className: EDITED_MARK_CLASS,
+    noun: 'the edit marker',
+    title: 'The edit marker',
+    law: '§18.3',
+    what: 'an edited specimen presented as captured',
+    emptyText: 'A marker that says nothing does not say the specimen was edited',
+    nonRemovable: '§18.3 makes the marker non-removable, and that includes styling it away.',
+  },
+];
+
+/** The provenance label's descriptor — the default subject of every judgement. */
+export const LABEL_MARKER = PROTECTED_MARKERS[0];
+
+/** The §18.3 edit marker's descriptor. */
+export const EDITED_MARKER = PROTECTED_MARKERS[1];
+
+/**
+ * Which protected marker, if any, this element is.
+ * @param {import('./css.js').ElementDesc} desc
+ * @param {{className: string, noun: string, law: string, what: string}[]} [markers]
+ * @returns {{className: string, noun: string, law: string, what: string}|null}
+ */
+export function markerFor(desc, markers = PROTECTED_MARKERS) {
+  for (const marker of markers) if (desc.classes.includes(marker.className)) return marker;
+  return null;
+}
 
 /** The page background the artifact falls back to when the theme resolves nothing. */
 const DEFAULT_PAGE_BACKGROUND = { r: 255, g: 255, b: 255, a: 1 };
@@ -248,11 +360,24 @@ export function documentChainPrefix() {
   ];
 }
 
+
 /**
- * @param {import('./css.js').ElementDesc} desc
- * @returns {boolean}
+ * A specimen's name, for a refusal a seller has to act on.
+ *
+ * The title if it has one, else the source URL, else the id — the same fallback
+ * order L8's `specimenTitle()` uses on stage. A refusal that names only an
+ * opaque id makes the seller go looking for which page it is, and §18.3's
+ * remedy is to look at that page.
+ *
+ * @param {import('../core/contracts.d.ts').Specimen} specimen
+ * @returns {string}
  */
-const isLabel = (desc) => desc.classes.includes(PROVENANCE_LABEL_CLASS);
+function specimenTitleOf(specimen) {
+  const title = typeof specimen.title === 'string' ? specimen.title.trim() : '';
+  if (title) return title;
+  const url = typeof specimen.sourceUrl === 'string' ? specimen.sourceUrl.trim() : '';
+  return url || specimen.id;
+}
 
 /**
  * Concatenated text of a VNode, for the "the label says something" check.
@@ -327,21 +452,29 @@ function blockTextRuns(block) {
 }
 
 /**
- * Judge one label against the final stylesheet.
+ * Judge one protected marker against the final stylesheet.
  *
- * @param {import('./css.js').ElementDesc[]} chain  html → label
+ * `marker` decides only the two words the refusal is written in — the noun for
+ * the element itself and the section of §18 it is refused under. Every
+ * measurement below is about the cascade and the type, and none of them reads
+ * a class name, which is why `.pp-edited` needed no second detector (E41).
+ *
+ * @param {import('./css.js').ElementDesc[]} chain  html → marker
  * @param {import('./css.js').StyleRule[]} rules
+ * @param {{noun: string, law: string}} [marker]  defaults to the provenance label
  * @returns {{ok: boolean, reasons: string[], detail: Record<string, unknown>}}
  */
-export function judgeLabelStyle(chain, rules) {
+export function judgeLabelStyle(chain, rules, marker = LABEL_MARKER) {
   const computed = computeCascade(chain, rules);
   const self = computed[computed.length - 1];
+  const noun = marker.noun;
+  const law = marker.law;
   /** @type {string[]} */
   const reasons = [];
 
   for (let i = 0; i < chain.length; i++) {
     const style = computed[i];
-    const who = i === chain.length - 1 ? 'the label' : `an ancestor <${chain[i].tag}${chain[i].classes.length ? `.${chain[i].classes.join('.')}` : ''}>`;
+    const who = i === chain.length - 1 ? noun : `an ancestor <${chain[i].tag}${chain[i].classes.length ? `.${chain[i].classes.join('.')}` : ''}>`;
 
     const display = (style.props.display || '').trim().toLowerCase();
     if (display === 'none') reasons.push(`display:none on ${who}`);
@@ -395,16 +528,16 @@ export function judgeLabelStyle(chain, rules) {
     }
   }
 
-  if (self.effectiveOpacity === 0) reasons.push('opacity:0 — the label is styled to invisibility');
+  if (self.effectiveOpacity === 0) reasons.push(`opacity:0 — ${noun} is styled to invisibility`);
 
   const fontSizePx = self.fontSizePx;
   if (!(fontSizePx >= MIN_LABEL_FONT_PX)) {
-    reasons.push(`font-size computes to ${round(fontSizePx)}px, below the ${MIN_LABEL_FONT_PX}px floor §18.1 enforces`);
+    reasons.push(`font-size computes to ${round(fontSizePx)}px, below the ${MIN_LABEL_FONT_PX}px floor ${law} enforces`);
   }
 
-  // C9. The size floor, measured rather than spelled: room for the label's own
+  // C9. The size floor, measured rather than spelled: room for the marker's own
   // line of text, and tracking that leaves the characters apart.
-  const room = judgeLabelRoom(chain, computed);
+  const room = judgeLabelRoom(chain, computed, marker);
   reasons.push(...room.reasons);
 
   // The floor again, on the size the label is actually painted at. A chain that
@@ -414,7 +547,7 @@ export function judgeLabelStyle(chain, rules) {
   if (room.scale < 1) {
     const rendered = fontSizePx * room.scale;
     if (!(rendered >= MIN_LABEL_FONT_PX)) {
-      reasons.push(`the label is scaled by ${round(room.scale)}, so ${round(fontSizePx)}px type renders at ${round(rendered)}px — below the ${MIN_LABEL_FONT_PX}px floor §18.1 enforces`);
+      reasons.push(`${noun} is scaled by ${round(room.scale)}, so ${round(fontSizePx)}px type renders at ${round(rendered)}px — below the ${MIN_LABEL_FONT_PX}px floor ${law} enforces`);
     }
   }
 
@@ -427,7 +560,7 @@ export function judgeLabelStyle(chain, rules) {
   const paint = glyphPaint(self);
   const ownFilter = parseFilter(self.props.filter || '', self.fontSizePx);
   const painted = ownFilter.transfer ? ownFilter.transfer(paint.color) : paint.color;
-  // The label's own filter paints the label's own background too; the backdrop
+  // The marker's own filter paints its own background too; the backdrop
   // it sits on belongs to an ancestor and is not filtered with it. Applying the
   // transfer to the backdrop as well would be right only when the label paints
   // an opaque background of its own, and that is exactly when it does.
@@ -442,7 +575,7 @@ export function judgeLabelStyle(chain, rules) {
     const filtered = ownFilter.transfer ? ` after filter:${String(self.props.filter).trim()}` : '';
     reasons.push(
       `computed contrast is ${ratio.toFixed(2)}:1 (${toHex(foreground)} on ${toHex(filteredBackground)})${source}${filtered}, `
-      + `below the ${CONTRAST_AA_BODY}:1 floor §18.1 enforces`,
+      + `below the ${CONTRAST_AA_BODY}:1 floor ${law} enforces`,
     );
   }
 
@@ -504,11 +637,14 @@ export function judgeLabelStyle(chain, rules) {
  * is applied to, the same way the box is measured against the line box: a
  * ratio, in the units the attack has to survive.
  *
- * @param {import('./css.js').ElementDesc[]} chain     html → label
+ * @param {import('./css.js').ElementDesc[]} chain     html → marker
  * @param {import('./css.js').ComputedStyle[]} computed
+ * @param {{noun: string, law: string}} [marker]  defaults to the provenance label
  * @returns {{reasons: string[], lineBoxPx: number, boxHeightPx: number|null, boxWidthPx: number|null, clipped: boolean, trackingPx: number, scale: number, blurPx: number}}
  */
-export function judgeLabelRoom(chain, computed) {
+export function judgeLabelRoom(chain, computed, marker = LABEL_MARKER) {
+  const noun = marker.noun;
+  const law = marker.law;
   const self = computed[computed.length - 1];
   const rootPx = computed.length ? computed[0].fontSizePx : 16;
   const fontSizePx = self.fontSizePx;
@@ -529,13 +665,13 @@ export function judgeLabelRoom(chain, computed) {
   for (let i = 0; i < computed.length; i++) {
     const style = computed[i];
     const el = chain[i];
-    const who = i === chain.length - 1 ? 'the label' : `an ancestor <${el.tag}${el.classes.length ? `.${el.classes.join('.')}` : ''}>`;
+    const who = i === chain.length - 1 ? noun : `an ancestor <${el.tag}${el.classes.length ? `.${el.classes.join('.')}` : ''}>`;
 
     // Clipping is judged **on the element that declares the small box**, never
-    // across the chain. A one-pixel label inside a clipping stage still shows
-    // its text: the text spills out of the label and the stage clips at the
+    // across the chain. A one-pixel marker inside a clipping stage still shows
+    // its text: the text spills out of the marker and the stage clips at the
     // stage's own edge, which is nowhere near it. It is the element that is
-    // both too small and cutting its own content off that hides the label —
+    // both too small and cutting its own content off that hides the marker —
     // `.pp-provenance{height:1px;overflow:hidden}`, exactly.
     const cuts = clipsContent(style);
     if (cuts) clipped = true;
@@ -547,7 +683,7 @@ export function judgeLabelRoom(chain, computed) {
       if (cuts && px < lineBoxPx) {
         reasons.push(
           `${prop}:${String(style.props[prop]).trim()} on ${who} leaves ${round(px)}px for a line box of ${round(lineBoxPx)}px, `
-          + 'and that element clips what does not fit — a box too short to hold one line of the label is the label styled to invisibility (§18.1)',
+          + `and that element clips what does not fit — a box too short to hold one line of ${noun} is ${noun} styled to invisibility (${law})`,
         );
       }
     }
@@ -558,7 +694,7 @@ export function judgeLabelRoom(chain, computed) {
       if (cuts && px < widthFloor) {
         reasons.push(
           `${prop}:${String(style.props[prop]).trim()} on ${who} leaves ${round(px)}px against a ${round(widthFloor)}px floor `
-          + `(${LABEL_MIN_WIDTH_EM}em of ${round(fontSizePx)}px type), and that element clips what does not fit — there is not room to read it (§18.1)`,
+          + `(${LABEL_MIN_WIDTH_EM}em of ${round(fontSizePx)}px type), and that element clips what does not fit — there is not room to read it (${law})`,
         );
       }
     }
@@ -578,8 +714,8 @@ export function judgeLabelRoom(chain, computed) {
       }
     }
 
-    // Blur composes down the chain: a blurred ancestor blurs the label inside
-    // it, and a label blurred inside a blurred ancestor is blurred twice. Two
+    // Blur composes down the chain: a blurred ancestor blurs the marker inside
+    // it, and a marker blurred inside a blurred ancestor is blurred twice. Two
     // Gaussians add in quadrature, which is what σ means.
     const own = parseFilter(style.props.filter || '', style.fontSizePx).blurPx;
     if (own > 0) blurPx = Math.sqrt(blurPx * blurPx + own * own);
@@ -590,8 +726,8 @@ export function judgeLabelRoom(chain, computed) {
   const blurFloor = LABEL_MAX_BLUR_EM * fontSizePx;
   if (blurPx > blurFloor) {
     reasons.push(
-      `the label is painted under a ${round(blurPx)}px blur against ${round(fontSizePx)}px type — `
-      + `past the ${LABEL_MAX_BLUR_EM}em ceiling (${round(blurFloor)}px), which is where the strokes of the glyphs stop resolving (§18.1)`,
+      `${noun} is painted under a ${round(blurPx)}px blur against ${round(fontSizePx)}px type — `
+      + `past the ${LABEL_MAX_BLUR_EM}em ceiling (${round(blurFloor)}px), which is where the strokes of the glyphs stop resolving (${law})`,
     );
   }
 
@@ -821,10 +957,73 @@ export function resolveBackground(chain, computed) {
 }
 
 /**
- * Enforce the provenance law over a whole proof.
+ * The scenes whose specimen was edited after capture (§18.3).
+ *
+ * Derived from the proof exactly the way the runtime derives `ctx.specimen` —
+ * `proof.specimens` looked up by `scene.specimenId` — so the expectation the
+ * emitter checks is computed from the model rather than read back off the
+ * render it is checking. `Runtime.layoutContext` resolves the same map, which
+ * is what makes "L8 renders a marker whenever `ctx.specimen` is edited" and
+ * "L10 requires one whenever the scene's specimen is edited" the same sentence
+ * rather than two that can drift.
+ *
+ * `specimenEdited` is L8's reader, not a second one (E17): the model says
+ * `edited === true` *or* carries edit notes, and a specimen with notes and a
+ * false flag was edited by something that half-remembered to say so.
  *
  * @param {import('../core/contracts.d.ts').Proof} proof
- * @param {string} html      the emitted document (used to confirm the labels
+ * @returns {Map<string, import('../core/contracts.d.ts').Specimen>} scene id → the edited specimen
+ */
+export function editedScenesOf(proof) {
+  const specimenById = new Map((proof.specimens || []).map((sp) => [sp.id, sp]));
+  /** @type {Map<string, import('../core/contracts.d.ts').Specimen>} */
+  const out = new Map();
+  for (const { scene } of allScenesOf(proof)) {
+    if (!scene.specimenId) continue;
+    const specimen = specimenById.get(scene.specimenId);
+    if (specimen && specimenEdited(specimen)) out.set(scene.id, specimen);
+  }
+  return out;
+}
+
+/**
+ * Does the serialized document carry an element with this class?
+ *
+ * Written against the class *tokens* rather than as `\bpp-edited\b`, because
+ * `\b` matches at a hyphen: the word-boundary form answers "yes" to
+ * `class="pp-edited-notice"`, which is the strip the marker sits in and not the
+ * marker. That would have let a layout that renders the container and drops the
+ * pill pass the one check that reads the emitted file.
+ *
+ * @param {string} html
+ * @param {string} className
+ * @returns {boolean}
+ */
+export function htmlHasClass(html, className) {
+  if (typeof html !== 'string' || !html) return false;
+  const attr = /\sclass\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi;
+  let match = attr.exec(html);
+  while (match) {
+    const value = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : match[4] || '');
+    if (value.split(/\s+/).includes(className)) return true;
+    match = attr.exec(html);
+  }
+  return false;
+}
+
+/**
+ * Enforce the §18 honesty laws over a whole proof.
+ *
+ * Two laws, one walk. §18.1 asks whether illustrative content carries its
+ * label; §18.3 asks whether an edited specimen says so. They are checked in
+ * the same loop, against the same rendered trees and the same resolved
+ * cascade, because they are the same shape — derive the expectation from the
+ * model, look for it in the render, refuse when it is missing or unreadable —
+ * and because rendering every scene twice to ask two questions about it would
+ * be the only thing a second entry point bought (E42).
+ *
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @param {string} html      the emitted document (used to confirm the markers
  *                           survived serialization into the first paint)
  * @param {string} css       the final stylesheet: runtime + theme + user CSS
  * @param {object} [options]
@@ -866,7 +1065,11 @@ export function assertProvenance(proof, html, css, options = {}) {
   });
   if (optionFinding) findings.push(optionFinding);
 
-  if (needingLabel.length === 0) return findings;
+  // §18.3's half of the expectation, derived from the model exactly as §18.1's
+  // is: which scenes put an edited specimen on screen.
+  const editedScenes = editedScenesOf(proof);
+
+  if (needingLabel.length === 0 && editedScenes.size === 0) return findings;
 
   // 3 and 4. Markup and stylesheet, scene by scene.
   const prefix = documentChainPrefix();
@@ -876,32 +1079,52 @@ export function assertProvenance(proof, html, css, options = {}) {
     const needed = (scene.renditionIds || [])
       .map((id) => renditionById.get(id))
       .filter((r) => r && requiresProvenanceLabel(r));
-    if (needed.length === 0) continue;
+    const editedSpecimen = editedScenes.get(scene.id) || null;
+    if (needed.length === 0 && !editedSpecimen) continue;
 
     if (!renderScene) {
-      findings.push(provenanceFinding(
-        `Scene ${scene.id} renders ${needed.length} rendition(s) that must carry a provenance label, but the emitter was given no way to render the scene, `
-        + 'so the label could not be verified. The emit is refused rather than assumed correct.',
-        { sceneId: scene.id, branchId: branchId || undefined, check: 'render' },
-      ));
+      if (needed.length > 0) {
+        findings.push(provenanceFinding(
+          `Scene ${scene.id} renders ${needed.length} rendition(s) that must carry a provenance label, but the emitter was given no way to render the scene, `
+          + 'so the label could not be verified. The emit is refused rather than assumed correct.',
+          { sceneId: scene.id, branchId: branchId || undefined, check: 'render' },
+        ));
+      }
+      if (editedSpecimen) {
+        findings.push(provenanceFinding(
+          `Scene ${scene.id} renders specimen "${specimenTitleOf(editedSpecimen)}" (${editedSpecimen.id}), which was edited after capture, `
+          + 'but the emitter was given no way to render the scene, so the §18.3 marker could not be verified. '
+          + 'The emit is refused rather than assumed correct.',
+          { sceneId: scene.id, branchId: branchId || undefined, specimenId: editedSpecimen.id, check: 'edited-render' },
+        ));
+      }
       continue;
     }
 
     const tree = renderScene(scene);
-    /** @type {{node: any, chain: import('./css.js').ElementDesc[]}[]} */
-    const labels = [];
+    /** @type {{marker: typeof PROTECTED_MARKERS[number], node: any, chain: import('./css.js').ElementDesc[]}[]} */
+    const markers = [];
     /** @type {Map<string, {node: any, chain: import('./css.js').ElementDesc[]}[]>} */
     const scoped = new Map();
     /** @type {{id: string, chain: import('./css.js').ElementDesc[]}[]} */
     const scopes = [];
+    /** Specimen ids an edit marker names in its own attribute. */
+    const namedByMarker = new Set();
 
     walkWithChain(tree, (node, chain) => {
       const desc = chain[chain.length - 1];
       const renditionId = desc.attrs[RENDITION_ATTR];
       if (renditionId) scopes.push({ id: renditionId, chain });
-      if (isLabel(desc)) labels.push({ node, chain: prefix.concat(chain) });
+      const marker = markerFor(desc);
+      if (marker) {
+        markers.push({ marker, node, chain: prefix.concat(chain) });
+        const names = desc.attrs[EDITED_FOR_ATTR];
+        if (marker === EDITED_MARKER && names) namedByMarker.add(names);
+      }
     });
 
+    /** @type {{node: any, chain: import('./css.js').ElementDesc[]}[]} */
+    const labels = markers.filter((m) => m.marker === LABEL_MARKER).map((m) => ({ node: m.node, chain: m.chain }));
     labelsSeenAnywhere += labels.length;
 
     // A rendition can be rendered by more than one element in a scene — a
@@ -947,21 +1170,66 @@ export function assertProvenance(proof, html, css, options = {}) {
       }
     }
 
-    for (const label of labels) {
-      const text = nodeText(label.node).replace(/\s+/g, ' ').trim();
-      if (!text) {
+    // §18.3, the markup half. "If a specimen was edited, the artifact says so."
+    // The expectation came off the model above; this is the render answering.
+    //
+    // `markedSpecimenIds` is L8's own reader — the one `withEditedNotice` uses
+    // to decide whether a layout already marked the specimen before it appends
+    // the notice strip. Asking the render with the same function the render
+    // asked itself is what makes this a check rather than a second opinion: a
+    // layout that stops rendering the pill, or a sweep that stops appending the
+    // strip, fails here on the next emit.
+    if (editedSpecimen) {
+      const marked = markedSpecimenIds(tree);
+      if (!marked.has(editedSpecimen.id) && !namedByMarker.has(editedSpecimen.id)) {
+        const records = editRecordCount(editedSpecimen);
         findings.push(provenanceFinding(
-          `A .${PROVENANCE_LABEL_CLASS} element in scene ${scene.id} renders no text. A label that says nothing labels nothing (§18.1).`,
-          { sceneId: scene.id, branchId: branchId || undefined, check: 'label-text' },
+          `Scene ${scene.id} renders specimen "${specimenTitleOf(editedSpecimen)}" (${editedSpecimen.id}), which the presenting team edited after capture`
+          + `${records ? ` and which carries ${records} edit record(s)` : ''}, but the scene rendered no .${EDITED_MARK_CLASS} element for it — `
+          + `neither inside a [${SPECIMEN_ATTR}="${editedSpecimen.id}"] subtree nor carrying ${EDITED_FOR_ATTR}="${editedSpecimen.id}". `
+          + '§18.3 requires the artifact to say a specimen was edited, '
+          + 'and a client reading the "before" side of this scene would be shown changed material as if it were their own page as captured.',
+          {
+            sceneId: scene.id,
+            branchId: branchId || undefined,
+            specimenId: editedSpecimen.id,
+            editRecords: records,
+            check: 'edited-present',
+          },
         ));
       }
-      const verdict = judgeLabelStyle(label.chain, rules);
+    }
+
+    // The stylesheet half, over **every** protected marker the scene rendered
+    // rather than over the provenance label alone (E41). One loop, one
+    // detector, two laws: a `.pp-edited` faded to `opacity:0`, crushed into a
+    // one-pixel clipping box, tracked to `-1em`, blurred, or painted at 3:1
+    // through the theme's own custom properties is refused by exactly the code
+    // that refuses it on `.pp-provenance`.
+    for (const found of markers) {
+      const { marker } = found;
+      const text = nodeText(found.node).replace(/\s+/g, ' ').trim();
+      if (!text) {
+        findings.push(provenanceFinding(
+          `A .${marker.className} element in scene ${scene.id} renders no text. ${marker.emptyText} (${marker.law}).`,
+          {
+            sceneId: scene.id,
+            branchId: branchId || undefined,
+            marker: marker.className,
+            check: marker === LABEL_MARKER ? 'label-text' : 'edited-text',
+          },
+        ));
+      }
+      const verdict = judgeLabelStyle(found.chain, rules, marker);
       if (!verdict.ok) {
         findings.push(provenanceFinding(
-          `The provenance label in scene ${scene.id} does not survive the emitted stylesheet: ${verdict.reasons.join('; ')}. `
-          + '§18.1 makes the label non-removable, and that includes styling it away.',
+          `${marker.title} in scene ${scene.id} does not survive the emitted stylesheet: ${verdict.reasons.join('; ')}. `
+          + marker.nonRemovable,
           {
-            sceneId: scene.id, branchId: branchId || undefined, check: 'label-style',
+            sceneId: scene.id,
+            branchId: branchId || undefined,
+            marker: marker.className,
+            check: marker === LABEL_MARKER ? 'label-style' : 'edited-style',
             ...verdict.detail,
           },
         ));
@@ -969,17 +1237,31 @@ export function assertProvenance(proof, html, css, options = {}) {
     }
   }
 
-  // 5. The label has to be in the file, not just in the tree we rendered.
-  if (labelsSeenAnywhere > 0 && typeof html === 'string' && html.length > 0) {
+  // 5. The marker has to be in the file, not just in the tree we rendered.
+  //
+  // Only the opening scene is pre-rendered into the document; the rest are
+  // rendered at presentation time from the model payload, and the loop above
+  // has already checked those trees. This is the one check that reads the
+  // bytes, and it reads them for both laws.
+  if (typeof html === 'string' && html.length > 0) {
     const firstScene = (proof.spine || [])[0];
     const firstNeeds = firstScene
       ? (firstScene.renditionIds || []).map((id) => renditionById.get(id)).filter((r) => r && requiresProvenanceLabel(r)).length
       : 0;
-    if (firstNeeds > 0 && !new RegExp(`class="[^"]*\\b${PROVENANCE_LABEL_CLASS}\\b`).test(html)) {
+    if (labelsSeenAnywhere > 0 && firstNeeds > 0 && !htmlHasClass(html, PROVENANCE_LABEL_CLASS)) {
       findings.push(provenanceFinding(
         `The opening scene renders ${firstNeeds} rendition(s) needing a provenance label, but no .${PROVENANCE_LABEL_CLASS} element reached the emitted document. `
         + 'The first thing the client sees would be unlabelled illustrative content.',
         { sceneId: firstScene.id, check: 'label-serialized' },
+      ));
+    }
+    const firstEdited = firstScene ? editedScenes.get(firstScene.id) : null;
+    if (firstEdited && renderScene && !htmlHasClass(html, EDITED_MARK_CLASS)) {
+      findings.push(provenanceFinding(
+        `The opening scene renders specimen "${specimenTitleOf(firstEdited)}" (${firstEdited.id}), which was edited after capture, `
+        + `but no .${EDITED_MARK_CLASS} element reached the emitted document. `
+        + 'The first thing the client sees would be edited material presented as their own page as captured (§18.3).',
+        { sceneId: firstScene.id, specimenId: firstEdited.id, check: 'edited-serialized' },
       ));
     }
   }

@@ -4,7 +4,7 @@
  * ```
  * emit(proof, options, deps): Promise<Result<EmitResult>>
  * scanForNetworkReferences(html): Finding[]
- * assertProvenance(proof, html, css): Finding[]
+ * assertProvenance(proof, html, css): Finding[]   // §18.1 and §18.3, one walk
  * budgetAssets(proof, maxBytes): {plan: DegradationLine[], proof: Proof}
  * inlineRuntime({runtimeJs, runtimeCss, themeCss, proof, firstPaintHtml}): string
  * ```
@@ -36,9 +36,10 @@ export {
   assertProvenance, judgeLabelStyle, judgeLabelRoom, clipsContent, scaleFactorOf,
   resolveBackground, describeElement, walkWithChain, renditionAppearsIn,
   documentChainPrefix, allScenesOf, nodeText, provenanceFinding, labelOptionFinding,
-  glyphPaint, parseFilter,
-  PROVENANCE_LABEL_CLASS, MIN_LABEL_FONT_PX, LABEL_MIN_WIDTH_EM, LABEL_MIN_TRACKING_EM,
-  LABEL_MAX_BLUR_EM, RENDITION_ATTR,
+  glyphPaint, parseFilter, editedScenesOf, htmlHasClass, markerFor,
+  PROVENANCE_LABEL_CLASS, EDITED_MARK_CLASS, MIN_LABEL_FONT_PX, LABEL_MIN_WIDTH_EM,
+  LABEL_MIN_TRACKING_EM, LABEL_MAX_BLUR_EM, RENDITION_ATTR, SPECIMEN_ATTR,
+  PROTECTED_MARKERS, LABEL_MARKER, EDITED_MARKER,
 } from './provenance.js';
 
 export {
