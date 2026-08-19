@@ -8,18 +8,24 @@
  * budget. **Report exactly what was degraded and by how much — never
  * silently.**"
  *
- * Two properties make that report worth reading, and both are asserted in
- * `test/emit/budget.test.mjs`:
+ * Three properties make that report worth reading, and all three are asserted
+ * in `test/emit/budget.test.mjs`:
  *
- *   - **Degradation is monotonic in importance rank.** The allocator always
- *     spends the least important asset first, so the number of ladder steps
- *     applied never decreases as rank increases. The logo on the opening beat
- *     is the last thing to lose pixels, not the first.
+ *   - **Degradation is monotonic in importance rank.** Every asset's scale is
+ *     one dial position raised to a power that grows with its rank
+ *     (`scaleForQuality`), so a less important asset never keeps more pixels
+ *     than a more important one. The logo on the opening beat is the last thing
+ *     to lose pixels, not the first — and that is now a property of the formula
+ *     rather than of any loop's visiting order (E36).
  *   - **The reported saving is the real saving.** Every line carries both the
  *     prediction the allocator made and the bytes the re-encode actually
  *     produced, and `savedBytes` equals `beforeBytes - afterBytes` exactly —
  *     because the image really was decoded, resampled and re-encoded
  *     (`emit/png.js`), not estimated.
+ *   - **What is given up is close to what was needed.** The dial is found by
+ *     bisection whose bracket is only ever moved by a measurement, so a budget
+ *     8KB under the artifact's natural size costs about 8KB of picture, not
+ *     379KB of it, and every budget produces a different file (P7).
  *
  * Importance is derived, not declared: the emitter renders every scene and
  * looks at which element actually carries each asset, then reads the beat that
@@ -27,9 +33,12 @@
  * means when nobody has hand-labelled anything.
  *
  * An asset the codec cannot re-encode — a JPEG, a WebP, an interlaced PNG —
- * is reported as undegradable rather than quietly left at full size. If the
- * budget cannot be met without it, `emit()` raises `SIZE_BUDGET_EXCEEDED` and
- * refuses. §13 forbids a silent partial emit, and so does this.
+ * is reported as undegradable rather than quietly left at full size. And a
+ * budget that no amount of resampling could reach is answered before a single
+ * pixel is spent on it: the plan comes back empty, the refusal says where the
+ * bytes actually are, and the prospect's photographs come back untouched
+ * (`describeFixedCost`, E35). §13 forbids a silent partial emit, and so does
+ * this.
  *
  * @module emit/budget
  */
