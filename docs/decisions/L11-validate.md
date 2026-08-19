@@ -122,6 +122,190 @@ L11 agrees with them and implemented them.
 
 ---
 
+## L11-D27 — A `TEXT_OVERFLOW` finding is identified by the element, the role, the ordinal and the breakpoint — and by nothing that was measured
+
+**Defect:** CRITIQUE-2 **C1**, second half, reported by L8 as **L8-D10**.
+
+**Unsettled by:** §4 freezes `Finding` at six fields and `Finding.locus` at four
+ids, none of which can name a text run. §14 requires the sweep to be
+deterministic. Nothing says what makes two findings the same finding.
+
+**What was wrong.** `src/validate/overflow.js` keyed on
+
+```js
+const key = box.elementId || `${box.role || 'text'}#${where.index}`;
+```
+
+and `elementId` is L8's **nearest revealable ancestor** — the element a *beat*
+reveals, not the element a text run lives in. A scene header, a panel, a stack
+step each carry one, and every run inside shares it. So a headline and a body
+paragraph that both overflowed in one cell minted the same key, therefore the
+same id, and `sortFindings` — which drops duplicate ids on purpose (L11-D8) —
+kept one and discarded the other. The sweep under-reported *silently*, which is
+the one direction §22.2 forbids: the seller fixes what they were shown, re-runs,
+and is shown the next one, or has the emit refused twice for what looks like one
+problem.
+
+Measured on the emitted corpus artifact in Chromium: **105 findings where there
+were 125 boxes to report**, per-finding recall 0.7721 against a per-box recall of
+0.9921. Twenty findings suppressed.
+
+**Decision.** A finding names a box, and a box is named by four things:
+
+```js
+key = `${breakpoint}|${elementId ?? '-'}|${role}|${ordinal}|${axis}`
+```
+
+| part | what it answers | where it comes from |
+|---|---|---|
+| `elementId` | which revealable element it lives under — what a consumer jumps to | `elementId(sceneId, path)`, minted from the scene id and the structural path |
+| `role` | which run it is: `headline`, `subhead`, `body`, `panelMeta`… | the `data-pp-tx` role the layout stamps |
+| `ordinal` | which of the runs that share that `(elementId, role)` pair, in document order | `boxOrdinals()`, over `SceneMeasurement.boxes` |
+| `breakpoint` | which viewport it is about | the caller; §4's locus cannot carry it (dispute 1) |
+| `axis` | width, height or clamp — three different remedies | the check that fired |
+
+`(elementId, role, ordinal)` is unique within a measurement by construction, so
+no two boxes can collide again; `axis` keeps the three remedies for one box
+separate, which they already were.
+
+**Why it is stable across a re-render.** Every part is a function of the *layout
+and the scene model*. Not one of them is a measurement. The excess, the line
+count, the resolved face, the container width and the font size are all absent,
+which is what L11-D13 requires of every finding id and what lets the studio's
+dismissals, the auto-fix targets and the blocking list survive a sweep in which
+a number moved by a fraction of a pixel.
+
+**Why the *text* is absent too, which is the less obvious half.** A digest of
+the run would also be stable across a re-render and would also separate
+siblings, and it was the first thing considered. It is wrong, for a reason
+specific to this check: **the way a seller fixes an overflow is by editing the
+copy.** A text-derived id would mint a new finding on every keystroke, so a
+dismissal would never outlive the edit that provoked it, and the blocking list
+would churn hardest in exactly the workflow the id exists to support. A finding
+is about a *slot in a layout that cannot hold what is in it*; the copy is the
+variable, not the identity. When the edit works, the finding disappears — which
+is the correct way for it to end.
+
+**What is deliberately *not* in the key, though it is reported in `detail`.**
+`containerId` (`splitCell#2`, `sideNote:notes`) and `slot`. `containerId`'s
+ordinal is counted over the whole scene, so inserting an unrelated panel earlier
+in a layout renumbers every later box of that slot — churn bought for nothing,
+since `(elementId, role, ordinal)` is already unique. Scoping the ordinal to the
+`(elementId, role)` pair instead of to the box list keeps the churn local for the
+same reason: adding a paragraph to one panel renumbers that panel's paragraphs
+and no others, where a flat index would renumber every box after it in the scene.
+
+**Measured, after.** Per-finding recall over the emitted corpus artifact, in
+Chromium at all three `BREAKPOINTS` viewports, walking every position
+`allPositions` reaches:
+
+```
+boxes measured 2703   TEXT_OVERFLOW findings 125   distinct boxes named 125
+per-finding recall, all boxes Chromium reports not fitting   125/136 = 0.9191
+per-finding recall, boxes Chromium actually cuts             125/126 = 0.9921
+per-finding recall, cut with no signal to the viewer           0/0   = n/a
+precision, findings whose box does overflow                  125/125 = 1.0000
+```
+
+`test/validate/overflow-recall.test.mjs` is that measurement, and it asserts
+§17.4's 0.98 over the text the artifact cuts.
+
+**The residual is stated, not rounded.** Eleven boxes are missed and both
+reasons are named in the test log:
+
+- **Ten are not cut.** A badge numeral whose line box stands two or three pixels
+  proud of its 40px circle, with `overflow: visible`. Nothing is clipped and
+  nothing is lost; they are in the "not fitting" population and out of the
+  "actually cuts" one, which is the entire difference between 0.9191 and 0.9921.
+  (They are also invisible to the engine for a separate reason worth handing
+  back to L8: `measureScene` gives `badgeNumber` the `fanSource` slot's 536px
+  height rather than the badge's own 40px box, so no height check on that role
+  can fire at all. It costs nothing today because the box does not clip.)
+- **One is.** `sc_c5edf6412639`'s headline at `sm`, and the residual is
+  measurable to two decimal places. The tail `"exchanger — Northwind Industrial"`
+  measures **351.13px** in Chromium and **348.70px** in the engine, against a
+  350px container: 0.69% apart, and the container edge falls between them, so
+  Chromium wraps to a third line and the engine keeps two. That is inside the
+  Latin residual `test/validate/overflow-browser.test.mjs` measures at mean
+  0.158% and p95 0.890%, it is a `src/core/text-metrics.js` limit, and it is not
+  closable from this lane.
+
+**What was declined.** Widening the noise band, or laying the text out against a
+container narrowed by the metric residual, would take the number over 0.98 in an
+afternoon. Both buy the figure and lose the property: the first stops reporting
+real overflow, the second makes every finding's magnitude a lie by a stated
+percentage and would fire on boxes that fit. L8 declined the same trade
+explicitly when it fixed the geometry, and this lane declines it here.
+
+---
+
+## L11-D28 — The same box at three breakpoints is three findings, and that is the deliberate half of the same question
+
+**Unsettled by:** the same silence as L11-D27. A collapsing key under-reports;
+so the reverse question has to be asked as well — *where is collapsing right?*
+
+**Decision.** Three collapses are kept, on purpose, and one is refused.
+
+**Refused: across breakpoints.** A box that overflows at `sm`, `md` and `lg` is
+three findings. It is tempting to call it one defect reported three times — L8's
+own numbers count boxes partly for that reason — but the remedies differ: a
+headline that fits at `lg` and not at `sm` is rewritten for `sm` alone, and the
+suggested size, the suggested character count and the excess are all different
+numbers. Worse, §4's `locus` cannot carry a breakpoint (dispute 1), so a merged
+finding could not say which viewport it applied to; it would have to name the
+worst and drop the rest, which is under-reporting wearing a tidier hat. The
+breakpoint stays in the key, and every message names it.
+
+**Kept: two rules, one conclusion, one place.** `sortFindings` de-duplicates by
+id so that preflight's copy of two emitter checks (L11-D8) merges with the
+emitter's own rather than doubling it. This is what the de-duplication is *for*,
+and it is precisely why an incomplete key is silent instead of noisy.
+
+**Kept: a colour pair measured twice.** `CONTRAST_FAIL` keys on
+`pair:${fg}/${bg}:${kind}`. The same role pair can be reached both as a
+foreground role and as a display-text pair; when the type scale is not large
+enough to earn the large-text minimum, both visits hold it to 4.5:1 and produce
+one finding. Same colours, same minimum, same remedy — one defect. The `kind`
+suffix keeps the *non-text* 3:1 check on the same pair separate, because that one
+has a different minimum and a different fix.
+
+**Kept: `DUPLICATE_SCENE`'s content fingerprint.** Five identical scenes are one
+finding naming all five (L11-D20), not five findings each naming the other four.
+
+**Refused, and fixed: `BEAT_EMPTY`.** See L11-D29. That one was collapsing by
+accident, which is how the audit that C1 prompted earned its keep.
+
+`test/validate/finding-identity.test.mjs` pins all of it — the collapses that
+must not happen and the ones that must.
+
+---
+
+## L11-D29 — `BEAT_EMPTY` keys on the beat's id **and** a repeat ordinal
+
+**Defect:** found by the audit L11-D27 prompted. §4 requires `Beat.id` to be a
+string; it does not require it to be unique or non-empty, so both failures below
+are reachable from a legal `Proof`.
+
+**What was wrong.** `key: \`beat:${scene.id}:${beat.id || i}\`` collapsed two
+different beats into one finding two ways:
+
+- two beats declaring the **same id** — one finding, one auto-fix, and the second
+  dead keypress still in the deck after the seller acted on what they were shown;
+- an **id-less beat at index 3** and a beat whose id is literally `"3"`, because
+  the fallback shared a namespace with the ids.
+
+**Decision.** `beat:${sceneId}:${beat.id ? '#'+beat.id : '@'+index}:${n}`, where
+`n` counts earlier beats in the same scene with the same name. The `#`/`@` prefix
+separates the two namespaces; `n` separates repeats.
+
+**And it changed no existing id.** Every scene the tool builds gives its beats
+unique ids, so `n` is 0 throughout and the appended ordinal is inert — the
+stability half of L11-D27 applied to the same problem. `detail.beatIndex` still
+carries the position the auto-fix removes, so a fix computed against one finding
+cannot trim the wrong beat.
+
+---
+
 ## L11-D2 — Severity for each of the fourteen codes
 
 **Unsettled by:** §4 fixes three severities (`FIXED_SEVERITY`) and §14 fixes

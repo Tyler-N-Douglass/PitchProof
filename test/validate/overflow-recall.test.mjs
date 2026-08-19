@@ -48,10 +48,13 @@
  *    clipped and nothing lost. They are counted in the "not fitting" population
  *    and excluded from the "actually cuts" one, which is why the two numbers
  *    differ.
- *  - A headline whose last line the model packs and Chromium does not, inside
- *    the AFM-versus-rasteriser residual that `overflow-browser.test.mjs`
- *    measures at p95 0.89%. That is a `src/core/text-metrics.js` limit, not a
- *    finding-identity one, and it is not closable from this lane. It is **not**
+ *  - A headline whose last line the model packs and Chromium does not. The tail
+ *    `"exchanger — Northwind Industrial"` measures 351.13px in Chromium and
+ *    348.70px in the engine against a 350px container — 0.69% apart, with the
+ *    container edge between them — which is inside the AFM-versus-rasteriser
+ *    residual `overflow-browser.test.mjs` measures at p95 0.890%. That is a
+ *    `src/core/text-metrics.js` limit, not a finding-identity one, and it is not
+ *    closable from this lane. It is **not**
  *    closed here by narrowing a container to buy the number back: that would
  *    trade a real property for a figure.
  *

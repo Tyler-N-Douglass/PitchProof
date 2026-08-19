@@ -672,7 +672,7 @@ const beatEmpty = {
       // ways to collapse two beats into one finding — two beats declaring the
       // same id, and an id-less beat at index 3 colliding with a beat whose id
       // is literally `"3"` — and a collapsed key is a suppressed finding, which
-      // is CRITIQUE-2 C1's second half wearing a different hat (L11-D27). The
+      // is CRITIQUE-2 C1's second half wearing a different hat (L11-D29). The
       // prefix separates the two namespaces and the ordinal separates repeats,
       // so a scene whose beat ids are unique — every scene the tool builds —
       // keeps the id it had.

@@ -307,6 +307,90 @@ fourteen rules later.
 
 ---
 
+## 8. `Finding.locus` cannot name a text run, so the most important check in the tool cannot say what it is about
+
+**Contract:** §4 — `locus: { sceneId?; branchId?; specimenId?; assetId? }`.
+**Related surface:** `API.md` Part 3 → L8, `SceneMeasurement.boxes[]`.
+
+**Objection.** §22.2 calls text overflow "the highest-value check in the entire
+tool" and §17.4 puts a recall number on it. A `TEXT_OVERFLOW` finding is about
+**one text run, in one box, at one viewport**. The locus can name the scene and
+stops there — which means the finding cannot express its own subject, and every
+consumer that needs to know *which* run has to read an undeclared sibling field.
+
+That is not a theoretical cost. It is CRITIQUE-2 **C1**, second half, filed by
+L8 as **L8-D10** and measured: the key that mints a finding's id was
+`box.elementId`, the nearest *revealable ancestor*, because that is the finest
+address anything in the contract offers. A scene header carries one and its
+headline and its subhead share it, so two overflowing runs in one cell became
+one finding and the sweep under-reported by twenty findings on the corpus proof
+— per-finding recall 0.7721 where per-box recall was 0.9921.
+
+Three separate things the locus cannot say, all of them needed at once:
+
+- **which run** — no id exists for a text box. `SceneMeasurement.boxes[]` carries
+  `elementId`, `role`, `containerId` and `slot`, and none of them is unique on
+  its own: `elementId` is shared by every run under one revealable element,
+  `role` repeats within a panel, `containerId` groups rather than distinguishes.
+- **its position** — dispute 4 already filed this from the measurement side
+  (`orderInRegion`), and `API.md` records it as "a box's *position* within its
+  container is still unavailable". It is the field that would have made the key
+  complete without any derivation.
+- **the breakpoint** — dispute 1 already asks for it. An overflow at `sm` and the
+  same overflow at `lg` are different defects with different fixes (L11-D28).
+
+**What the lane built.** The contract as written, plus the optional extension §4
+permits, which is what this lane has done for every other locus gap (L11-D13).
+The locus still carries only `sceneId`. The identity lives in the finding's
+**key** — `breakpoint | elementId | role | ordinal | axis` — and the same fields
+are published in `detail` as `breakpoint`, `elementId`, `role`,
+`orderInElement`, `containerId`, `slot` and `axis`, so the studio and the
+auto-fixer can locate a box without re-parsing prose (L11-D27).
+
+`orderInElement` is **derived**, not read: `boxOrdinals()` counts a box's
+position among the boxes sharing its `(elementId, role)` pair, in the order
+`SceneMeasurement.boxes` arrives. That order is document order — `collectTextBoxes`
+walks the rendered tree — but nothing in `API.md` *says* so, so the most
+important check in the tool now rests on an undocumented agreement between two
+lanes, which is the same objection dispute 4 raised about `textOverflow` before
+it was written down.
+
+**What a v2 should say.** Two changes, either of which alone would close it.
+
+Give the measurement a box identity, which is the cheaper of the two because L8
+already knows it when it walks the tree:
+
+```ts
+boxes: { …, boxId: string;            // unique within a SceneMeasurement
+             orderInContainer: number }[];
+```
+
+and state that `boxes` is in document order.
+
+And widen the locus to reach it, extending dispute 1's proposal:
+
+```ts
+locus: {
+  sceneId?: string; branchId?: string; specimenId?: string; assetId?: string;
+  renditionId?: string; beatId?: string; faceFamily?: string;
+  colorRole?: ColorRole; breakpoint?: 'sm'|'md'|'lg';
+  boxId?: string;                      // the text run a TEXT_OVERFLOW is about
+}
+```
+
+With `boxId` in the locus the key would be `breakpoint | axis` and nothing else,
+`compactLocus` would hash the address rather than the lane's private string, and
+a consumer could deep-link the seller to the run that is cut instead of to the
+scene that contains it.
+
+**Not filed:** the *content* of the run as part of the address. A text digest
+would make the address unique too, and it is the wrong answer — the way a seller
+fixes an overflow is by editing the copy, so an id derived from it would churn
+hardest in exactly the workflow the id exists to support. The address should be
+structural. Argued in full in L11-D27.
+
+---
+
 ## Non-disputes, recorded so the critic does not re-derive them
 
 - **`Finding.autoFixAvailable` is a boolean, and one of L11's fixes is neither a

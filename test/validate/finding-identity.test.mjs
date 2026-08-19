@@ -17,7 +17,7 @@
  * Twenty were suppressed on the corpus proof.
  *
  * This file pins both halves of the property, for `TEXT_OVERFLOW` and for the
- * one other key that could collapse the same way (`BEAT_EMPTY`, L11-D27), and
+ * one other key that could collapse the same way (`BEAT_EMPTY`, L11-D29), and
  * pins the two collapses that are **correct** so they stay deliberate.
  */
 
@@ -178,7 +178,7 @@ test('detectBoxOverflow called on its own defaults the ordinal rather than guess
 });
 
 // ---------------------------------------------------------------------------
-// BEAT_EMPTY — the same collapse, one rule over (L11-D27)
+// BEAT_EMPTY — the same collapse, one rule over (L11-D29)
 // ---------------------------------------------------------------------------
 
 /** @param {any} proof */

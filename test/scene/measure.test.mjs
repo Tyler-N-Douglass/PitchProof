@@ -556,3 +556,34 @@ test('every systemMap scene of a corpus proof measures inside its own nodes', as
     }
   }
 });
+
+test('preformatted text is normalised only where the model could not otherwise measure it', async () => {
+  const { preformat, PRE_TAB_COLUMNS } = await import('../../src/scene/blocks.js');
+  assert.equal(PRE_TAB_COLUMNS, 4);
+
+  // Tabs become the spaces the browser would have advanced to, per line, so the
+  // string the model measures is the string the page draws. The alternative is
+  // a character whose advance the model has no way to know, reported short.
+  assert.equal(preformat('\tstep\t2.5\nab\tc'), '    step    2.5\nab  c');
+  // Line endings and the newline an HTML parser eats after `<pre>`.
+  assert.equal(preformat('a\r\nb\rc'), 'a\nb\nc');
+  assert.equal(preformat('\nfirst'), 'first');
+  // Everything else is the prospect's: indentation, aligned columns, blank
+  // lines and trailing structure all survive untouched (§18.3).
+  const aligned = 'name      type    default\ntimeout   int     600\n\nstep      float   2.5';
+  assert.equal(preformat(aligned), aligned);
+  assert.equal(preformat(undefined), '');
+
+  // And the measurement carries the wrapping mode to the detector, which is
+  // what stops `layoutText` collapsing those newlines into one long line.
+  const spec = specimen({ blocks: [{ type: 'paragraph', pre: true, text: aligned }] });
+  const scene = buildScene({ layout: 'splitBeforeAfter', specimen: spec, renditions: [], headline: 'Preformatted' });
+  const ctx = contextFor(scene, { specimen: spec, renditions: [] });
+  for (const bp of BPS) {
+    const boxes = measureScene(scene, ctx, bp).boxes.filter((b) => b.role === 'pre');
+    assert.equal(boxes.length, 1, `${bp}: the preformatted block was not measured`);
+    assert.equal(boxes[0].whiteSpace, 'pre-wrap', `${bp}: the detector is not told the run wraps as pre`);
+    assert.equal(boxes[0].text, aligned, `${bp}: the measured text is not the block's text`);
+    assert.equal(TYPE_ROLES.pre.face, 'mono');
+  }
+});

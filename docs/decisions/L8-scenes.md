@@ -839,3 +839,100 @@ because that rule is about what a layout may execute. What changed is that the
 direction survives the flattening, and that the caption is itself marked
 `dir="ltr" lang="en"` — it is the tool's English sentence about the block, not
 the block.
+
+---
+
+## L8-30 — Preformatted source text is rendered preformatted, and measured that way
+
+**From:** CRITIQUE-2 C8's category, closed on L6's side by D-L6-20 — a captured
+`<pre>` is no longer a `raw` block but a `paragraph` carrying `pre: true`
+(API.md Part 3b).
+
+**Unsettled by:** §4's `ContentBlock` has no notion of significant whitespace,
+and `pre` "degrades safely" — a layout that ignores it renders a paragraph. Safe
+is not the same as right: the newlines that now survive capture collapsed again
+the moment `.pp-p` painted them with `white-space: normal` in a proportional
+face, so the alignment a parameter table is *made of* was lost between the model
+and the screen.
+
+**Decision.** Three things, and the third is the one that is not cosmetic.
+
+1. **The element says what it is.** A `pre` paragraph renders as `<pre
+   class="pp-pre">`, not `<p>`, so a screen reader and anything that copies out
+   of the artifact are told the whitespace is content.
+2. **`white-space: pre-wrap`, in the mono role.** `pre-wrap` rather than `pre`
+   because a line wider than the stage has to wrap into the column: at `sm` the
+   stage is 350px, and `pre` would either push a horizontal scrollbar under the
+   scene or be cut with nothing on screen to say so. A new `pre` type role, one
+   step below `body` at every breakpoint, because a mono face at the same
+   nominal size reads larger than the prose beside it and a code sample is the
+   run most likely to be the widest thing on the stage.
+3. **The `pre-wrap` is reported to the detector** (`data-pp-ws`), which
+   `layoutText` already models — hard newlines split lines, the rest wraps. This
+   is the half that is a measurement rather than a dressing. Measured as prose,
+   the fixture's five-line sample comes back as **2 lines at `lg` where Chromium
+   draws 5**; measured as `pre-wrap` it comes back as 5 at every breakpoint.
+   Under-reporting is the one direction §22.2 forbids, and it would have fallen
+   on exactly the content most likely to be wide.
+
+**Tabs are expanded here rather than left to `tab-size`** (`preformat`, with
+`PRE_TAB_COLUMNS = 4`). A tab is the only character whose advance is not a
+property of the font — the browser advances to the next tab stop, the model has
+no notion of stops at all and would measure it as one glyph, so a tab-indented
+sample would be reported short. Expanding to the stops in the renderer makes the
+model and the engine measure the same string; in a monospace face the result is
+glyph for glyph what the browser would have drawn, and in a proportional one — a
+brand whose `mono` face is not actually monospaced — it is at least a length both
+sides agree on. Carriage returns are dropped and a leading newline is dropped for
+the same reason: an HTML parser drops the one after `<pre>`, so keeping it would
+count a line the artifact does not have. Everything else — the indentation, the
+runs of spaces that line the columns up, the blank lines — is the prospect's and
+is kept (§18.3).
+
+**`overflow-wrap` stays `normal`, deliberately.** A code line with no space in
+it — a long URL in a sample, a base64 blob — will not wrap, will run out of its
+box, and will be reported as an unbreakable run. That is the honest answer:
+breaking an identifier mid-token to make it fit would put a line break inside
+the client's own code, and a reader cannot tell that break from the author's.
+The detector saying "this sample does not fit" is worth more than a silent,
+misleading fit.
+
+**A summary is still a summary.** `summarize` lifts a `pre` block's text into an
+index row or a card blurb like any other paragraph's — refusing would print "No
+content blocks on this rendition" over a card that holds a code sample, which is
+false. It collapses the whitespace on the way, because those slots are set in
+prose type with `white-space: normal` where the browser collapses it too;
+collapsing in the model as well is what keeps the measured width the rendered
+width. The block itself is still rendered preformatted wherever a layout renders
+the block.
+
+**How it is checked.** `test/scene/geometry-browser.test.mjs` gained two tests,
+both against Chromium:
+
+- Every preformatted run in the deck is drawn on the number of lines the model
+  reports, in the brand's mono face, with `white-space: pre-wrap`; two
+  characters the source puts in the same column are drawn at the same x; and the
+  same run measured as prose has to under-report somewhere in the deck, or the
+  test says so rather than passing vacuously.
+- **End to end from the capture, not from a block written in the test.**
+  `test/fixtures/specimen/docs.html` is a documentation page with a real
+  `<pre><code>` scripting sample; it is captured with `buildSpecimen`, laid out
+  by `splitBeforeAfter`, and the three source lines are checked to arrive on
+  three line boxes with the text byte-identical to what was captured.
+
+**One thing this pass found on the way.** The test page in
+`geometry-browser.test.mjs` loaded the brand theme *before* `runtime.css`, and
+both declare `--pp-font-*` on `:root` — so every cross-check in that file had
+been laying the deck out in `system-ui` and `ui-monospace` while the model
+measured Georgia, Arial and Courier New. It never showed, because the file
+checks container widths and a container is a grid track rather than a run of
+text. It shows the moment a check is about how text *fills* one. The page now
+loads the two sheets in the artifact's own order (`src/emit/document.js`:
+runtime, then theme, then scenes).
+
+**Recall, re-run.** The browser-measured recall over the emitted corpus
+artifact is **0.9921** (125 of 126 boxes Chromium genuinely cuts, zero false
+positives), unchanged by this pass and reproducing L8-D9's number now that
+`test/core/text-metrics-breaks.test.mjs` holds `/` out of `BREAK_AFTER`. The one
+miss is the same `sm` headline as before: a two-line clamp that overflows its
+box by 25px vertically.

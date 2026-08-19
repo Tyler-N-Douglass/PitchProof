@@ -451,8 +451,12 @@ export function advanceDeltaOf(face) {
  * ancestor* — the thing a beat reveals — so every text run inside one panel
  * shares it. A headline and a body paragraph that both overflow in the same
  * cell minted the same finding id, `sortFindings` dropped one as a duplicate,
- * and the seller was shown one defect where there were two. Nineteen findings
- * vanished that way on the corpus proof.
+ * and the seller was shown one defect where there were two. Twenty findings
+ * vanished that way on the corpus proof, and per-finding recall sat at 0.7721
+ * where per-box recall was 0.9921.
+ *
+ * Argued in full in `docs/decisions/L11-validate.md` L11-D27; the contract gap
+ * it works around — §4's locus cannot name a text run — is dispute 8.
  *
  * Four things identify the box, and each is a function of the *layout and the
  * scene model* rather than of the measurement:
@@ -531,9 +535,13 @@ export function boxOrdinals(boxes) {
  * @param {object} where
  * @param {string} where.sceneId
  * @param {string} where.breakpoint
- * @param {number} where.index          the box's position in the measurement
- * @param {number} [where.ordinal]      its position among boxes sharing its `(elementId, role)`;
- *                                      defaults to 0, which is right for a box measured alone
+ * @param {number} [where.index]        the box's position in the measurement. Reported by
+ *                                      `detectOverflow` for a caller that wants it; **not** part
+ *                                      of the finding's identity — a flat index renumbers every
+ *                                      box after an insertion, which is churn (L11-D27).
+ * @param {number} [where.ordinal]      its position among boxes sharing its `(elementId, role)`,
+ *                                      from `boxOrdinals()`. Defaults to 0, which is right for a
+ *                                      box measured on its own.
  * @param {import('../core/contracts.d.ts').BrandSystem|null|undefined} brand
  * @returns {any[]}
  */
