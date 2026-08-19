@@ -18,7 +18,9 @@
  *    breakpoint, `measureScene` reports the narrower boxes and the overflow
  *    detector says so before the meeting rather than during it.
  *  - **The source side is untouched (§18.3).** No clamping, no truncation, no
- *    reordering on the specimen column.
+ *    reordering on the specimen column — and where the seller did change it,
+ *    the before panel carries `editedMark()` under its own head, because this
+ *    is the layout whose whole argument is *that is our page*.
  *
  * @module scene/layouts/split-before-after
  */
@@ -30,7 +32,7 @@ import { flowOf } from '../direction.js';
 import {
   sceneHead, panelHead, provenanceLabel, emptyState,
   specimenMeta, specimenTitle, renditionMeta, renditionLabel,
-  withProvenanceLedger,
+  withProvenanceLedger, editedMark, withEditedNotice,
 } from '../parts.js';
 
 /**
@@ -51,14 +53,14 @@ export function splitBeforeAfter(ctx) {
   // ledger is normally empty here. It is still asked for: the empty-state
   // branch above renders no cells at all, and a law that only holds on the
   // branch somebody remembered is not a law (§18.1).
-  return withProvenanceLedger(h('div', {
+  return withEditedNotice(withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--split',
     'data-pp-layout': 'splitBeforeAfter',
     'data-pp-box': 'stage',
     style: { '--pp-sc-split-cols': String(columnCount) },
   },
   sceneHead(ctx, { kicker: 'Their content, and what it becomes' }),
-  body), ctx);
+  body), ctx), ctx);
 }
 
 /**
@@ -79,11 +81,15 @@ function renderSplit(ctx, sourceBlocks, rends, columnCount) {
       'data-pp-n': n,
       'data-pp-el': ctx.el('before/panel'),
       'data-pp-group': 'before',
+      // The specimen's own scope, so the §18.3 marker below sits inside the
+      // subtree of the thing it is about — the same shape `data-pp-rendition`
+      // gives the provenance label on the other side of the row.
+      'data-pp-specimen': ctx.specimen ? ctx.specimen.id : null,
     }, panelHead({
       title: specimenTitle(ctx.specimen),
       meta: specimenMeta(ctx.specimen),
       tone: 'before',
-    })),
+    }), editedMark(ctx.specimen)),
     rends.map((rendition, index) => h('div', {
       class: 'pp-split-cell pp-split-cell--head pp-col pp-col--after',
       'data-pp-box': 'splitPanelHead',

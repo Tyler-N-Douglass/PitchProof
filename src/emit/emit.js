@@ -383,16 +383,23 @@ export function fixedCostOf(built, parts, footprint, fonts) {
     ? `${fonts.length} ${fonts.length === 1 ? 'face' : 'faces'}: ${families.join(', ')}`
     : undefined;
 
+  // Asset payloads are subtracted from every part, not only from the two that
+  // usually carry them: a brand theme is perfectly entitled to inline a logo as
+  // a `background-image`, and a component that counted those bytes as its own
+  // would be charging the same megabyte twice — the exact error C2 fixed in the
+  // reserve. Subtracting everywhere is what keeps the census a decomposition.
+  const own = (text) => Math.max(0, utf8Length(text) - assetsIn(text));
+
   /** @type {import('./budget.js').CostComponent[]} */
   const components = [
-    { name: 'embedded fonts', bytes: utf8Length(parts.fontCss), detail: fontDetail },
-    { name: 'the presentation runtime', bytes: utf8Length(parts.runtimeJs) },
-    { name: 'the model payload', bytes: utf8Length(built.encoded.payload) },
-    { name: 'the artifact stylesheet', bytes: utf8Length(parts.runtimeCss) },
-    { name: 'the brand theme', bytes: utf8Length(parts.themeCss) },
-    { name: 'the user stylesheet', bytes: utf8Length(parts.userCss) },
-    { name: 'the media table', bytes: Math.max(0, utf8Length(built.encoded.mediaText) - assetsIn(built.encoded.mediaText)) },
-    { name: 'the pre-rendered opening beat', bytes: Math.max(0, utf8Length(built.firstPaintHtml) - assetsIn(built.firstPaintHtml)) },
+    { name: 'embedded fonts', bytes: own(parts.fontCss), detail: fontDetail },
+    { name: 'the presentation runtime', bytes: own(parts.runtimeJs) },
+    { name: 'the model payload', bytes: own(built.encoded.payload) },
+    { name: 'the artifact stylesheet', bytes: own(parts.runtimeCss) },
+    { name: 'the brand theme', bytes: own(parts.themeCss) },
+    { name: 'the user stylesheet', bytes: own(parts.userCss) },
+    { name: 'the media table', bytes: own(built.encoded.mediaText) },
+    { name: 'the pre-rendered opening beat', bytes: own(built.firstPaintHtml) },
   ].filter((c) => c.bytes > 0);
 
   const accounted = components.reduce((n, c) => n + c.bytes, 0);

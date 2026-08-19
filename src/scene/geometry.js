@@ -158,11 +158,12 @@ export function mapLegendHeight(bpIn, n = 1) {
  * @param {'sm'|'md'|'lg'} bpIn
  * @param {number} [n]   the legend's chip count
  * @param {boolean} [ledger]   whether a provenance ledger sits under the body
+ * @param {boolean} [edited]   whether a §18.3 edited notice sits under the body
  * @returns {number}
  */
-export function mapScale(bpIn, n = 1, ledger = false) {
+export function mapScale(bpIn, n = 1, ledger = false, edited = false) {
   const bp = breakpointId(bpIn);
-  const s = withLedger(stageBox(bp), bp, ledger);
+  const s = withFoot(stageBox(bp), bp, ledger, edited);
   const canvasHeight = Math.max(
     geom(bp, 'map-canvas-min-h'),
     s.bodyHeightPx - mapLegendHeight(bp, n) - geom(bp, 'row-gap'),
@@ -206,19 +207,35 @@ export function ledgerAllowance(bp) {
 }
 
 /**
- * The stage as the layout's content actually gets it once a provenance ledger
- * is in flow beneath it. Every slot that stretches derives its height from
- * `contentHeightPx` or `bodyHeightPx`, so reducing those two here is what keeps
- * the measurement and the rendered box in agreement (§22.2) without every slot
- * having to know the ledger exists.
+ * The vertical room the §18.3 edited notice takes out of the stage.
+ *
+ * The same shape as a ledger row and therefore the same number: one strip plus
+ * the flex gap `.pp-layout` puts above it. Unlike the ledger's, this allowance
+ * is exact rather than an approximation — the notice is always one row, because
+ * a scene has one specimen.
+ * @param {'sm'|'md'|'lg'} bp
+ * @returns {number}
+ */
+export function editedNoticeAllowance(bp) {
+  return geom(bp, 'ledger-h') + geom(bp, 'head-gap');
+}
+
+/**
+ * The stage as the layout's content actually gets it once the foot strips are
+ * in flow beneath it — the provenance ledger (§18.1) and the edited notice
+ * (§18.3), which are independent and can both be present. Every slot that
+ * stretches derives its height from `contentHeightPx` or `bodyHeightPx`, so
+ * reducing those two here is what keeps the measurement and the rendered box in
+ * agreement (§22.2) without every slot having to know the strips exist.
  * @param {StageBox} s
  * @param {'sm'|'md'|'lg'} bp
  * @param {boolean|number|undefined} ledger
+ * @param {boolean|number|undefined} edited
  * @returns {StageBox}
  */
-function withLedger(s, bp, ledger) {
-  if (!ledger) return s;
-  const cost = ledgerAllowance(bp);
+function withFoot(s, bp, ledger, edited) {
+  const cost = (ledger ? ledgerAllowance(bp) : 0) + (edited ? editedNoticeAllowance(bp) : 0);
+  if (!cost) return s;
   return {
     ...s,
     contentHeightPx: Math.max(0, s.contentHeightPx - cost),
@@ -237,12 +254,12 @@ function withLedger(s, bp, ledger) {
  *
  * @param {string} slot
  * @param {string|{id?: string}} bpIn
- * @param {{n?: number, unitWidth?: number, unitHeight?: number, variant?: string, ledger?: boolean}} [params]
+ * @param {{n?: number, unitWidth?: number, unitHeight?: number, variant?: string, ledger?: boolean, edited?: boolean}} [params]
  * @returns {BoxSize}
  */
 export function boxGeometry(slot, bpIn, params = {}) {
   const bp = breakpointId(bpIn);
-  const s = withLedger(stageBox(bp), bp, params.ledger);
+  const s = withFoot(stageBox(bp), bp, params.ledger, params.edited);
   const n = Math.max(1, Math.floor(params.n || 1));
   const stacked = bp === 'sm';
 
@@ -407,6 +424,14 @@ export function boxGeometry(slot, bpIn, params = {}) {
       return inset(s.contentWidthPx, geom(bp, 'ledger-h'), geom(bp, 'card-pad'));
     }
 
+    // ----------------------------------------- shared: the §18.3 edit notice
+    case 'editedNotice': {
+      // One row, naming the specimen and carrying the marker, for the layouts
+      // that have no panel of the client's content to hang it on. Same strip
+      // as a ledger row, and the same numbers behind it.
+      return inset(s.contentWidthPx, geom(bp, 'ledger-h'), geom(bp, 'card-pad'));
+    }
+
     case 'mapText': {
       const scale = mapScale(bp, n);
       return {
@@ -431,5 +456,5 @@ export const SLOTS = [
   'quoteBox',
   'indexRow', 'indexNumber',
   'mapCanvas', 'mapLegend', 'mapText',
-  'provenanceLedger',
+  'provenanceLedger', 'editedNotice',
 ];

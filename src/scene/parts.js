@@ -19,6 +19,12 @@
  *    testimonial or a logo that is not already in the model. `renditionCount()`
  *    counts renditions the proof actually contains; that is arithmetic over
  *    the model, not a claim about the world.
+ *  - **§18.3 the edit record.** `editedMark()` is the single producer of
+ *    `pp-edited`, and `withEditedNotice()` is the sweep that guarantees it:
+ *    a specimen the seller changed carries the marker in every layout, on
+ *    every branch, whether or not that layout has a panel to hang it on. It
+ *    takes no flag — there is no argument that turns it off — and, like the
+ *    provenance label, it never carries `data-pp-el`, so no beat can hide it.
  *
  * @module scene/parts
  */
@@ -230,6 +236,211 @@ export function withProvenanceLedger(tree, ctx) {
     ...tree,
     a: { ...(tree.a || {}), 'data-pp-ledger': String(rows.length) },
     c: (tree.c || []).concat([ledger]),
+  };
+}
+
+/**
+ * The class §18.3's marker carries. `scenes.css` styles it; nothing styles it
+ * away.
+ */
+export const EDITED_MARK_CLASS = 'pp-edited';
+
+/**
+ * The words the marker says.
+ *
+ * §18.3 asks the artifact to say that a specimen was edited. It does not ask it
+ * to print the log, and the log is the wrong thing to print: one `editNotes`
+ * line from L11's `ASSET_MISSING` fix runs to a full sentence naming the file,
+ * its caption, the heading it sat under and why it went — true, useful, and
+ * three times the length of the panel meta line it would have to fit in.
+ * Truncating that in front of the room would be worse than not printing it,
+ * because a half-sentence about the client's own content reads as evasion.
+ *
+ * So the stage carries the fact and the review surface carries the record. The
+ * fact is fixed text, in the same shape as §18.1's label — what happened, and
+ * what it means — and the marker carries the record's *count* as
+ * `data-pp-edit-notes`, so the emitter, the validator and the studio can reach
+ * the notes themselves without the deck having to read them out.
+ */
+export const EDITED_MARK_TEXT = 'Edited by the presenting team — not as captured';
+
+/**
+ * The horizontal room `.pp-edited` spends on itself, both sides summed, in px:
+ * `padding: 3px 8px` plus the `border-left: 3px` rule, which is the provenance
+ * label's own box and deliberately so — the two §18 markers are siblings on
+ * screen, so a reader who has learnt one has learnt the other.
+ * `test/scene/geometry-browser.test.mjs` reads the number back off Chromium.
+ */
+export const EDITED_MARK_INSET_PX = 8 + 8 + 3;
+
+/**
+ * §18.3: was this specimen changed after capture?
+ *
+ * Written as "the model says so *or* the model holds a record saying so",
+ * rather than as `edited === true` alone, for the same reason
+ * `needsProvenanceLabel()` is written as "not one of the two safe values": a
+ * specimen carrying edit notes and a false flag is a specimen that was edited
+ * by something that half-remembered to say so, and the marker is the wrong
+ * place to be trusting.
+ *
+ * `markEdited()` (L6, `src/specimen/specimen.js`) sets both together and is the
+ * only writer; this reads them.
+ *
+ * @param {import('../core/contracts.d.ts').Specimen|null|undefined} specimen
+ * @returns {boolean}
+ */
+export function specimenEdited(specimen) {
+  if (!specimen) return false;
+  if (specimen.edited === true) return true;
+  return Array.isArray(specimen.editNotes) && specimen.editNotes.length > 0;
+}
+
+/**
+ * How many edit records the specimen carries. Arithmetic over the model (§18.2)
+ * — a count of records written, never a count of "changes to the page", which
+ * is a number nothing in the model knows: one record can describe two removals.
+ * @param {import('../core/contracts.d.ts').Specimen|null|undefined} specimen
+ * @returns {number}
+ */
+export function editRecordCount(specimen) {
+  if (!specimen || !Array.isArray(specimen.editNotes)) return 0;
+  return specimen.editNotes.filter((n) => typeof n === 'string' && n.trim()).length;
+}
+
+/**
+ * The §18.3 marker, or null when the specimen is the client's content exactly
+ * as it was captured.
+ *
+ * **It takes no options, and that is the point.** `provenanceLabel()` accepts
+ * `ctx` because §9 gives the *build* one legitimate way to turn labelling off
+ * (a presenter-only build, decided upstream in `normalizeEmitOptions`). §18.3
+ * gives nothing that power: there is no build, no layout, no beat and no flag
+ * that renders an edited specimen without saying so. A function with no switch
+ * cannot have its switch flipped, so the signature is the enforcement.
+ *
+ * No `data-pp-el`, for the same reason the provenance label has none: an
+ * element without it is always visible and no beat can reveal-order it away.
+ *
+ * @param {import('../core/contracts.d.ts').Specimen|null|undefined} specimen
+ * @returns {import('../core/vdom.js').VNode}
+ */
+export function editedMark(specimen) {
+  if (!specimenEdited(specimen)) return null;
+  return h('p', {
+    class: EDITED_MARK_CLASS,
+    'data-pp-tx': 'editedMark',
+    'data-pp-edited-for': specimen.id || null,
+    // The count of records behind the marker. Not rendered — this is the thread
+    // from the words on stage back to the notes themselves, which the studio
+    // shows (src/ui/panels/specimens.js) and a review surface can.
+    'data-pp-edit-notes': String(editRecordCount(specimen)),
+    // The pill's own gutters and rule, which are not the container's.
+    'data-pp-inset': String(EDITED_MARK_INSET_PX),
+    // `inline-flex`, so the pill is as wide as its words up to the room it has;
+    // the measurement reports the room and is a bound, not an equality (L8-28).
+    'data-pp-fit': 'shrink',
+  }, EDITED_MARK_TEXT);
+}
+
+/** The class on the strip the sweep appends when no panel carried the marker. */
+export const EDITED_NOTICE_CLASS = 'pp-edited-notice';
+
+/**
+ * The specimens a rendered tree has already marked: every id that appears as
+ * `data-pp-specimen` on an element whose subtree contains a `pp-edited` marker.
+ *
+ * Derived from the tree rather than declared beside it, exactly as
+ * `labelledRenditionIds()` is and for the same reason (L8-2, L8-25): a table of
+ * "which layout marks the specimen where" is a second description of the
+ * render, and the two drift the first time a layout grows a branch.
+ *
+ * @param {import('../core/vdom.js').VNode} tree
+ * @returns {Set<string>}
+ */
+export function markedSpecimenIds(tree) {
+  /** @type {Set<string>} */
+  const marked = new Set();
+
+  /**
+   * @param {import('../core/vdom.js').VNode} node
+   * @param {string[]} scopes  ids of the `data-pp-specimen` ancestors
+   */
+  const visit = (node, scopes) => {
+    if (node === null || node === undefined || node === false) return;
+    if (Array.isArray(node)) { node.forEach((child) => visit(child, scopes)); return; }
+    if (typeof node !== 'object' || 'raw' in node) return;
+    const attrs = node.a || {};
+    const owner = attrs['data-pp-specimen'];
+    const next = typeof owner === 'string' && owner ? scopes.concat([owner]) : scopes;
+    if (String(attrs.class || '').split(/\s+/).includes(EDITED_MARK_CLASS)) {
+      for (const id of next) marked.add(id);
+    }
+    (node.c || []).forEach((child) => visit(child, next));
+  };
+
+  visit(tree, []);
+  return marked;
+}
+
+/**
+ * Append the §18.3 notice to a finished layout tree.
+ *
+ * **The rule this implements.** If the scene's specimen was edited, the scene
+ * says so — in every layout, on every branch. Four layouts give the client's
+ * content a panel of its own and mark it there: `splitBeforeAfter`'s before
+ * column, `fanOut`'s source rail, `stack`'s first step, `sideNote`'s source
+ * chip. The other four have nowhere to hang it — `contentsIndex` renders the
+ * specimen's headings as a list with no panel head, `quoteCard` renders one
+ * sentence of it, `fullBleed` one image, `systemMap` a node inside an SVG whose
+ * legibility the emitter cannot verify (L8-12) — and every layout has an
+ * empty-state branch that renders no panel at all. For those, this strip
+ * carries it, named to the specimen it is about.
+ *
+ * **Why "the scene's specimen", not "specimen content visibly on screen".**
+ * The same argument as L8-25, one law over. A layout cannot evaluate the second
+ * predicate: `quoteCard` renders `scene.headline`, and whether that headline is
+ * a line of the client's page is knowable to L9 and to a text probe in the
+ * emitter but not here. What a layout can evaluate is what the scene was built
+ * from, and that predicate can only over-state the presence of edited material,
+ * never hide it — which is the direction §18.3 wants.
+ *
+ * The row is a `data-pp-specimen` scope of its own, so the marker sits inside
+ * the subtree of the specimen it describes exactly like the panel markers do,
+ * and it carries no `data-pp-el`, so no beat can hide it.
+ *
+ * @param {import('../core/vdom.js').VNode} tree   the layout's root element
+ * @param {import('../runtime/layouts.js').LayoutContext} ctx
+ * @returns {import('../core/vdom.js').VNode}
+ */
+export function withEditedNotice(tree, ctx) {
+  if (!tree || typeof tree !== 'object' || Array.isArray(tree) || 'raw' in tree) return tree;
+  const specimen = ctx ? ctx.specimen : null;
+  if (!specimenEdited(specimen)) return tree;
+  if (markedSpecimenIds(tree).has(specimen.id)) return tree;
+
+  const row = h('li', {
+    class: 'pp-edited-notice-row',
+    'data-pp-box': 'editedNotice',
+    'data-pp-container': 'editedNotice',
+    'data-pp-specimen': specimen.id,
+  },
+  h('p', {
+    class: 'pp-edited-notice-name',
+    'data-pp-tx': 'noteLabel',
+    'data-pp-clamp': '1',
+    'data-pp-inset': 'ledger-label-w,ledger-label-gap',
+  }, specimenTitle(specimen)),
+  h('div', { class: 'pp-edited-notice-label', 'data-pp-width': 'ledger-label-w' },
+    editedMark(specimen)));
+
+  // The root states that a notice strip is in flow beneath it, so `measureScene`
+  // takes its room out of every box above (`editedNoticeAllowance` in
+  // geometry.js) rather than measuring a stage that is taller than the one the
+  // content gets.
+  return {
+    ...tree,
+    a: { ...(tree.a || {}), 'data-pp-edited': '1' },
+    c: (tree.c || []).concat([h('ul', { class: EDITED_NOTICE_CLASS }, row)]),
   };
 }
 

@@ -23,6 +23,7 @@ import { flowAttrs, flowOf } from '../direction.js';
 import {
   sceneHead, provenanceLabel, emptyState,
   specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger,
+  editedMark, withEditedNotice,
 } from '../parts.js';
 
 /**
@@ -35,7 +36,7 @@ export function stack(ctx) {
   // One step per rendition, each labelled in its own header, so the ledger is
   // empty in every ordinary case — and asked for anyway, because the
   // empty-state branch renders no steps at all.
-  return withProvenanceLedger(h('div', {
+  return withEditedNotice(withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--stack',
     'data-pp-layout': 'stack',
     'data-pp-box': 'stage',
@@ -44,7 +45,7 @@ export function stack(ctx) {
   steps.length === 0
     ? emptyState('This scene has no states to show yet — attach a specimen or renditions.', { box: 'body' })
     : h('ol', { class: 'pp-stack', 'data-pp-box': 'body', 'data-pp-n': String(steps.length) },
-      steps.map((step, index) => renderStep(ctx, step, index, steps.length)))), ctx);
+      steps.map((step, index) => renderStep(ctx, step, index, steps.length)))), ctx), ctx);
 }
 
 /**
@@ -52,7 +53,7 @@ export function stack(ctx) {
  * A scene with no specimen starts at its first rendition rather than inventing
  * a starting state.
  * @param {import('../../runtime/layouts.js').LayoutContext} ctx
- * @returns {{kind: 'source'|'rendition', title: string, meta: string|null, blocks: any[], rendition: any, path: string, group: string}[]}
+ * @returns {{kind: 'source'|'rendition', title: string, meta: string|null, blocks: any[], rendition: any, specimen?: any, path: string, group: string}[]}
  */
 function stepsOf(ctx) {
   /** @type {any[]} */
@@ -64,6 +65,9 @@ function stepsOf(ctx) {
       meta: specimenMeta(ctx.specimen),
       blocks: Array.isArray(ctx.specimen.blocks) ? ctx.specimen.blocks : [],
       rendition: null,
+      // The first state in the chain is the client's own content, so it is the
+      // step that owes §18.3's marker if the seller changed it.
+      specimen: ctx.specimen,
       path: 'stack/source',
       group: 'stack/0',
     });
@@ -96,6 +100,7 @@ function renderStep(ctx, step, index, total) {
     'data-pp-el': ctx.el(step.path),
     'data-pp-group': step.group,
     'data-pp-rendition': step.rendition ? step.rendition.id : null,
+    'data-pp-specimen': step.specimen ? step.specimen.id : null,
   },
   // The rail is a declared grid track (`--pp-sc-stack-rail-w`) and the badge in
   // it is exactly that wide, so `stackRail` is the box the number is measured
@@ -123,7 +128,11 @@ function renderStep(ctx, step, index, total) {
       // would push that copy out of its own step.
       h('div', { class: 'pp-stack-head-right', 'data-pp-width': 'step-meta-w' },
         step.meta ? h('p', { class: 'pp-stack-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, step.meta) : null,
-        provenanceLabel(step.rendition, ctx))),
+        provenanceLabel(step.rendition, ctx),
+        // The source step's counterpart to the provenance label, in the same
+        // corner and for the same reason: a state in a chain is one or two lines
+        // tall, and a marker below the copy would push that copy out of its step.
+        editedMark(step.specimen))),
     h('div', { class: 'pp-stack-content' },
       lead && lead.type !== 'paragraph' && lead.type !== 'heading'
         ? renderBlock(lead, { media: ctx.media, density: 'condensed', clampParagraph: 2, maxListItems: 3, maxTableRows: 3, ...flow })

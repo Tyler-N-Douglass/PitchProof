@@ -70,6 +70,18 @@ URI. A face nobody asserted a licence for is never embedded, and the emitter
 never fetches one, which is what §7 and §13 actually protect.
 `test/emit/emit.test.mjs` asserts both directions.
 
+**Amended after CRITIQUE-3 P9.** `licenseAsserted` on the `deps` entry turned out
+to be a *second* door into §7's law: a font passed that way was embedded whatever
+the model said, so `TypeFace.embeddable` — the field §7 actually names, and the
+one L5's `attachUserFont` alone can set — could be false while the artifact
+rendered in the face. The emitter now requires both: the bytes come through
+`deps` because the contract has nowhere to put them, and the *claim* still has
+to be on the face. A `deps.fonts` entry no face marks embeddable is not embedded
+and is reported as `FONT_UNAVAILABLE` at severity 2 (decision E38). That closes
+the second door without needing the contract change below — but it closes it by
+making the caller state the same thing twice, which is the shape of the defect
+this dispute is about.
+
 **What we would propose instead.** Add one optional field to `TypeFace` —
 `source: {dataUri: string, licenseAssertedBy: string, licenseAssertedAt: string} | null`
 — mirroring the promotion record: a claim plus who made it and when. §4 permits

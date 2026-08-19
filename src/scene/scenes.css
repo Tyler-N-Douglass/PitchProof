@@ -104,6 +104,7 @@
   --pp-sc-fs-deco: 11px;
   --pp-sc-fs-display-sub: 13px;
   --pp-sc-fs-display-x-l: 26px;
+  --pp-sc-fs-edited-mark: 12px;
   --pp-sc-fs-headline: 22px;
   --pp-sc-fs-index-blurb: 11px;
   --pp-sc-fs-index-number: 12px;
@@ -182,6 +183,7 @@
     --pp-sc-fs-deco: 12px;
     --pp-sc-fs-display-sub: 16px;
     --pp-sc-fs-display-x-l: 40px;
+    --pp-sc-fs-edited-mark: 12px;
     --pp-sc-fs-headline: 30px;
     --pp-sc-fs-index-blurb: 13px;
     --pp-sc-fs-index-number: 14px;
@@ -261,6 +263,7 @@
     --pp-sc-fs-deco: 13px;
     --pp-sc-fs-display-sub: 18px;
     --pp-sc-fs-display-x-l: 52px;
+    --pp-sc-fs-edited-mark: 12px;
     --pp-sc-fs-headline: 38px;
     --pp-sc-fs-index-blurb: 14px;
     --pp-sc-fs-index-number: 16px;
@@ -500,6 +503,13 @@
   line-height: 1;
   font-weight: 400;
   letter-spacing: 0;
+}
+.pp-scene [data-pp-tx="editedMark"] {
+  font-family: var(--pp-font-body);
+  font-size: var(--pp-sc-fs-edited-mark);
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 .pp-scene .pp-map-svg [data-pp-tx="mapNodeTitle"] {
   font-family: var(--pp-font-display);
@@ -804,6 +814,93 @@
   right: 0;
   bottom: 0;
   justify-content: flex-end;
+  max-width: 100%;
+  padding: var(--pp-sc-bleed-pad);
+}
+
+/*
+ * The §18.3 edit marker.
+ *
+ * "The prospect's own content is presented unmodified on the 'before' side. If
+ * a specimen was edited, the artifact says so." The marker is what says so, and
+ * this is the only rule in the artifact that decides how legible it is — the
+ * box, the colour pair and the weight, all in one place, so there is one thing
+ * to check rather than a cascade to reason about.
+ *
+ * It is the provenance label's box on purpose (`.pp-provenance` in
+ * runtime.css): the same pill, the same 3px warning rule, the same
+ * `surfaceAlt`/`onSurfaceAlt` pair — the one pairing the role solver guarantees
+ * at >= 4.5:1 and the one `src/validate/contrast.js` checks. A second honesty
+ * marker in a second visual language would be a second thing for the room to
+ * learn, and a second contrast pairing for nobody to have verified.
+ *
+ * `opacity` and `visibility` are declared here, at their visible values, for the
+ * same reason runtime.css declares them on the label: a marker that any later
+ * rule can fade is not a marker. Nothing else in this sheet may set
+ * `display`, `opacity`, `visibility`, `font-size`, `color` or `background` on
+ * it, and test/scene/css-agreement.test.mjs fails the build if anything does.
+ */
+.pp-scene .pp-edited {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border-left: 3px solid var(--pp-warning);
+  background: var(--pp-surface-alt);
+  color: var(--pp-on-surface-alt);
+  opacity: 1;
+  visibility: visible;
+}
+
+/*
+ * The notice strip: the marker's home in the four layouts that render the
+ * client's content without a panel head to hang it on, and on every layout's
+ * empty-state branch. Same grid as the provenance ledger, and measured with the
+ * same numbers (`editedNotice` in geometry.js).
+ */
+.pp-edited-notice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--pp-sc-row-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.pp-edited-notice-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 4px var(--pp-sc-ledger-label-gap);
+  min-width: 0;
+  max-width: 100%;
+  padding: calc(var(--pp-sc-card-pad) / 2) var(--pp-sc-card-pad);
+  border: 1px solid var(--pp-border);
+  border-radius: var(--pp-radius);
+}
+.pp-edited-notice-label { min-width: 0; }
+
+.pp-edited-notice-name {
+  margin: 0;
+  min-width: 0;
+  opacity: 0.72;
+}
+
+.pp-edited-notice .pp-edited { margin: 0; }
+
+/* `fullBleed` again: an absolutely-placed frame, so the notice sits against the
+   foot of it. Above the ledger rather than beside it — two strips in one corner
+   would have the shorter one deciding where the taller one starts. */
+.pp-layout--bleed .pp-edited-notice {
+  position: absolute;
+  left: 0;
+  bottom: 0;
   max-width: 100%;
   padding: var(--pp-sc-bleed-pad);
 }
@@ -1229,6 +1326,7 @@
   .pp-scene-head--extra { grid-template-columns: minmax(0, 1fr) var(--pp-sc-head-extra-w); }
   .pp-stack-head { grid-template-columns: minmax(0, 1fr) var(--pp-sc-step-meta-w); }
   .pp-provenance-ledger-row { grid-template-columns: minmax(0, 1fr) var(--pp-sc-ledger-label-w); }
+  .pp-edited-notice-row { grid-template-columns: minmax(0, 1fr) var(--pp-sc-ledger-label-w); }
 }
 
 /* ------------------------------------------------------ lg: 1400px and wider */

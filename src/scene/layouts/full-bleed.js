@@ -26,6 +26,7 @@ import { h } from '../../core/vdom.js';
 import { flowAttrs, flowOf } from '../direction.js';
 import {
   provenanceLabel, emptyState, specimenTitle, renditionLabel, withProvenanceLedger,
+  withEditedNotice,
 } from '../parts.js';
 
 /**
@@ -41,7 +42,10 @@ export function fullBleed(ctx) {
   // the one that carried a usable image is scoped — so the overlay's label
   // covers at most one of them. The ledger carries the rest, pinned to the foot
   // of the frame by `.pp-layout--bleed .pp-provenance-ledger`.
-  return withProvenanceLedger(h('div', {
+  // The visual is frequently the specimen's own hero, and there is no panel here
+  // at all — the frame is the scene. §18.3's marker therefore arrives on the
+  // notice strip, pinned to the foot of the frame opposite the ledger.
+  return withEditedNotice(withProvenanceLedger(h('div', {
     class: `pp-layout pp-layout--bleed${pick.media ? '' : ' pp-layout--bleed-type'}`,
     'data-pp-layout': 'fullBleed',
     'data-pp-box': 'stage',
@@ -94,7 +98,7 @@ export function fullBleed(ctx) {
     !scene.headline && !scene.subhead && !pick.caption && !pick.source
       ? emptyState('This scene has no headline yet.')
       : null),
-  provenanceLabel(pick.rendition, ctx))), ctx);
+  provenanceLabel(pick.rendition, ctx))), ctx), ctx);
 }
 
 /**

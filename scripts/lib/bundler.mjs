@@ -38,6 +38,30 @@ const IMPORT_START = /^\s*import\b/;
 const EXPORT_START = /^\s*export\b/;
 
 /**
+ * Remove comments from the inside of an import or export brace list.
+ *
+ * Only these two statements need it: they are the one place this repo writes
+ * prose inside a statement rather than above it, and their bodies are read as a
+ * comma-separated list of identifiers rather than parsed. Nothing inside a
+ * brace list can be a string or a regex, so a character scanner is not needed —
+ * but a `/` that is not the start of a comment is left alone rather than
+ * assumed away.
+ *
+ * @param {string} body
+ * @returns {string}
+ */
+export function stripStatementComments(body) {
+  return body
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split('\n')
+    .map((line) => {
+      const at = line.indexOf('//');
+      return at < 0 ? line : line.slice(0, at);
+    })
+    .join('\n');
+}
+
+/**
  * Split a source file into statements the bundler understands, joining the
  * multi-line forms of `import { … } from '…'` and `export { … }`.
  * @param {string} src
@@ -180,9 +204,29 @@ export function parseModule(file, src, root) {
       // a lane's surface. The dependency is registered like any import and the
       // binding is read from it in the module tail, after it has evaluated.
       const from = m[2] ? addDep(m[2]) : null;
-      const parts = m[1].split(',').map((s) => s.trim()).filter(Boolean);
+      // Comments are stripped before the names are read. An `export { … }` list
+      // is the one place this repo writes prose *inside* a statement — an index
+      // module explains why a lane republishes a surface — and without this the
+      // comment became a name: the bundler emitted
+      //
+      //   __exports["// §18.3 — the edit marker …"] = __require("scene/parts.js").// §18.3 — …
+      //
+      // which is not valid JavaScript on the right-hand side. D3's claim for
+      // this bundler is that it "refuses anything else loudly rather than
+      // mis-compiling it", and it silently mis-compiled a legal re-export. The
+      // only reason it surfaced is that L10's network scanner reads a leading
+      // `//` as a protocol-relative URL and refused the artifact; without that,
+      // a corrupt runtime would have shipped.
+      const parts = stripStatementComments(m[1]).split(',').map((s) => s.trim()).filter(Boolean);
       for (const part of parts) {
         const [local, name = local] = part.split(/\s+as\s+/).map((s) => s.trim());
+        // And now it refuses loudly, which is what should have happened first.
+        for (const ident of [local, name]) {
+          if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(ident)) {
+            throw new BundleError(
+              `${id}:${st.line}: cannot parse export list — ${JSON.stringify(ident)} is not an identifier`);
+          }
+        }
         exported.push({ exported: name, local, from });
       }
       // The assignment itself is emitted in the module tail, so an export list

@@ -31,7 +31,7 @@ import { flowAttrs, flowOf } from '../direction.js';
 import { firstOfType } from '../blocks.js';
 import {
   sceneHead, provenanceLabel, emptyState, specimenTitle, renditionLabel, specimenMeta,
-  withProvenanceLedger,
+  withProvenanceLedger, withEditedNotice,
 } from '../parts.js';
 
 /**
@@ -47,7 +47,11 @@ export function quoteCard(ctx) {
   // declares the renditions it was built from. Every branch below reaches
   // `withProvenanceLedger`, so a declared illustrative rendition is labelled on
   // all four of them rather than only on the one that pulled from a rendition.
-  return withProvenanceLedger(h('div', {
+  // …and `withEditedNotice` is the same argument for §18.3. This layout can put
+  // one sentence of the client's page on a slide with nothing else around it;
+  // where that page was edited, the notice strip is what says so, because there
+  // is no panel head here to carry the marker.
+  return withEditedNotice(withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--quote',
     'data-pp-layout': 'quoteCard',
     'data-pp-box': 'stage',
@@ -79,7 +83,7 @@ export function quoteCard(ctx) {
         : null)
       : null,
     provenanceLabel(pulled.rendition, ctx))
-    : emptyState('This scene has no quote yet — attach a specimen with a quote block, or give the scene a headline.', { box: 'body' })), ctx);
+    : emptyState('This scene has no quote yet — attach a specimen with a quote block, or give the scene a headline.', { box: 'body' })), ctx), ctx);
 }
 
 /**

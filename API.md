@@ -758,14 +758,40 @@ type EmitResult = {
   findings: Finding[];                    // severity 1 present => emit refused
   degradations: DegradationLine[];        // predicted and actual bytes, per asset
   compression: {mode: 'deflate'|'raw', modelBytes: number, mediaBytes: number};
+  budget: {maxBytes, bytes, reserveBytes, assetBytes, copies, fixedCost, unreachable?};
+  fonts: {embedded: string[], refused: {family: string, reason: string}[]};
 };
 type DegradationLine = { assetId: string; rank: number; from: {w,h,quality}; to: {w,h,quality};
+                         scale: number;
                          predictedBytes: number; actualBytes: number; reason: string };
 ```
 
 `deps` carries `{runtimeJs, runtimeCss, clock}` so the emitter never reads the
 filesystem. **A severity-1 finding refuses the emit. There is no override flag
 anywhere in the codebase.**
+
+**`budget.fixedCost` decomposes the reserve into named components** — embedded
+fonts (with families and face count), runtime, model payload, stylesheets, media
+table, pre-rendered beat, scaffolding — and the census sums to `reserveBytes`
+exactly, asserted. It exists because a refusal said the obstacle was a 178-byte
+PNG while 485 KB of embedded font was 54% of the file and the whole of the
+overage, and five of the prospect's own images had been degraded for a budget
+that could never be met (CRITIQUE-3 P4). A budget the ladder cannot reach now
+degrades **nothing** and comes back with `unreachable: true`.
+
+**`degradations[].scale`** is the single dial that replaced the coarse ladder.
+Every asset scales as `q^(1+spread(rank))`, and `q` is found by bisection whose
+bracket only ever moves on a **measurement** — candidates come from each
+picture's own measured byte curve, because an area model is optimistic by about
+2.3× on real photographs. Shedding 8 KB used to cost 379 KB of the client's hero
+(47.5× overshoot) and every budget across a 25% range produced an identical
+file; it is now 1.0–1.1× and every budget gives a different file.
+
+**`fonts`** records which faces were embedded and which were refused. §7 makes
+`embeddable` the assertion and `attachUserFont` the only route to it, so
+`deps.fonts` is not a second door: an entry is embedded only when the proof's
+brand carries a face of that family marked `embeddable: true`, and a refusal
+becomes a `FONT_UNAVAILABLE` naming the family and the route.
 
 ### L11 Validate — `src/validate/index.js`
 

@@ -1335,3 +1335,43 @@ severity-2 finding is where that belongs. `EmitResult.fonts` carries
 `licenseAsserted: true` is still required and still not sufficient: a font
 nobody asserted a licence for is neither embedded nor mentioned, exactly as
 before.
+
+---
+
+## E39 — The absolute-URL scanner's scheme is bounded, because an embedded font made it quadratic (found under P4)
+
+**Unsettled by:** nothing in the spec. Found while measuring P4.
+
+**What happened.** Reproducing P4's scenario — four weights of a licensed font,
+485KB of base64 — `emit()` took **166 seconds** for one refusal. Nothing about
+the budgeter was slow; `scanCss` was:
+
+```
+scanCss  10,000 chars    198 ms
+scanCss  20,000 chars    803 ms
+scanCss  40,000 chars  3,084 ms
+scanCss  80,000 chars 12,432 ms
+```
+
+`ABSOLUTE_URL_RE` was `/[a-zA-Z][a-zA-Z0-9+.\-]*:\/\/…/g`. On a long run of
+base64 the engine starts the greedy scheme run at *every* character, consumes
+the rest of the run looking for a `://` that is not there, fails, and advances
+by one. A document is exactly where long alphanumeric strings live, and the more
+of the file the seller inlines, the worse it gets.
+
+**Decision.** Bound the scheme at 32 characters:
+`/[a-zA-Z][a-zA-Z0-9+.\-]{0,31}:\/\/…/g`. Same eight lines: 5ms, 8ms, 16ms,
+30ms. `emit()` on the same font proof went from 166 seconds to 0.5.
+
+**Why this costs no detection.** The match may start anywhere, so a scheme
+longer than the bound is still found — the last 32 characters of it are a match,
+and `test/emit/scanner.test.mjs` asserts that a 200-character scheme is still
+reported. What the bound removes is the restart, not the finding. The longest
+scheme IANA has registered is 20 characters, a base64 body cannot contain the
+`:` that would make one, and no engine resolves a 33-character scheme anyway.
+
+Worth naming as a decision rather than a tidy-up because of what it was: the
+no-telemetry law is verified by this scanner on every emit, and a scanner whose
+cost is quadratic in the size of an inlined asset is a scanner a large enough
+proof turns into a hang. Three tests now hold it: the long-run detection cases,
+the long-scheme case, and a bound on the scan time itself.

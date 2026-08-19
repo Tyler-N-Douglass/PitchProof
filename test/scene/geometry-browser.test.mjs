@@ -181,9 +181,49 @@ function orderedListCase() {
   };
 }
 
-/** Every layout case this file lays out, shared fixture plus this file's probe. */
+/**
+ * The §18.3 marker, both of the places it can land, so Chromium checks both.
+ *
+ * `splitBeforeAfter` hangs it under the before panel's own head — the pill is a
+ * `data-pp-fit: shrink` box like the provenance label, so what is checked is
+ * that `EDITED_MARK_INSET_PX` is the room the page really leaves it. The
+ * `contentsIndex` case has no panel to hang it on, so `withEditedNotice()`
+ * appends the notice strip and the `editedNotice` slot gets measured.
+ * @returns {any[]}
+ */
+function editedCases() {
+  const base = specimen();
+  const edited = {
+    ...base,
+    edited: true,
+    editNotes: [
+      '2026-02-08T09:00:00.000Z: Removed an image — "/assets/product-hx400.png" (captioned "HX-400 shell-and-tube '
+      + 'heat exchanger"), under the heading "Specification" — during rehearsal: no media in this project carries '
+      + 'that reference, so it would have shown to the room as a broken image. Everything else on the page is as it '
+      + 'was captured.',
+    ],
+  };
+  return [
+    {
+      layout: 'splitBeforeAfter',
+      specimen: edited,
+      renditions: [],
+      headline: 'Their page, with one image removed',
+      subhead: 'The before panel says so under its own head.',
+    },
+    {
+      layout: 'contentsIndex',
+      specimen: edited,
+      renditions: [],
+      headline: 'What this proof covers',
+      subhead: 'No panel head here, so the notice strip carries the marker.',
+    },
+  ];
+}
+
+/** Every layout case this file lays out, shared fixture plus this file's probes. */
 function pageCases() {
-  return [...layoutCases(), orderedListCase()];
+  return [...layoutCases(), orderedListCase(), ...editedCases()];
 }
 
 /**
@@ -335,12 +375,14 @@ test('every box a layout draws is the box boxGeometry reports', async (t) => {
       // The ledger takes vertical room from everything above it; a box's
       // *width* never depends on it, which is what is asserted here.
       const ledger = boxes.some((b) => b.slot === 'provenanceLedger');
+      const edited = boxes.some((b) => b.slot === 'editedNotice');
       for (const box of boxes) {
         if (box.svg || SVG_SLOTS.has(box.slot)) continue;
         covered.add(box.slot);
         const model = boxGeometry(box.slot, bp.id, {
           n: box.n === null ? undefined : Number(box.n),
           ledger: box.slot === 'provenanceLedger' ? false : ledger,
+          edited: box.slot === 'editedNotice' ? false : edited,
         });
         const delta = model.widthPx - box.width;
         if (Math.abs(delta) > TOLERANCE_PX) {
@@ -713,12 +755,13 @@ test('the inventory of content-sized text boxes is exactly the declared one', as
   // different claims and neither should be able to admit a box under the other's
   // name.
   //
-  //   shrink — the two shapes the stylesheet sizes to their own words: the
-  //            `inline-flex` provenance pill and the `inline-block` CTA.
+  //   shrink — the three shapes the stylesheet sizes to their own words: the
+  //            `inline-flex` provenance pill, the §18.3 edit marker, which is
+  //            deliberately the same pill (L8-32), and the `inline-block` CTA.
   //   spill  — the one gutter a mark is allowed to leave: the list-marker
   //            column. Its no-clip half is asserted in the test below.
   const byReason = (want) => [...new Set(fitted.filter((f) => f.fit === want).map((f) => f.role))].sort();
-  assert.deepEqual(byReason('shrink'), ['cta', 'provenance'],
+  assert.deepEqual(byReason('shrink'), ['cta', 'editedMark', 'provenance'],
     'the set of content-sized text boxes changed');
   assert.deepEqual(byReason('spill'), ['deco'],
     'the set of text boxes allowed to spill out of their own box changed');

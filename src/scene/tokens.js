@@ -268,6 +268,14 @@ export const TYPE_ROLES = {
   mapNodeTitle: { face: 'display', sizes: { sm: 16, md: 16, lg: 16 }, lineHeight: 1.25, weight: 600, svg: true },
   mapNodeMeta: { face: 'mono', sizes: { sm: 12, md: 12, lg: 12 }, lineHeight: 1.25, weight: 400, svg: true },
 
+  // §18.3's marker. Deliberately the provenance label's own metrics — 12px at
+  // every breakpoint, one step above §18.1's 11px floor, and the same weight and
+  // tracking — because the two honesty markers are siblings on screen and a
+  // reader who has learnt to see one has learnt to see the other. Flat across
+  // breakpoints for the same reason the label is: a marker that shrinks with the
+  // viewport is a marker with a smallest size nobody chose.
+  editedMark: { face: 'body', sizes: { sm: 12, md: 12, lg: 12 }, lineHeight: 1.35, weight: 600, letterSpacingEm: 0.01 },
+
   // §18.1 — declared by runtime.css, never re-declared here.
   provenance: { face: 'body', sizes: { sm: 12, md: 12, lg: 12 }, lineHeight: 1.35, weight: 600, letterSpacingEm: 0.01, definedIn: 'runtime.css' },
 };

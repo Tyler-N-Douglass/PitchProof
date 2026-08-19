@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { bundle, parseModule, BundleError } from '../../scripts/lib/bundler.mjs';
+import { bundle, parseModule, BundleError, stripStatementComments } from '../../scripts/lib/bundler.mjs';
 import { scan, BANNED, jsFiles } from '../../scripts/lint-determinism.mjs';
 import { buildAll, jsStringLiteral, cssFiles, concatCss, sourceFingerprint } from '../../scripts/build.mjs';
 
@@ -205,6 +205,63 @@ test('embedded source strings cannot break out of a script element', () => {
   assert.ok(!lit.includes('</script>'));
   assert.equal((0, eval)(lit), '</script><img onerror=alert(1)>');
   assert.ok(!jsStringLiteral('a\u2028b').includes('\u2028'));
+});
+
+test('a comment inside an export list is a comment, not an export', () => {
+  // The bundler read an `export { … }` body as a comma-separated list of names
+  // without stripping comments, so an index module that explained *why* it
+  // republishes a surface had the explanation compiled into a name:
+  //
+  //   __exports["// §18.3 — the edit marker …"] = __require("scene/parts.js").// §18.3 — …
+  //
+  // which is not valid JavaScript on the right-hand side. D3's claim for this
+  // bundler is that it "refuses anything else loudly rather than mis-compiling
+  // it", and this was a legal ESM re-export mis-compiled in silence. It
+  // surfaced only because L10's network scanner reads a leading `//` as a
+  // protocol-relative URL and refused the artifact — 58 emit tests failed at
+  // once, none of them about the bundler.
+  const dir = tree({
+    'parts.js': 'export const A = 1;\nexport const B = 2;\nexport const C = 3;\n',
+    'index.js': [
+      'export {',
+      '  A,',
+      '  // Why B is republished: prose, inside the statement, which is the one',
+      '  // place this repo writes it.',
+      '  B as renamedB,',
+      '  /* and a block comment */ C,',
+      "} from './parts.js';",
+      '',
+    ].join('\n'),
+  });
+  try {
+    const { code } = bundle({ entry: join(dir, 'index.js'), root: dir, global: 'T' });
+    assert.ok(!code.includes('Why B is republished'), 'the comment reached the bundle');
+    assert.ok(code.includes('__exports["A"]'));
+    assert.ok(code.includes('__exports["renamedB"]'));
+    assert.ok(code.includes('__exports["C"]'));
+    const surface = new Function(`${code}\n; return globalThis.T;`)();
+    assert.deepEqual(Object.keys(surface).sort(), ['A', 'C', 'renamedB']);
+    assert.equal(surface.renamedB, 2);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an export list the bundler cannot read is refused, not guessed at', () => {
+  // The other half of D3's claim. Refusing loudly is the behaviour; silently
+  // emitting a broken name is what let the defect above ship.
+  const dir = tree({
+    'parts.js': 'export const A = 1;\n',
+    'index.js': "export { A, 3nope } from './parts.js';\n",
+  });
+  try {
+    assert.throws(() => bundle({ entry: join(dir, 'index.js'), root: dir, global: 'T' }),
+      /cannot parse export list/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('stripStatementComments leaves a solidus that is not a comment alone', () => {
+  assert.equal(stripStatementComments('a, b // gone\n, c'), 'a, b \n, c');
+  assert.equal(stripStatementComments('a, /* gone */ b'), 'a,   b');
+  assert.equal(stripStatementComments('a, b'), 'a, b');
 });
 
 test('CSS concatenation is sorted, so the bundle does not depend on readdir order', () => {

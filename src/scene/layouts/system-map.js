@@ -24,7 +24,10 @@
  *    emitter runs against the final stylesheet; an SVG `<text>` has no
  *    background and takes `fill` rather than `color`, so a label placed inside
  *    the drawing would be a label whose legibility could not be verified. The
- *    chips are numbered to match the nodes.
+ *    chips are numbered to match the nodes. **§18.3's edit marker is in HTML for
+ *    the same reason** — the source node names the specimen inside the drawing,
+ *    but the marker that says the specimen was edited arrives on the notice
+ *    strip below it, where its size and its contrast are facts about CSS.
  *
  * @module scene/layouts/system-map
  */
@@ -37,6 +40,7 @@ import { renderedFamily } from '../brand-access.js';
 import {
   sceneHead, provenanceLabel, emptyState, URL_LABEL_BUDGET,
   specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger,
+  withEditedNotice,
 } from '../parts.js';
 
 /** The drawing's design geometry, in viewBox units. */
@@ -65,9 +69,9 @@ export function systemMap(ctx) {
   const hasSubject = !!ctx.specimen || rends.length > 0;
 
   if (!hasSubject) {
-    return withProvenanceLedger(h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
+    return withEditedNotice(withProvenanceLedger(h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
       sceneHead(ctx, { kicker: 'How it runs' }),
-      emptyState('This scene has nothing to map yet — attach a specimen or renditions.', { box: 'body' })), ctx);
+      emptyState('This scene has nothing to map yet — attach a specimen or renditions.', { box: 'body' })), ctx), ctx);
   }
 
   const shown = rends.slice(0, MAP.maxOutputs);
@@ -98,7 +102,7 @@ export function systemMap(ctx) {
   // more renditions" node that names no rendition and can scope none. Those are
   // the renditions the ledger picks up — the room is being told they exist, and
   // §18.1 does not stop applying because the drawing ran out of room.
-  return withProvenanceLedger(h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
+  return withEditedNotice(withProvenanceLedger(h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
     sceneHead(ctx, { kicker: 'How it runs' }),
     h('div', { class: 'pp-map', 'data-pp-box': 'body' },
       h('div', { class: 'pp-map-canvas' },
@@ -189,7 +193,7 @@ export function systemMap(ctx) {
         shown.length === 0
           ? h('li', { class: 'pp-map-chip pp-map-chip--empty', 'data-pp-box': 'mapLegend', 'data-pp-n': '1' },
             h('p', { class: 'pp-map-chip-label', 'data-pp-tx': 'caption' }, 'No renditions attached to this scene.'))
-          : null))), ctx);
+          : null))), ctx), ctx);
 }
 
 /**

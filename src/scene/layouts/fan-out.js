@@ -27,6 +27,7 @@ import { flowAttrs } from '../direction.js';
 import {
   sceneHead, panelHead, provenanceLabel, emptyState, waveGroup,
   specimenMeta, specimenTitle, renditionLabel, withProvenanceLedger,
+  editedMark, withEditedNotice,
 } from '../parts.js';
 
 /** Cards past this count reveal in waves rather than one at a time. */
@@ -44,7 +45,7 @@ export function fanOut(ctx) {
   // A card per rendition, each carrying its own label, so the ledger is empty
   // in every ordinary case. It is asked for on the way out regardless — the
   // empty-state branch renders no cards, and §18.1 has to hold on every branch.
-  return withProvenanceLedger(h('div', {
+  return withEditedNotice(withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--fan',
     'data-pp-layout': 'fanOut',
     'data-pp-box': 'stage',
@@ -54,7 +55,7 @@ export function fanOut(ctx) {
     ? emptyState('This scene has no renditions attached yet.', { box: 'body' })
     : h('div', { class: 'pp-fan', 'data-pp-box': 'body' },
       renderSource(ctx, sourceBlocks, rends.length),
-      renderGrid(ctx, rends))), ctx);
+      renderGrid(ctx, rends))), ctx), ctx);
 }
 
 /**
@@ -68,12 +69,20 @@ function renderSource(ctx, sourceBlocks, count) {
     'data-pp-box': 'fanSource',
     'data-pp-el': ctx.el('source/panel'),
     'data-pp-group': 'source',
+    // The specimen's scope, so the §18.3 marker sits inside the subtree of the
+    // content it is about.
+    'data-pp-specimen': ctx.specimen ? ctx.specimen.id : null,
   },
   panelHead({
     title: specimenTitle(ctx.specimen),
     meta: specimenMeta(ctx.specimen),
     tone: 'before',
   }),
+  // Above the source body, not below it: `.pp-fan-source-body` is the flexible
+  // item in this column and it is `overflow: hidden`, so a marker placed after
+  // it would be the run this rail clips first. It squeezes the excerpt instead,
+  // which is the right way round — the excerpt is an excerpt already.
+  editedMark(ctx.specimen),
   h('div', { class: 'pp-fan-source-body' },
     lead.length
       ? lead.map((block) => renderBlock(block, {

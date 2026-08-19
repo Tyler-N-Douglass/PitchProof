@@ -17,13 +17,19 @@ export {
   PROVENANCE_LABEL_CLASS, PROVENANCE_LABEL_TEXT, needsProvenanceLabel, provenanceLabel,
   PROVENANCE_LEDGER_CLASS, labelledRenditionIds, unlabelledRenditions, withProvenanceLedger,
   presentableNotes, displayUrl, URL_LABEL_BUDGET, PROVENANCE_LABEL_INSET_PX,
+  // §18.3 — the edit marker and the sweep that guarantees it. Exported for the
+  // same reason the provenance surface is: L10 checks the render it is handed
+  // rather than trusting it, and L11 and L12 read the same predicate the
+  // layouts render from instead of re-deriving it.
+  EDITED_MARK_CLASS, EDITED_MARK_TEXT, EDITED_MARK_INSET_PX, EDITED_NOTICE_CLASS,
+  specimenEdited, editRecordCount, editedMark, markedSpecimenIds, withEditedNotice,
 } from './parts.js';
 
 // -- extensions ------------------------------------------------------------
 // Geometry, tokens and the type scale, so L11 can reason about a box it was
 // handed and L12 can lay the studio's preview out at true aspect without
 // guessing at the artifact's numbers.
-export { stageBox, boxGeometry, breakpointId, mapScale, mapLegendHeight, fanColumns, stagePadPx, trackWidth, ledgerAllowance, MAP_DESIGN, PANEL_BORDER_PX, NOTE_RULE_PX, SLOTS } from './geometry.js';
+export { stageBox, boxGeometry, breakpointId, mapScale, mapLegendHeight, fanColumns, stagePadPx, trackWidth, ledgerAllowance, editedNoticeAllowance, MAP_DESIGN, PANEL_BORDER_PX, NOTE_RULE_PX, SLOTS } from './geometry.js';
 export { sceneVars, GEOM, TYPE_ROLES, BP_IDS, BP_QUERY, geom, cssRoleName, scenesCssRoles } from './tokens.js';
 export { styleForRole, textRoles } from './type-scale.js';
 export { alignColumns, alignPair, signatureOf } from './align.js';

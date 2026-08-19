@@ -176,7 +176,7 @@ export function collectTextBoxes(node, env) {
 
   /**
    * @param {import('../core/vdom.js').VNode} n
-   * @param {{elementId: string|null, slot: string|null, containerId: string|null, widthPx: number, heightPx: number, scaleN?: number, ledger?: boolean}} state
+   * @param {{elementId: string|null, slot: string|null, containerId: string|null, widthPx: number, heightPx: number, scaleN?: number, ledger?: boolean, edited?: boolean}} state
    */
   const visit = (n, state) => {
     if (n === null || n === undefined || n === false) return;
@@ -199,6 +199,13 @@ export function collectTextBoxes(node, env) {
       next = { ...next, ledger: Number(attrs['data-pp-ledger']) > 0 };
     }
 
+    // The §18.3 edited notice is the second foot strip, declared the same way by
+    // `withEditedNotice` and costing its own room. The two are independent: a
+    // scene can carry an unlabelled rendition, an edited specimen, or both.
+    if (attrs['data-pp-edited'] !== undefined && attrs['data-pp-edited'] !== null) {
+      next = { ...next, edited: Number(attrs['data-pp-edited']) > 0 };
+    }
+
     if (typeof attrs['data-pp-box'] === 'string') {
       const slot = attrs['data-pp-box'];
       const params = {
@@ -208,6 +215,7 @@ export function collectTextBoxes(node, env) {
         variant: typeof attrs['data-pp-variant'] === 'string' ? attrs['data-pp-variant'] : undefined,
         // The ledger strip itself is not shortened by its own presence.
         ledger: slot === 'provenanceLedger' ? false : next.ledger,
+        edited: slot === 'editedNotice' ? false : next.edited,
       };
       const size = boxGeometry(slot, bp, params);
       const ordinal = (slotCounts.get(slot) || 0) + 1;
@@ -262,7 +270,7 @@ export function collectTextBoxes(node, env) {
         // scale depends on how many legend chips sit under it — the count the
         // element carries as `data-pp-n`.
         const resolved = styleForRole(role, bp, brand, {
-          scale: spec.svg ? mapScale(bp, next.scaleN, next.ledger) : 1,
+          scale: spec.svg ? mapScale(bp, next.scaleN, next.ledger, next.edited) : 1,
         });
         /** @type {MeasuredBox} */
         const box = {
@@ -326,6 +334,7 @@ export function collectTextBoxes(node, env) {
     heightPx: root.heightPx,
     scaleN: 1,
     ledger: false,
+    edited: false,
   });
   return boxes;
 }

@@ -776,6 +776,27 @@ test('the refusal names the largest thing in the file, not the smallest (P4)', a
   );
 });
 
+test('the census stays a decomposition when a stylesheet carries an asset (P4)', async () => {
+  // A brand theme is entitled to inline a picture as a background-image. If the
+  // census charged those bytes to the theme *and* counted them as assets, the
+  // components would sum past the reserve — the same double-count C2 fixed once
+  // already, in the number the whole budget rests on.
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 64 });
+  const inlined = collectAssets(proof)[0].dataUri;
+  const result = await emit(proof, { maxBytes: 50_000_000 }, {
+    ...budgetDeps,
+    themeCss: `:root{--pp-surface:#ffffff}\n.pp-stage{background-image:url("${inlined}")}`,
+  });
+  assert.equal(result.ok, true, result.ok ? '' : result.error);
+  const census = result.value.budget.fixedCost;
+  assert.equal(
+    census.reduce((n, c) => n + c.bytes, 0), result.value.budget.reserveBytes,
+    'the census must still account for every reserve byte, exactly',
+  );
+  for (const component of census) assert.ok(component.bytes > 0, `${component.name} is not a cost`);
+});
+
 test('an asset the budgeter cannot measure is named rather than passed over (C2)', () => {
   registerTestLayouts();
   const proof = emitProof({ imageEdge: 64 });

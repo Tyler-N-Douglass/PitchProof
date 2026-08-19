@@ -21,7 +21,7 @@ import { h } from '../../core/vdom.js';
 import { blockText } from '../../core/contracts.js';
 import {
   sceneHead, provenanceLabel, emptyState, waveGroup,
-  specimenTitle, renditionLabel, renditionMeta, withProvenanceLedger,
+  specimenTitle, renditionLabel, renditionMeta, withProvenanceLedger, withEditedNotice,
 } from '../parts.js';
 
 /**
@@ -33,7 +33,11 @@ export function contentsIndex(ctx) {
 
   // Every rendition is listed as an entry of its own and labelled there, so the
   // ledger is empty unless the entry list itself came up empty.
-  return withProvenanceLedger(h('div', {
+  // The entries are the specimen's own headings and its own prose. There is no
+  // panel head in this layout to carry §18.3's marker, so the notice strip does
+  // — a contents list of an edited page that does not say the page was edited is
+  // the quietest place in the deck for the fact to go missing.
+  return withEditedNotice(withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--index',
     'data-pp-layout': 'contentsIndex',
     'data-pp-box': 'stage',
@@ -56,7 +60,7 @@ export function contentsIndex(ctx) {
           // `.pp-index-blurb { max-width: var(--pp-sc-blurb-max-w) }`.
           ? h('p', { class: 'pp-index-blurb', 'data-pp-tx': 'indexBlurb', 'data-pp-clamp': '2', 'data-pp-max': 'blurb-max-w' }, entry.blurb)
           : null,
-        provenanceLabel(entry.rendition, ctx)))))), ctx);
+        provenanceLabel(entry.rendition, ctx)))))), ctx), ctx);
 }
 
 /**

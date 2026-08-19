@@ -23,6 +23,7 @@ import { blockText } from '../../core/contracts.js';
 import {
   sceneHead, provenanceLabel, emptyState, waveGroup, presentableNotes,
   specimenMeta, specimenTitle, renditionLabel, withProvenanceLedger,
+  editedMark, withEditedNotice,
 } from '../parts.js';
 
 /**
@@ -36,13 +37,13 @@ export function sideNote(ctx) {
   const rowCount = Math.max(mainBlocks.length, notes.length, 1);
 
   if (mainBlocks.length === 0 && notes.length === 0) {
-    return withProvenanceLedger(h('div', {
+    return withEditedNotice(withProvenanceLedger(h('div', {
       class: 'pp-layout pp-layout--side',
       'data-pp-layout': 'sideNote',
       'data-pp-box': 'stage',
     },
     sceneHead(ctx, { kicker: 'Their content, annotated' }),
-    emptyState('This scene has no specimen and no notes attached yet.', { box: 'body' })), ctx);
+    emptyState('This scene has no specimen and no notes attached yet.', { box: 'body' })), ctx), ctx);
   }
 
   // One row per main block, with any notes anchored to that row beside it, plus
@@ -58,16 +59,21 @@ export function sideNote(ctx) {
   // the rest. So a rendition of nothing but media blocks, or one whose blocks
   // align to nothing in the client's page, contributes no note and would sit in
   // the scene unlabelled. The ledger is what covers it.
-  return withProvenanceLedger(h('div', {
+  return withEditedNotice(withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--side',
     'data-pp-layout': 'sideNote',
     'data-pp-box': 'stage',
   },
   sceneHead(ctx, {
     kicker: 'Their content, annotated',
+    // The source chip is where this layout names the client's page, so it is
+    // where §18.3's marker belongs: the main column below is their content
+    // block by block, with no head of its own to hang it on.
     extra: specimen
-      ? h('p', { class: 'pp-side-source', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' },
-        [specimenTitle(specimen), specimenMeta(specimen)].filter(Boolean).join('  ·  '))
+      ? h('div', { class: 'pp-side-source-group', 'data-pp-specimen': specimen.id },
+        h('p', { class: 'pp-side-source', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' },
+          [specimenTitle(specimen), specimenMeta(specimen)].filter(Boolean).join('  ·  ')),
+        editedMark(specimen))
       : null,
   }),
   h('div', { class: 'pp-side', 'data-pp-box': 'body' },
@@ -85,7 +91,7 @@ export function sideNote(ctx) {
           'data-pp-group': 'main',
         }, renderBlock(mainBlocks[row.block], { media: ctx.media, density: 'full' }))),
       h('div', { class: 'pp-side-margin' },
-        row.notes.map((note) => renderNote(ctx, note, rowCount))))))), ctx);
+        row.notes.map((note) => renderNote(ctx, note, rowCount))))))), ctx), ctx);
 }
 
 /**
