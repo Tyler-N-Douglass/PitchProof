@@ -39,8 +39,101 @@ import { revealedAt, REVEAL_ATTR } from '../runtime/beats.js';
 import { contentId } from '../core/ids.js';
 import { rescalePng, isPng, pngSize } from './png.js';
 
-/** Scale steps, applied in order. Step 0 is a lossless re-encode. */
-export const SCALE_LADDER = Object.freeze([1, 0.75, 0.5, 0.35, 0.25, 0.15]);
+/**
+ * The smallest linear scale the allocator will take any asset to.
+ *
+ * Below about 15% a photograph is no longer the picture the seller chose; it is
+ * a swatch. If the budget cannot be met with every asset at this floor, the
+ * budget cannot be met, and the emitter says so rather than going further.
+ */
+export const SCALE_FLOOR = 0.15;
+
+/**
+ * Every scale the allocator applies is rounded to this grid.
+ *
+ * The search is a bisection over a real-valued quality dial, and a real-valued
+ * dial is not a deterministic input to an image encoder: two runs that differ
+ * in the last bit of a double would produce different files. Quantizing the
+ * *scale* — the only thing the encoder ever sees — makes §5's byte-identical
+ * re-emit true of a search that is otherwise continuous.
+ */
+export const SCALE_QUANTUM = 1 / 1024;
+
+/**
+ * How much faster the least important asset loses size than the most important.
+ *
+ * The dial sets one number, `q`, and every asset's scale is `q` raised to a
+ * power that grows with its importance rank: `q` for rank 0, `q³` for the last
+ * rank. At `q = 0.9` that is 0.90 for the logo on the opening beat and 0.73 for
+ * the last image of the last branch — the ordering §13 asks for, applied as a
+ * gradient rather than as a queue.
+ */
+export const IMPORTANCE_SPREAD = 2;
+
+/**
+ * Measured re-encode passes the search may spend after the lossless pass.
+ *
+ * Each one decodes, resamples and re-encodes every asset, so this is the cost
+ * ceiling. Five is enough to land within a percent of the budget on every proof
+ * in the corpus, because the bisection runs on *predictions* — which are free —
+ * and only the candidates it settles on are measured.
+ */
+export const MEASURED_PROBES = 5;
+
+/**
+ * Round a scale onto the quantum grid, clamped to `[SCALE_FLOOR, 1]`.
+ * @param {number} scale
+ * @returns {number}
+ */
+export function quantizeScale(scale) {
+  if (!Number.isFinite(scale) || scale >= 1) return 1;
+  if (scale <= SCALE_FLOOR) return SCALE_FLOOR;
+  const stepped = Math.round(scale / SCALE_QUANTUM) * SCALE_QUANTUM;
+  return Math.min(1, Math.max(SCALE_FLOOR, stepped));
+}
+
+/**
+ * The scale one asset takes at a given setting of the quality dial (P7).
+ *
+ * `q` is a single number for the whole proof: 1 leaves every asset at full
+ * size, 0 puts every asset on the floor, and everything between downscales
+ * *everything* — progressively, and the least important fastest. That is the
+ * sentence §13 actually contains ("downscale progressively until under
+ * budget") read as one dial over the whole set rather than as a queue in which
+ * the least important asset is destroyed before the most important is touched.
+ *
+ * Monotone in both arguments by construction: raising `q` never shrinks an
+ * asset further, and a higher rank never keeps more pixels than a lower one.
+ * That is the §17.10 invariant, and it is now a property of the formula instead
+ * of a property of the loop's visiting order.
+ *
+ * @param {number} q       quality dial in [0, 1]
+ * @param {number} rank    importance rank, 0 = most important
+ * @param {number} count   how many assets are being budgeted
+ * @returns {number} quantized linear scale
+ */
+export function scaleForQuality(q, rank, count) {
+  if (!(q > 0)) return SCALE_FLOOR;
+  if (q >= 1) return 1;
+  const spread = count > 1 ? (Math.max(0, rank) / (count - 1)) * IMPORTANCE_SPREAD : 0;
+  return quantizeScale(Math.pow(q, 1 + spread));
+}
+
+/**
+ * How far down an asset was taken, in hundredths of its linear size.
+ *
+ * `0` means, exactly and only, that the asset kept every pixel it arrived with
+ * — a lossless re-encode or an SVG minification. Any resampling reports at
+ * least 1. It is a strictly monotone function of the scale, so "steps never
+ * decrease as importance rank increases" and "scale never increases as
+ * importance rank increases" are the same statement.
+ *
+ * @param {number} scale
+ * @returns {number}
+ */
+export function scaleSteps(scale) {
+  return Math.max(0, Math.ceil((1 - Math.min(1, scale)) * 100));
+}
 
 /**
  * The bytes a PNG spends before it has stored a single pixel: signature 8,

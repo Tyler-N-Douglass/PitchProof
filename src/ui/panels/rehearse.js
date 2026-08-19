@@ -44,7 +44,7 @@ export function renderRehearsePanel(app) {
   const coverage = fixCoverage(app, findings, fixes);
 
   return h('div', { class: 'st-panel' },
-    renderSweepHeader(app, sweep, findings, fixes, coverage),
+    renderSweepHeader(app, sweep, findings, coverage),
     renderDryRun(app),
     ...bySeverity.map((group) => renderSeverityGroup(app, group, fixes, gate, coverage)),
     renderFixLog(app));
@@ -78,8 +78,9 @@ function coverageSentence(coverage, total) {
  * @param {any} app
  * @param {any} sweep
  * @param {any[]} findings
+ * @param {{offered: number, exhausted: number, manual: number}} coverage
  */
-function renderSweepHeader(app, sweep, findings, fixes, coverage) {
+function renderSweepHeader(app, sweep, findings, coverage) {
   const blocking = findings.filter((f) => f.severity === 1).length;
   // CRITIQUE-2 C11: a sweep that walked nothing is not clean, it is vacuous, and
   // this panel already holds the count. "Sweep clean" over "Scenes walked 0" was
@@ -187,17 +188,30 @@ function renderDryRun(app) {
  * @param {{severity: number, items: any[]}} group
  * @param {any[]} fixes
  * @param {{blockers: any[], canEmit: boolean}} gate
+ * @param {{offered: number, exhausted: number, manual: number}} coverage
  */
-function renderSeverityGroup(app, group, fixes, gate) {
+function renderSeverityGroup(app, group, fixes, gate, coverage) {
   const severity = /** @type {1|2|3} */ (group.severity);
   if (!group.items.length && !app.ui.sweep.at) return null;
+  const groupCoverage = fixCoverage(app, group.items, fixes);
   return section({
     title: `${severityLabel(severity)} · ${group.items.length}`,
     subtitle: severityMeaning(severity),
+    // The apply-all on the header covers every severity; this one covers the
+    // group in front of you, which is the question a seller staring at the
+    // blocking list is actually asking (CRITIQUE-3 P11).
+    actions: severity === 1 && groupCoverage.offered
+      ? toolbar(button({ act: 'rehearse.autoFixAll', variant: 'ghost' },
+        `Apply every auto-fix · ${coverage.offered}`))
+      : null,
   },
   group.items.length
-    ? h('ul', { class: cx('st-findings', `st-findings--s${severity}`) },
-      group.items.map((f) => renderFinding(app, f, fixes)))
+    ? h('div', null,
+      groupCoverage.offered || groupCoverage.exhausted || groupCoverage.manual
+        ? h('p', { class: 'st-field-hint' }, coverageSentence(groupCoverage, group.items.length))
+        : null,
+      h('ul', { class: cx('st-findings', `st-findings--s${severity}`) },
+        group.items.map((f) => renderFinding(app, f, fixes))))
     : h('p', { class: 'st-field-hint' }, severity === 1
       ? blockingNothingText(gate)
       : `No ${severityLabel(severity).toLowerCase()} findings.`));
@@ -245,13 +259,49 @@ function renderFinding(app, finding, fixes) {
           title: 'Jump to what raised this',
         }, truncate(where, 22))
         : null),
-    finding.autoFixAvailable && fixIndex >= 0
-      ? h('div', { class: 'st-finding-fix' },
-        button({ act: 'rehearse.autoFix', arg: String(fixIndex), variant: 'ghost' }, `Auto-fix: ${fixes[fixIndex].label}`),
-        h('span', { class: 'st-field-hint' }, 'Applied through the command stack, so one undo takes it back.'))
-      : finding.autoFixAvailable
-        ? h('p', { class: 'st-field-hint' }, 'An auto-fix exists for this code but is not offered for this instance. Re-run the sweep after any edit.')
-        : null);
+    renderFindingFix(app, finding, fixes, fixIndex));
+}
+
+/**
+ * The auto-fix affordance under one finding — or the sentence that replaces it.
+ *
+ * CRITIQUE-3 P2: the same button was offered after every application, including
+ * the twenty-four consecutive applications that changed nothing. A control that
+ * cannot help must not look like one that can, so an attempt that came back
+ * 'no-change' or 'returned' withdraws the button and says what happened and
+ * what to do instead. `effect` is shown for the two fixes that deliberately
+ * leave their finding standing, so a survivor there is not read as a failure.
+ *
+ * @param {any} app
+ * @param {any} finding
+ * @param {any[]} fixes
+ * @param {number} fixIndex
+ */
+function renderFindingFix(app, finding, fixes, fixIndex) {
+  const attempt = fixAttempt(app, finding.id);
+  if (attempt && attempt.outcome === 'no-change') {
+    return h('p', { class: 'st-field-hint st-finding-spent' },
+      `“${attempt.label}” was applied here and the proof came back unchanged, so it is not offered again — running it a second time would produce the same proof a second time. This one needs a hand edit.`);
+  }
+  if (attempt && attempt.outcome === 'returned') {
+    return h('p', { class: 'st-field-hint st-finding-spent' },
+      `“${attempt.label}” was applied and this finding was raised again by the next sweep, so it is not offered again. This one needs a hand edit.`);
+  }
+  if (finding.autoFixAvailable && fixIndex >= 0) {
+    const fix = fixes[fixIndex];
+    const effect = fix.effect === 'plan'
+      ? 'This one does not clear the finding now: it instructs the emitter, and the finding clears when the emitter acts on it.'
+      : fix.effect === 'mitigates'
+        ? 'This one does not clear the finding: the finding is true and stands. What it changes is what the finding costs.'
+        : 'Applied through the command stack, so one undo takes it back.';
+    return h('div', { class: 'st-finding-fix' },
+      button({ act: 'rehearse.autoFix', arg: String(fixIndex), variant: 'ghost' }, `Auto-fix: ${fix.label}`),
+      h('span', { class: 'st-field-hint' }, effect));
+  }
+  if (finding.autoFixAvailable) {
+    return h('p', { class: 'st-field-hint' }, 'An auto-fix exists for this code but is not offered for this instance. Re-run the sweep after any edit.');
+  }
+  return null;
 }
 
 /**
@@ -271,6 +321,16 @@ function renderFixLog(app) {
     ? h('ol', { class: 'st-fixlog' }, entries.map((e) => h('li', { class: 'st-fixlog-item', [KEY_ATTR]: String(e.seq) },
       h('span', { class: 'st-mono' }, String(e.seq)),
       h('span', null, e.label),
-      /** @type {any} */ (e.meta).code ? badge(/** @type {any} */ (e.meta).code, 'dim') : null)))
+      // One apply-all is one undo entry, so the entry has to carry what it
+      // rolled up: §14's "every auto-fix is logged" is a claim about fixes,
+      // not about clicks (CRITIQUE-3 P11).
+      /** @type {any} */ (e.meta).batch
+        ? h('ul', { class: 'st-fixlog-batch' }, (/** @type {any} */ (e.meta).labels || []).map((label, i) =>
+          h('li', { [KEY_ATTR]: `${e.seq}-${i}` }, label)))
+        : null,
+      /** @type {any} */ (e.meta).code ? badge(/** @type {any} */ (e.meta).code, 'dim') : null,
+      /** @type {any} */ (e.meta).batch && (/** @type {any} */ (e.meta).codes || []).length
+        ? badge((/** @type {any} */ (e.meta).codes).join(' · '), 'dim')
+        : null)))
     : empty('No auto-fixes have been applied.'));
 }
