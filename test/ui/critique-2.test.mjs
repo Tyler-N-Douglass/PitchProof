@@ -413,3 +413,149 @@ test('C11: “Nothing blocks the emit” is still printed when nothing does', as
   assert.match(text, /Nothing blocks the emit\./, 'true, and said plainly');
   assert.doesNotMatch(text, /walked no scenes/i, 'this sweep walked the whole deck');
 });
+
+// --------------------------------------------------------------------- C8 ---
+//
+// C8 is L8's finding, but it moved a signal this lane was reading. A captured
+// `<pre>` used to arrive as a `raw` block; it now arrives as
+// `{type: 'paragraph', text, pre: true}` (API.md Part 3b), because there was
+// never any captured markup in it — `rawTextOf` had already discarded every
+// element — and `raw` made three of four realistic code samples severity-1
+// emit blockers with the printed remedy "drop the raw block".
+//
+// So the two questions came apart: `raw` means *untrusted markup a layout must
+// not present*, `pre` means *this text's whitespace carries meaning*. The block
+// editor was asking the first to answer the second, and a parameter table now
+// edits in a proportional face — the alignment that made it worth capturing
+// invisible to the one person able to break it.
+//
+// Asserted against the rendered tree rather than the panel's source, for the
+// reason `empty-state-honesty.test.mjs` gives: a class name in a comment, in a
+// JSDoc block or in a string the panel never returns is not on screen.
+
+/** The exact shape `src/specimen/blocks.js` now emits for a captured `<pre>`. */
+const PRE_TEXT = 'param\tunits\tdefault\nfouling\tm²·K/W\t0.00018\nvelocity\tm/s\t1.20';
+
+/**
+ * Every VNode in a rendered tree that satisfies `match`, in render order.
+ * @param {any} node
+ * @param {(n: any) => boolean} match
+ * @param {any[]} [out]
+ * @returns {any[]}
+ */
+function findNodes(node, match, out = []) {
+  if (node === null || node === undefined || typeof node !== 'object') return out;
+  if (Array.isArray(node)) { for (const c of node) findNodes(c, match, out); return out; }
+  if ('raw' in node) return out;
+  if (match(node)) out.push(node);
+  for (const c of node.c || []) findNodes(c, match, out);
+  return out;
+}
+
+/**
+ * The block editor drawn for block `index` of the selected specimen: the one
+ * textarea wired to `specimen.setBlockText` for that position.
+ * @param {any} tree
+ * @param {string} specimenId
+ * @param {number} index
+ * @returns {any}
+ */
+function blockEditor(tree, specimenId, index) {
+  const found = findNodes(tree, (n) => n.t === 'textarea'
+    && n.a[ACT_ATTR] === 'specimen.setBlockText'
+    && n.a[ARG_ATTR] === `${specimenId}:${index}`);
+  assert.equal(found.length, 1, `exactly one editor for block ${index} of ${specimenId}`);
+  return found[0];
+}
+
+/**
+ * @param {any} node
+ * @returns {string[]}
+ */
+function classes(node) {
+  return String((node.a && node.a.class) || '').split(/\s+/).filter(Boolean);
+}
+
+/**
+ * The specimens panel, with a preformatted paragraph, a raw block and a plain
+ * paragraph all in one specimen so the three treatments can be told apart.
+ * @returns {Promise<{app: any, tree: any, id: string}>}
+ */
+async function specimensWithPre() {
+  const app = await studio();
+  const specimen = app.proof.specimens[0];
+  const id = specimen.id;
+  specimen.blocks = [
+    { type: 'paragraph', text: 'Forty years of protecting steel.' },
+    { type: 'paragraph', text: PRE_TEXT, pre: true },
+    { type: 'raw', html: '<p>markup the layout must not present</p>' },
+  ];
+  app.select({ specimenId: id });
+  app.ui.section = 'specimens';
+  return { app, tree: PANELS.specimens(app), id };
+}
+
+test('C8: a `pre: true` paragraph edits in a monospace face', async () => {
+  const { tree, id } = await specimensWithPre();
+  const editor = blockEditor(tree, id, 1);
+
+  assert.equal(editor.a.value, PRE_TEXT, 'the editor really holds the preformatted text');
+  assert.ok(
+    classes(editor).includes('st-mono'),
+    `a preformatted block must edit in the monospace face; got class "${editor.a.class}". `
+    + 'Keying this on `block.type === "raw"` worked only while a captured <pre> arrived as a raw block.',
+  );
+  assert.ok(
+    classes(editor).includes('st-block-text--pre'),
+    'and must keep its columns rather than soft-wrapping them into prose',
+  );
+});
+
+test('C8: `raw` and `pre` are answered as the two different questions they are', async () => {
+  const { tree, id } = await specimensWithPre();
+
+  const plain = blockEditor(tree, id, 0);
+  const pre = blockEditor(tree, id, 1);
+  const rawBlock = blockEditor(tree, id, 2);
+
+  assert.ok(!classes(plain).includes('st-mono'), 'prose is prose');
+  assert.ok(!classes(plain).includes('st-block-text--pre'));
+
+  // `raw` still reads as markup source, which is a monospace job for its own
+  // reason — but it is not whitespace-significant, so it still wraps.
+  assert.ok(classes(rawBlock).includes('st-mono'), 'markup source is still read in a monospace face');
+  assert.ok(!classes(rawBlock).includes('st-block-text--pre'), 'markup is not whitespace-significant');
+
+  // The preformatted block is a `paragraph`. If anything still reached for
+  // `type === 'raw'` to mean "preformatted", this is where it would show.
+  assert.equal(pre.a[ARG_ATTR], `${id}:1`);
+  assert.match(String(pre.a['aria-label']), /^preformatted paragraph block 2$/,
+    'and it announces itself as preformatted, since the reason the face changed is not visible to a screen reader');
+});
+
+test('C8: a preformatted editor is sized in lines, not in wrapped characters', async () => {
+  const { tree, id } = await specimensWithPre();
+  const pre = blockEditor(tree, id, 1);
+  // Three lines of a parameter table: 71 characters, which the prose estimate
+  // would have drawn at the two-row floor.
+  assert.equal(Number(pre.a.rows), 3, 'a three-line table gets three rows');
+});
+
+test('C8: nothing else in the studio reads `raw` to mean “preformatted”', async () => {
+  const { app } = await specimensWithPre();
+  // The other question `raw` answers — may a layout present this markup? — is
+  // per-specimen and unchanged, so the opt-in must still be off and still be
+  // offered on a specimen whose blocks include a preformatted paragraph.
+  assert.equal(rawOptIn(app.proof.specimens[0]).allowed, false);
+
+  for (const section of Object.keys(PANELS)) {
+    app.ui.section = section;
+    const tree = PANELS[section](app);
+    const monos = findNodes(tree, (n) => classes(n).includes('st-block-text--pre'));
+    for (const node of monos) {
+      assert.equal(node.t, 'textarea', `${section}: the preformatted treatment belongs to an editor`);
+    }
+    // Rendering every panel with a `pre` block in hand must not throw.
+    assert.ok(tree, `${section} rendered`);
+  }
+});

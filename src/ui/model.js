@@ -890,6 +890,31 @@ export function blockEditableText(block) {
 }
 
 /**
+ * Does this block's whitespace carry meaning? That is what `pre` says, and the
+ * only thing that says it (API.md Part 3b). A `raw` block does **not** answer
+ * this question — `raw` means *untrusted markup a layout must not present*,
+ * which is a different question that happened to have the same answer for as
+ * long as a captured `<pre>` arrived as a `raw` block. It no longer does
+ * (CRITIQUE-2 C8).
+ * @param {ContentBlock} block
+ * @returns {boolean}
+ */
+export function blockIsPreformatted(block) {
+  return Boolean(block) && block.pre === true;
+}
+
+/**
+ * Should this block edit in a monospace face? Two distinct reasons, both true:
+ * a preformatted block because its columns are the content, and a `raw` block
+ * because markup source is read by structure rather than as prose.
+ * @param {ContentBlock} block
+ * @returns {boolean}
+ */
+export function blockUsesMonospace(block) {
+  return blockIsPreformatted(block) || (Boolean(block) && block.type === 'raw');
+}
+
+/**
  * A one-line description of a block for the library rows.
  * @param {ContentBlock} block
  * @returns {string}

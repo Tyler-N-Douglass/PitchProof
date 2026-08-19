@@ -21,7 +21,10 @@ import {
   badge, button, checkbox, empty, field, notice, pair, pairs, rawBox, row, section, select, textarea, toolbar,
 } from '../components.js';
 import { formatBytes, formatDate, formatDateTime, plural, truncate } from '../format.js';
-import { blockEditableText, blockSummary, findSpecimen, rawOptIn, specimenIsEdited, strippedBlocks } from '../model.js';
+import {
+  blockEditableText, blockIsPreformatted, blockSummary, blockUsesMonospace,
+  findSpecimen, rawOptIn, specimenIsEdited, strippedBlocks,
+} from '../model.js';
 import { KIND_CHOICES } from '../actions.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
 
@@ -180,15 +183,18 @@ function renderSpecimen(app, specimen) {
         h('div', { class: 'st-block-head' },
           badge(block.type, 'dim'),
           block.type === 'heading' ? h('span', { class: 'st-mono st-dim' }, `h${block.level}`) : null,
+          blockIsPreformatted(block) ? h('span', { class: 'st-mono st-dim', title: 'Preformatted: the spacing in this text is part of it, so this field keeps its columns.' }, 'pre') : null,
           h('div', { class: 'st-block-tools' },
             button({ act: 'specimen.moveBlock', arg: `${specimen.id}:${i}:-1`, variant: 'quiet', title: 'Move up', disabled: i === 0 }, '↑'),
             button({ act: 'specimen.moveBlock', arg: `${specimen.id}:${i}:1`, variant: 'quiet', title: 'Move down', disabled: i === specimen.blocks.length - 1 }, '↓'),
             button({ act: 'specimen.removeBlock', arg: `${specimen.id}:${i}`, variant: 'quiet', title: 'Delete this block' }, '×'))),
         h('textarea', {
-          class: cx('st-input', 'st-textarea', 'st-block-text', block.type === 'raw' && 'st-mono'),
-          rows: String(Math.min(8, Math.max(2, Math.ceil(blockEditableText(block).length / 70)))),
+          class: cx('st-input', 'st-textarea', 'st-block-text',
+            blockUsesMonospace(block) && 'st-mono',
+            blockIsPreformatted(block) && 'st-block-text--pre'),
+          rows: String(blockRows(block)),
           value: blockEditableText(block),
-          'aria-label': `${block.type} block ${i + 1}`,
+          'aria-label': `${blockIsPreformatted(block) ? 'preformatted ' : ''}${block.type} block ${i + 1}`,
           [ACT_ATTR]: 'specimen.setBlockText',
           [ARG_ATTR]: `${specimen.id}:${i}`,
           [KEY_ATTR]: `blocktext-${specimen.id}-${i}`,
@@ -214,6 +220,21 @@ function renderSpecimen(app, specimen) {
         rawBox(escapeForPreview(specimen.raw), 'st-raw-source'))
       : null,
     !specimen.raw ? notice('info', 'No raw HTML was captured for this specimen — it came from a document or image importer.') : null));
+}
+
+/**
+ * How tall to draw a block's editor. Prose is measured in characters, because
+ * it soft-wraps at the field's width; a preformatted block is measured in
+ * lines, because it does not wrap at all and a wrapped estimate would size a
+ * six-line table at two rows. Both are clamped so one long block cannot push
+ * the rest of the specimen off the panel.
+ * @param {import('../../core/contracts.d.ts').ContentBlock} block
+ * @returns {number}
+ */
+function blockRows(block) {
+  const text = blockEditableText(block);
+  if (blockIsPreformatted(block)) return Math.min(12, Math.max(2, text.split('\n').length));
+  return Math.min(8, Math.max(2, Math.ceil(text.length / 70)));
 }
 
 /**

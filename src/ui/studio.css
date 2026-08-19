@@ -562,6 +562,9 @@ html, body {
 .st-block-head { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
 .st-block-tools { margin-left: auto; display: flex; gap: 2px; }
 .st-block-text { font-size: 12px; }
+/* A preformatted block's spacing is its content (API.md Part 3b `pre`), so its
+   editor keeps the columns: no soft wrap, scroll sideways instead. */
+.st-block-text--pre { font-size: 11.5px; white-space: pre; overflow-x: auto; word-break: normal; overflow-wrap: normal; tab-size: 4; }
 
 /* ---------------------------------------------------------------- recipes */
 
