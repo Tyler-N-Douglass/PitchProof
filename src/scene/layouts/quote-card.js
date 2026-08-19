@@ -13,6 +13,16 @@
  * appears only when the block carries one; there is no "— a customer" fallback,
  * because that is exactly the fabricated testimonial §18.2 forbids.
  *
+ * That preference order is also where §18.1 was being lost. Only the first of
+ * the four branches pulls from a rendition, and only that branch rendered a
+ * provenance label — so a scene declaring an illustrative rendition whose
+ * blocks hold no `quote` (a section cut at a heading boundary, which is what a
+ * real page produces) showed the specimen's quote, or its own headline, with
+ * the rendition declared and nothing on screen saying it was illustrative. The
+ * scene's headline is frequently the rendition's own leading heading, so that
+ * was rendition-derived text presented unlabelled. Every branch now ends in
+ * `withProvenanceLedger`.
+ *
  * @module scene/layouts/quote-card
  */
 
@@ -20,6 +30,7 @@ import { h } from '../../core/vdom.js';
 import { firstOfType } from '../blocks.js';
 import {
   sceneHead, provenanceLabel, emptyState, specimenTitle, renditionLabel, specimenMeta,
+  withProvenanceLedger,
 } from '../parts.js';
 
 /**
@@ -29,7 +40,13 @@ import {
 export function quoteCard(ctx) {
   const pulled = pullQuote(ctx);
 
-  return h('div', {
+  // The ledger is what keeps the fallback branches honest. This layout selects
+  // one quotation and may take it from the specimen — or, with no quote in the
+  // model at all, from the scene's own headline — while the scene still
+  // declares the renditions it was built from. Every branch below reaches
+  // `withProvenanceLedger`, so a declared illustrative rendition is labelled on
+  // all four of them rather than only on the one that pulled from a rendition.
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--quote',
     'data-pp-layout': 'quoteCard',
     'data-pp-box': 'stage',
@@ -61,7 +78,7 @@ export function quoteCard(ctx) {
         : null)
       : null,
     provenanceLabel(pulled.rendition, ctx))
-    : emptyState('This scene has no quote yet — attach a specimen with a quote block, or give the scene a headline.', { box: 'body' }));
+    : emptyState('This scene has no quote yet — attach a specimen with a quote block, or give the scene a headline.', { box: 'body' })), ctx);
 }
 
 /**

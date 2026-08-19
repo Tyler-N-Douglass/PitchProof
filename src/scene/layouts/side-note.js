@@ -21,7 +21,7 @@ import { renderBlock } from '../blocks.js';
 import { blockText } from '../../core/contracts.js';
 import {
   sceneHead, provenanceLabel, emptyState, waveGroup, presentableNotes,
-  specimenMeta, specimenTitle, renditionLabel,
+  specimenMeta, specimenTitle, renditionLabel, withProvenanceLedger,
 } from '../parts.js';
 
 /**
@@ -35,13 +35,13 @@ export function sideNote(ctx) {
   const rowCount = Math.max(mainBlocks.length, notes.length, 1);
 
   if (mainBlocks.length === 0 && notes.length === 0) {
-    return h('div', {
+    return withProvenanceLedger(h('div', {
       class: 'pp-layout pp-layout--side',
       'data-pp-layout': 'sideNote',
       'data-pp-box': 'stage',
     },
     sceneHead(ctx, { kicker: 'Their content, annotated' }),
-    emptyState('This scene has no specimen and no notes attached yet.', { box: 'body' }));
+    emptyState('This scene has no specimen and no notes attached yet.', { box: 'body' })), ctx);
   }
 
   // One row per main block, with any notes anchored to that row beside it, plus
@@ -52,7 +52,12 @@ export function sideNote(ctx) {
     rows.push({ block: row < mainBlocks.length ? row : null, notes: notes.filter((note) => note.row === row) });
   }
 
-  return h('div', {
+  // A rendition only reaches the margin if it produced a note: `notesFor`
+  // keeps a written note and every aligned block that carries text, and drops
+  // the rest. So a rendition of nothing but media blocks, or one whose blocks
+  // align to nothing in the client's page, contributes no note and would sit in
+  // the scene unlabelled. The ledger is what covers it.
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--side',
     'data-pp-layout': 'sideNote',
     'data-pp-box': 'stage',
@@ -79,7 +84,7 @@ export function sideNote(ctx) {
           'data-pp-group': 'main',
         }, renderBlock(mainBlocks[row.block], { media: ctx.media, density: 'full' }))),
       h('div', { class: 'pp-side-margin' },
-        row.notes.map((note) => renderNote(ctx, note, rowCount)))))));
+        row.notes.map((note) => renderNote(ctx, note, rowCount))))))), ctx);
 }
 
 /**

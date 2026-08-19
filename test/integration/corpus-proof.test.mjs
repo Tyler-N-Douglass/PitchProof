@@ -266,12 +266,30 @@ test('the deck exercises more than one layout and more than one recipe', async (
 test('every branch is anchored and every anchor names a real branch', async () => {
   const p = await proof();
   const branchIds = new Set(p.branches.map((b) => b.id));
-  const anchored = new Set(p.spine.flatMap((s) => s.branchAnchors));
+  // Branch scenes count. A nested branch is offered from a scene inside another
+  // branch, which is the whole point of §11's return stack — looking only at the
+  // spine would report the nested one as stranded.
+  const allScenes = p.spine.concat(...p.branches.map((b) => b.scenes));
+  const anchored = new Set(allScenes.flatMap((s) => s.branchAnchors));
   for (const branch of p.branches) {
     assert.ok(anchored.has(branch.id),
       `branch "${branch.objection}" is anchored to no scene, so it has nowhere to return to`);
   }
   for (const id of anchored) assert.ok(branchIds.has(id), `a scene anchors ${id}, which is not a branch`);
+});
+
+test('the deck has a nested branch, so the return stack is exercised (§22.4)', async () => {
+  const p = await proof();
+  const spineAnchored = new Set(p.spine.flatMap((s) => s.branchAnchors));
+  const nested = p.branches.filter((b) => !spineAnchored.has(b.id));
+  assert.ok(nested.length > 0,
+    'every branch is offered from the spine, so nothing ever puts a second frame on the return stack — '
+    + 'and §22.4\'s stranding case lives entirely in the nested path');
+  for (const branch of nested) {
+    const hosts = p.branches.filter((b) => b.scenes.some((s) => s.branchAnchors.includes(branch.id)));
+    assert.ok(hosts.length > 0, `${branch.id} is anchored nowhere at all`);
+    assert.ok(!hosts.some((h) => h.id === branch.id), `${branch.id} is offered from inside itself`);
+  }
 });
 
 test('nothing in the proof claims to be verified by a user', async () => {

@@ -141,6 +141,16 @@ const EMIT_OPTION = new RegExp(
 const EXEMPT = [];
 
 /**
+ * Test files that name overrides on purpose, because attempting one and
+ * asserting the refusal is how the absence is proved. Each is listed
+ * individually; nothing else under `test/emit/` is excused.
+ */
+const ATTEMPTS_OVERRIDES = new Set([
+  'test/emit/no-override.test.mjs',
+  'test/emit/gate.test.mjs',
+]);
+
+/**
  * @param {string} text  source with comments and string literals already masked
  * @returns {{token: string, index: number}[]}
  */
@@ -194,8 +204,7 @@ test('no override-shaped identifier exists anywhere in src/, scripts/ or test/em
   for (const root of roots) {
     for (const file of sourceFiles(root)) {
       const rel = relative(ROOT, file).split('\\').join('/');
-      // This file names every override it attempts, on purpose.
-      if (rel === 'test/emit/no-override.test.mjs') continue;
+      if (ATTEMPTS_OVERRIDES.has(rel)) continue;
       const text = readFileSync(file, 'utf8');
       // Comments and string literals are masked: prose that *documents* the law
       // must not fail the check that *enforces* it.
@@ -208,6 +217,17 @@ test('no override-shaped identifier exists anywhere in src/, scripts/ or test/em
     }
   }
   assert.deepEqual(offenders, [], `override-shaped code found:\n${offenders.join('\n')}`);
+});
+
+test('every file excused from the source scan really does assert a refusal', () => {
+  // An exemption that stopped proving anything would be an exemption that hides
+  // the next override. Each excused file must contain both an attempt and an
+  // assertion that the emit was refused.
+  for (const rel of ATTEMPTS_OVERRIDES) {
+    const text = readFileSync(join(ROOT, rel), 'utf8');
+    assert.match(text, /result\.ok, false|\.ok, false/, `${rel} is excused from the scan but asserts no refusal`);
+    assert.ok(overrideOffenders(maskJs(text).code).length > 0, `${rel} is excused from the scan but attempts no override`);
+  }
 });
 
 test('the emitter exposes no function that returns an artifact past a blocking finding', async () => {

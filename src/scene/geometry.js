@@ -150,11 +150,12 @@ export function mapLegendHeight(bpIn, n = 1) {
  * legible rather than squeezing it to nothing.
  * @param {'sm'|'md'|'lg'} bpIn
  * @param {number} [n]   the legend's chip count
+ * @param {boolean} [ledger]   whether a provenance ledger sits under the body
  * @returns {number}
  */
-export function mapScale(bpIn, n = 1) {
+export function mapScale(bpIn, n = 1, ledger = false) {
   const bp = breakpointId(bpIn);
-  const s = stageBox(bp);
+  const s = withLedger(stageBox(bp), bp, ledger);
   const canvasHeight = Math.max(
     geom(bp, 'map-canvas-min-h'),
     s.bodyHeightPx - mapLegendHeight(bp, n) - geom(bp, 'row-gap'),
@@ -183,6 +184,42 @@ function inset(widthPx, heightPx, padPx, border = PANEL_BORDER_PX) {
 }
 
 /**
+ * The vertical room a provenance ledger takes out of the stage: one wrapped
+ * strip plus the flex gap `.pp-layout` puts above it.
+ *
+ * A ledger deep enough to wrap onto a second strip is a scene declaring four or
+ * more renditions it never shows, which is a scene to fix rather than one to
+ * measure to the pixel; the single-strip allowance is the honest approximation
+ * and it errs towards reporting overflow rather than hiding it.
+ * @param {'sm'|'md'|'lg'} bp
+ * @returns {number}
+ */
+export function ledgerAllowance(bp) {
+  return geom(bp, 'ledger-h') + geom(bp, 'head-gap');
+}
+
+/**
+ * The stage as the layout's content actually gets it once a provenance ledger
+ * is in flow beneath it. Every slot that stretches derives its height from
+ * `contentHeightPx` or `bodyHeightPx`, so reducing those two here is what keeps
+ * the measurement and the rendered box in agreement (§22.2) without every slot
+ * having to know the ledger exists.
+ * @param {StageBox} s
+ * @param {'sm'|'md'|'lg'} bp
+ * @param {boolean|number|undefined} ledger
+ * @returns {StageBox}
+ */
+function withLedger(s, bp, ledger) {
+  if (!ledger) return s;
+  const cost = ledgerAllowance(bp);
+  return {
+    ...s,
+    contentHeightPx: Math.max(0, s.contentHeightPx - cost),
+    bodyHeightPx: Math.max(0, s.bodyHeightPx - cost),
+  };
+}
+
+/**
  * The inner box of a named layout slot.
  *
  * `slot` is the value a layout stamps as `data-pp-box`; `params.n` is the item
@@ -193,12 +230,12 @@ function inset(widthPx, heightPx, padPx, border = PANEL_BORDER_PX) {
  *
  * @param {string} slot
  * @param {string|{id?: string}} bpIn
- * @param {{n?: number, unitWidth?: number, unitHeight?: number, variant?: string}} [params]
+ * @param {{n?: number, unitWidth?: number, unitHeight?: number, variant?: string, ledger?: boolean}} [params]
  * @returns {BoxSize}
  */
 export function boxGeometry(slot, bpIn, params = {}) {
   const bp = breakpointId(bpIn);
-  const s = stageBox(bp);
+  const s = withLedger(stageBox(bp), bp, params.ledger);
   const n = Math.max(1, Math.floor(params.n || 1));
   const stacked = bp === 'sm';
 
@@ -343,6 +380,14 @@ export function boxGeometry(slot, bpIn, params = {}) {
         geom(bp, 'card-pad'),
       );
     }
+    // ------------------------------------------- shared: the provenance ledger
+    case 'provenanceLedger': {
+      // One row per rendition the layout declared but did not label in a
+      // subtree of its own. The strip runs the width of the content box and
+      // wraps; a row is bounded by `--pp-sc-ledger-h` and its own padding.
+      return inset(s.contentWidthPx, geom(bp, 'ledger-h'), geom(bp, 'card-pad'));
+    }
+
     case 'mapText': {
       const scale = mapScale(bp, n);
       return {
@@ -367,4 +412,5 @@ export const SLOTS = [
   'quoteBox',
   'indexRow', 'indexNumber',
   'mapCanvas', 'mapLegend', 'mapText',
+  'provenanceLedger',
 ];

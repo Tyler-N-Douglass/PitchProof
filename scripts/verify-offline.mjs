@@ -91,6 +91,44 @@ function missingDependency(what, why) {
 // Build the artifact
 // ---------------------------------------------------------------------------
 
+/**
+ * The proof this script verifies.
+ *
+ * By default it is the **corpus** proof: four hostile pages and two binary
+ * documents ingested and run through the whole pipeline. The §20 critic's
+ * finding was that every severity-1 defect in the critique was reachable from a
+ * proof built out of the corpus and none from the hand-written fixture, and
+ * this script is the last gate before an artifact is called offline-clean — so
+ * it should be looking at the harder of the two. It is also the bigger deck,
+ * which means a longer keyboard walk over more layouts.
+ *
+ * `--fixture` runs the hand-written proof instead. It is not redundant: it is
+ * the only proof that reaches the raw/deflate crossover (a single-scene proof
+ * correctly keeps `raw` and ships no inflater), the `deps.resample` hook, and
+ * the many-references-one-payload budgeting case — the corpus shares its assets
+ * through one `MediaLedger`, so its media is deduplicated before the budgeter
+ * ever sees it.
+ *
+ * @returns {Promise<{proof: any, source: string, clock: () => string}>}
+ */
+async function verificationProof() {
+  if (process.argv.includes('--fixture')) {
+    const { emitProof } = await import('../test/fixtures/emit/proofs.mjs');
+    return {
+      proof: emitProof({ imageEdge: 96 }),
+      source: 'hand-written fixture',
+      clock: () => '2026-03-01T12:00:00.000Z',
+    };
+  }
+  const { buildCorpusProof } = await import('../test/fixtures/corpus/proof.mjs');
+  const { corpusClock } = await import('../test/fixtures/corpus/index.mjs');
+  return {
+    proof: await buildCorpusProof(),
+    source: 'Northwind corpus, through the whole pipeline',
+    clock: corpusClock(),
+  };
+}
+
 /** @returns {Promise<{html: string, proof: any, deck: any, nav: any, bytes: number, compression: any}>} */
 async function buildArtifact() {
   const entry = join(SRC, 'artifact.js');
@@ -111,8 +149,6 @@ async function buildArtifact() {
   const { missingLayouts } = await import('../src/runtime/layouts.js');
   const { buildDeck } = await import('../src/runtime/deck.js');
   const { initialState } = await import('../src/runtime/nav.js');
-  const { emitProof } = await import('../test/fixtures/emit/proofs.mjs');
-
   registerAllLayouts();
   const stillMissing = missingLayouts();
   if (stillMissing.length) {
@@ -122,16 +158,19 @@ async function buildArtifact() {
     );
   }
 
-  const proof = emitProof({ imageEdge: 96 });
-  const result = await emit(proof, {}, {
+  const { proof, source, clock } = await verificationProof();
+  const result = await emit(proof, proof.emitOptions || {}, {
     runtimeJs: code,
     runtimeCss: css,
-    clock: () => '2026-03-01T12:00:00.000Z',
+    clock,
   });
   if (!result.ok) {
-    process.stdout.write(`\nverify-offline: the emitter refused the fixture proof, which is the correct behaviour for a proof that violates a law — but it leaves nothing to verify.\n\n${result.error}\n`);
+    process.stdout.write(
+      `\nverify-offline: the emitter refused the ${source} proof, which is the correct behaviour for a proof that `
+      + `violates a law — but it leaves nothing to verify.\n\n${result.error}\n`);
     process.exit(1);
   }
+  process.stdout.write(`  proof    ${source} — ${proof.spine.length} spine scene(s), ${proof.branches.length} branch(es)\n`);
 
   const deck = buildDeck(proof);
   return {
@@ -378,11 +417,20 @@ async function keyboardWalk(page, deck, nav) {
       + 'the overlay re-render is replacing the input without restoring its selection.',
     );
   }
+  // The oracle for "which branch should win" is read off the proof, not off the
+  // search: the branch whose objection or aliases actually say "approv". Testing
+  // the ranking against `searchJump`'s own answer would only prove the search
+  // agrees with itself, and matching the branch *id* against /appr/ only worked
+  // because the hand-written fixture happened to name its branch `bn_approvals`.
+  const approvals = branches.filter((b) => /approv/i.test(
+    `${b.objection || ''} ${(b.aliases || []).join(' ')}`));
   if (typed.matches === 0) {
     mismatches.push(`jump index: typing "appr" matched nothing (field held ${JSON.stringify(typed.value)}). §11 requires three characters to rank the branch first.`);
-  } else if (typed.value === 'appr' && typed.first && !/appr/i.test(String(typed.first))) {
-    // The payload is a branch id; the fixture's approvals branch is bn_approvals.
-    mismatches.push(`jump index: "appr" ranked ${typed.first} first, not the approvals branch`);
+  } else if (approvals.length === 0) {
+    mismatches.push('the proof has no branch about approvals, so §11\'s named interaction was not exercised');
+  } else if (typed.value === 'appr' && typed.first && !approvals.some((b) => b.id === String(typed.first))) {
+    const wanted = approvals.map((b) => `${b.id} ("${b.objection}")`).join(', ');
+    mismatches.push(`jump index: "appr" ranked ${typed.first} first; the approvals branch is ${wanted}`);
   }
   await page.keyboard.press(KEYS.escape);
   steps++;

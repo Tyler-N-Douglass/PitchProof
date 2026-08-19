@@ -615,3 +615,111 @@ built file. `test/core/strip-comments.test.mjs` adds twenty cases for the
 constructs that decide where a comment is, including the two that would have bit
 us — a `/` inside a regex character class, and an apostrophe inside a comment
 about "the seller's own words".
+
+---
+
+## D28 — `verify-offline` verifies the corpus artifact, and the hand-written one stays behind a flag
+
+*Critic leverage item 6.*
+
+The §20 critic's sharpest sentence was not about a defect:
+
+> Every severity-1 finding in this report was reachable from a proof built out of
+> the corpus, and none was reachable from `makeProof()`.
+
+`scripts/verify-offline.mjs` is the last gate before an artifact is called
+offline-clean, and it was verifying the hand-written fixture — a proof that names
+its own layouts, declares its own provenance, and hands the emitter blocks that
+were never ingested, never stripped and never measured. Everything before the
+emitter was invisible to it.
+
+`test/fixtures/corpus/proof.mjs` builds a §4 `Proof` from the corpus through the
+published surfaces of L3–L9 and nothing else, and `verify-offline` now runs
+that: 31 spine scenes and 4 branches instead of 6 and 3, **510 key presses over
+111 deck positions**, zero network requests on both decode paths, first paint at
+120ms against a 1500ms budget.
+
+Two things it found within minutes of being wired in, both severity 1 and both
+unreachable from the fixture: `quoteCard` renders no provenance label on the
+branch where the section carries no quote, and an absolute URL in an
+`svg[aria-label]` — L8's accessible name for the system map — refused the emit as
+a `NETWORK_REFERENCE` over a string nothing will ever request.
+
+**The hand-written fixture is not deleted, and `--fixture` still runs it.** L10
+named what only it reaches: the raw/deflate crossover, where a single-scene proof
+correctly keeps `raw` and ships no inflater; the `deps.resample` hook for formats
+the in-repo codec cannot re-encode; the `SIZE_BUDGET_EXCEEDED` refusal, which
+needs a budget the corpus never approaches at 400KB; and the
+many-references-one-payload budgeting case — the corpus shares its assets through
+one `MediaLedger`, so its media is deduplicated before the budgeter sees it,
+which is exactly the case F13 was about. A corpus that replaced the fixture would
+have quietly dropped four of the emitter's paths.
+
+Two assertions in `verify-offline` had been written against the fixture rather
+than against the law. The jump-index check matched the winning branch's **id**
+against `/appr/`, which worked only because the fixture named its branch
+`bn_approvals`; it now reads the expected branch off the proof — the one whose
+objection or aliases actually say "approv" — so the oracle is the deck rather
+than the search agreeing with itself. And the corpus proof had no nested branch,
+so §11's return-stack unwinding was not exercised at all: the corpus now carries
+one, offered from inside the approval-chain branch, because a room does not ask
+its objections one at a time and §22.4's stranding case (which D1 was) lives
+entirely in the nested path.
+
+## D29 — planted defects, injected through the published surfaces
+
+*L11's request, and §17.4's remaining gap.*
+
+Every lane built a planted-defect corpus and every one measures over synthetic
+text, because synthetic text is the only place ground truth is knowable by
+construction. That is also its limit: a detector can score 1.0 on planted
+paragraphs and be blind on a real page.
+
+`PLANTS` in `test/fixtures/corpus/proof.mjs` closes it. Each entry injects one
+named defect into the corpus proof **through the same published surfaces the
+pipeline uses** — no reaching into a lane's internals, no hand-written §4 record
+no surface would produce — and returns what it injected. Each is a thing a seller
+could actually do by accident, and says so in `describe`:
+
+| plant | what a seller did |
+|---|---|
+| `TEXT_OVERFLOW_CLIP` | pasted an unbroken part number into a headline |
+| `NETWORK_REFERENCE` | shipped a logo SVG that links a remote raster it renders on top of |
+| `CTA_LIVE_LINK_NEUTRALISED` | kept a live "Request a quote" link out of the source page |
+| `CONTRAST_FAIL` | hand-picked a body colour off the brand guide |
+| `BRANCH_NO_RETURN` | deleted the scene a branch was hung off |
+| `BRANCH_UNREACHABLE` | cleared a branch's objection and deleted the scene that offered it |
+| `ASSET_MISSING` | removed an image the copy still refers to |
+| `BEAT_EMPTY` | swapped a scene's layout and left its beats pointing at the old one |
+| `DUPLICATE_SCENE` | duplicated a scene and never changed it |
+
+Three things about the design are worth keeping.
+
+**One plant expects nothing.** `CTA_LIVE_LINK_NEUTRALISED` puts a live outbound
+link in a rendition and asserts *no* finding, because `scene/blocks.js` renders a
+`cta` block's label and drops its `href` — the outer of two defences. Writing it
+as a plant is what turned "I believe the layout drops it" into something that
+fails when it stops being true. It also retired dispute 31 in practice: the
+scanner never sees the URL, so the argument about whether it should refuse one in
+the prospect's own content is not load-bearing.
+
+**Precision is asserted, not just recall.** Planting one defect must leave every
+other detector's count exactly where it was. A detector that fires on a
+neighbouring change is one a seller learns to ignore.
+
+**`alsoMoves` is a declaration, not an escape hatch.** Some defects genuinely
+imply another — an unanchored branch really does have no return target, and a
+duplicated scene really does overflow wherever the original does. Each entry
+carries its reason, and a declared implication that *doesn't* happen fails too,
+so the list cannot rot into a way of waving findings away.
+
+Writing them found two things immediately. `BRANCH_UNREACHABLE` had to be made
+**subtractive**: an earlier version added an orphan branch with a scene of its
+own, and that scene's copy overflowed like every other scene from the same
+specimen — so the plant moved `TEXT_OVERFLOW` too, and the precision measurement
+was reporting the fixture's content rather than the detector's behaviour. And the
+`DUPLICATE_SCENE` plant does not fire at all, which turned out to be a real
+defect: the content half of that rule fingerprints over `beats[].reveals`, and
+reveals are derived from the scene id, so two scenes identical in every visible
+way always fingerprint differently. The content check has never been able to fire
+for anything the id check did not already catch. Routed to L11.

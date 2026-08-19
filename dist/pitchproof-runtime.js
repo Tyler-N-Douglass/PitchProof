@@ -2959,6 +2959,66 @@ function provenanceLabel(rendition, ctx) {
   }, PROVENANCE_LABEL_TEXT);
 }
 
+const PROVENANCE_LEDGER_CLASS = 'pp-provenance-ledger';
+
+function labelledRenditionIds(tree) {
+
+  const labelled = new Set();
+
+  const visit = (node, scopes) => {
+    if (node === null || node === undefined || node === false) return;
+    if (Array.isArray(node)) { node.forEach((child) => visit(child, scopes)); return; }
+    if (typeof node !== 'object' || 'raw' in node) return;
+    const attrs = node.a || {};
+    const owner = attrs['data-pp-rendition'];
+    const next = typeof owner === 'string' && owner ? scopes.concat([owner]) : scopes;
+    if (String(attrs.class || '').split(/\s+/).includes(PROVENANCE_LABEL_CLASS)) {
+      for (const id of next) labelled.add(id);
+    }
+    (node.c || []).forEach((child) => visit(child, next));
+  };
+
+  visit(tree, []);
+  return labelled;
+}
+
+function unlabelledRenditions(ctx, labelled) {
+  const rends = ctx && Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
+  return rends.filter((r) => needsProvenanceLabel(r) && !labelled.has(r.id));
+}
+
+function withProvenanceLedger(tree, ctx) {
+  if (!tree || typeof tree !== 'object' || Array.isArray(tree) || 'raw' in tree) return tree;
+  if (!ctx || ctx.labelIllustrative === false) return tree;
+
+  const pending = unlabelledRenditions(ctx, labelledRenditionIds(tree));
+  if (pending.length === 0) return tree;
+
+  const order = new Map((Array.isArray(ctx.renditions) ? ctx.renditions : [])
+    .filter(Boolean).map((r, i) => [r.id, i]));
+
+  const rows = pending.map((rendition) => h('li', {
+    class: 'pp-provenance-ledger-row',
+    'data-pp-box': 'provenanceLedger',
+    'data-pp-container': 'ledger',
+    'data-pp-rendition': rendition.id,
+  },
+  h('p', {
+    class: 'pp-provenance-ledger-name',
+    'data-pp-tx': 'noteLabel',
+    'data-pp-clamp': '1',
+  }, renditionLabel(rendition, order.has(rendition.id) ? order.get(rendition.id) : 0)),
+  provenanceLabel(rendition, ctx)));
+
+  const ledger = h('ul', { class: PROVENANCE_LEDGER_CLASS }, rows);
+
+  return {
+    ...tree,
+    a: { ...(tree.a || {}), 'data-pp-ledger': String(rows.length) },
+    c: (tree.c || []).concat([ledger]),
+  };
+}
+
 function sceneHead(ctx, options = {}) {
   const { scene } = ctx;
   const path = options.path || 'head';
@@ -3067,6 +3127,10 @@ __exports["PROVENANCE_LABEL_CLASS"] = PROVENANCE_LABEL_CLASS;
 __exports["PROVENANCE_LABEL_TEXT"] = PROVENANCE_LABEL_TEXT;
 __exports["needsProvenanceLabel"] = needsProvenanceLabel;
 __exports["provenanceLabel"] = provenanceLabel;
+__exports["PROVENANCE_LEDGER_CLASS"] = PROVENANCE_LEDGER_CLASS;
+__exports["labelledRenditionIds"] = labelledRenditionIds;
+__exports["unlabelledRenditions"] = unlabelledRenditions;
+__exports["withProvenanceLedger"] = withProvenanceLedger;
 __exports["sceneHead"] = sceneHead;
 __exports["panelHead"] = panelHead;
 __exports["URL_LABEL_BUDGET"] = URL_LABEL_BUDGET;
@@ -3085,7 +3149,7 @@ __modules["scene/layouts/split-before-after.js"] = function (__exports, __requir
 const { h } = __require("core/vdom.js");
 const { alignColumns } = __require("scene/align.js");
 const { renderBlock } = __require("scene/blocks.js");
-const { sceneHead, panelHead, provenanceLabel, emptyState, specimenMeta, specimenTitle, renditionMeta, renditionLabel } = __require("scene/parts.js");
+const { sceneHead, panelHead, provenanceLabel, emptyState, specimenMeta, specimenTitle, renditionMeta, renditionLabel, withProvenanceLedger } = __require("scene/parts.js");
 
 function splitBeforeAfter(ctx) {
   const { specimen, renditions } = ctx;
@@ -3097,14 +3161,14 @@ function splitBeforeAfter(ctx) {
     ? emptyState('This scene has no specimen and no rendition attached yet.', { box: 'body' })
     : renderSplit(ctx, sourceBlocks, rends, columnCount);
 
-  return h('div', {
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--split',
     'data-pp-layout': 'splitBeforeAfter',
     'data-pp-box': 'stage',
     style: { '--pp-sc-split-cols': String(columnCount) },
   },
   sceneHead(ctx, { kicker: 'Their content, and what it becomes' }),
-  body);
+  body), ctx);
 }
 
 function renderSplit(ctx, sourceBlocks, rends, columnCount) {
@@ -3193,7 +3257,7 @@ __modules["scene/layouts/fan-out.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
 const { renderBlock, summarize } = __require("scene/blocks.js");
-const { sceneHead, panelHead, provenanceLabel, emptyState, waveGroup, specimenMeta, specimenTitle, renditionLabel } = __require("scene/parts.js");
+const { sceneHead, panelHead, provenanceLabel, emptyState, waveGroup, specimenMeta, specimenTitle, renditionLabel, withProvenanceLedger } = __require("scene/parts.js");
 
 const WAVE_SIZE = 4;
 
@@ -3202,7 +3266,7 @@ function fanOut(ctx) {
   const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
   const sourceBlocks = specimen && Array.isArray(specimen.blocks) ? specimen.blocks : [];
 
-  return h('div', {
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--fan',
     'data-pp-layout': 'fanOut',
     'data-pp-box': 'stage',
@@ -3212,7 +3276,7 @@ function fanOut(ctx) {
     ? emptyState('This scene has no renditions attached yet.', { box: 'body' })
     : h('div', { class: 'pp-fan', 'data-pp-box': 'body' },
       renderSource(ctx, sourceBlocks, rends.length),
-      renderGrid(ctx, rends)));
+      renderGrid(ctx, rends))), ctx);
 }
 
 function renderSource(ctx, sourceBlocks, count) {
@@ -3283,12 +3347,12 @@ __modules["scene/layouts/stack.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
 const { renderBlock, summarize } = __require("scene/blocks.js");
-const { sceneHead, provenanceLabel, emptyState, specimenTitle, specimenMeta, renditionLabel, renditionMeta } = __require("scene/parts.js");
+const { sceneHead, provenanceLabel, emptyState, specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger } = __require("scene/parts.js");
 
 function stack(ctx) {
   const steps = stepsOf(ctx);
 
-  return h('div', {
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--stack',
     'data-pp-layout': 'stack',
     'data-pp-box': 'stage',
@@ -3297,7 +3361,7 @@ function stack(ctx) {
   steps.length === 0
     ? emptyState('This scene has no states to show yet — attach a specimen or renditions.', { box: 'body' })
     : h('ol', { class: 'pp-stack', 'data-pp-box': 'body', 'data-pp-n': String(steps.length) },
-      steps.map((step, index) => renderStep(ctx, step, index, steps.length))));
+      steps.map((step, index) => renderStep(ctx, step, index, steps.length)))), ctx);
 }
 
 function stepsOf(ctx) {
@@ -3364,13 +3428,13 @@ __exports["stack"] = stack;
 __modules["scene/layouts/full-bleed.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
-const { provenanceLabel, emptyState, specimenTitle, renditionLabel } = __require("scene/parts.js");
+const { provenanceLabel, emptyState, specimenTitle, renditionLabel, withProvenanceLedger } = __require("scene/parts.js");
 
 function fullBleed(ctx) {
   const pick = pickVisual(ctx);
   const scene = ctx.scene;
 
-  return h('div', {
+  return withProvenanceLedger(h('div', {
     class: `pp-layout pp-layout--bleed${pick.media ? '' : ' pp-layout--bleed-type'}`,
     'data-pp-layout': 'fullBleed',
     'data-pp-box': 'stage',
@@ -3415,7 +3479,7 @@ function fullBleed(ctx) {
     !scene.headline && !scene.subhead && !pick.caption && !pick.source
       ? emptyState('This scene has no headline yet.')
       : null),
-  provenanceLabel(pick.rendition, ctx)));
+  provenanceLabel(pick.rendition, ctx))), ctx);
 }
 
 function pickVisual(ctx) {
@@ -3481,7 +3545,7 @@ const { h } = __require("core/vdom.js");
 const { alignPair } = __require("scene/align.js");
 const { renderBlock } = __require("scene/blocks.js");
 const { blockText } = __require("core/contracts.js");
-const { sceneHead, provenanceLabel, emptyState, waveGroup, presentableNotes, specimenMeta, specimenTitle, renditionLabel } = __require("scene/parts.js");
+const { sceneHead, provenanceLabel, emptyState, waveGroup, presentableNotes, specimenMeta, specimenTitle, renditionLabel, withProvenanceLedger } = __require("scene/parts.js");
 
 function sideNote(ctx) {
   const { specimen } = ctx;
@@ -3490,13 +3554,13 @@ function sideNote(ctx) {
   const rowCount = Math.max(mainBlocks.length, notes.length, 1);
 
   if (mainBlocks.length === 0 && notes.length === 0) {
-    return h('div', {
+    return withProvenanceLedger(h('div', {
       class: 'pp-layout pp-layout--side',
       'data-pp-layout': 'sideNote',
       'data-pp-box': 'stage',
     },
     sceneHead(ctx, { kicker: 'Their content, annotated' }),
-    emptyState('This scene has no specimen and no notes attached yet.', { box: 'body' }));
+    emptyState('This scene has no specimen and no notes attached yet.', { box: 'body' })), ctx);
   }
 
   const rows = [];
@@ -3505,7 +3569,7 @@ function sideNote(ctx) {
     rows.push({ block: row < mainBlocks.length ? row : null, notes: notes.filter((note) => note.row === row) });
   }
 
-  return h('div', {
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--side',
     'data-pp-layout': 'sideNote',
     'data-pp-box': 'stage',
@@ -3532,7 +3596,7 @@ function sideNote(ctx) {
           'data-pp-group': 'main',
         }, renderBlock(mainBlocks[row.block], { media: ctx.media, density: 'full' }))),
       h('div', { class: 'pp-side-margin' },
-        row.notes.map((note) => renderNote(ctx, note, rowCount)))))));
+        row.notes.map((note) => renderNote(ctx, note, rowCount))))))), ctx);
 }
 
 function notesFor(ctx, mainBlocks) {
@@ -4236,6 +4300,7 @@ const GEOM = {
     'map-legend-h': 120,
     'map-legend-cols': 1,
     'map-canvas-min-h': 180,
+    'ledger-h': 48,
   },
   md: {
     'head-h': 104,
@@ -4270,6 +4335,7 @@ const GEOM = {
     'map-legend-h': 104,
     'map-legend-cols': 3,
     'map-canvas-min-h': 240,
+    'ledger-h': 52,
   },
   lg: {
     'head-h': 120,
@@ -4304,6 +4370,7 @@ const GEOM = {
     'map-legend-h': 104,
     'map-legend-cols': 5,
     'map-canvas-min-h': 280,
+    'ledger-h': 56,
   },
 };
 
@@ -4458,9 +4525,9 @@ function mapLegendHeight(bpIn, n = 1) {
   return rows * geom(bp, 'map-legend-h') + (rows - 1) * geom(bp, 'fan-gap');
 }
 
-function mapScale(bpIn, n = 1) {
+function mapScale(bpIn, n = 1, ledger = false) {
   const bp = breakpointId(bpIn);
-  const s = stageBox(bp);
+  const s = withLedger(stageBox(bp), bp, ledger);
   const canvasHeight = Math.max(
     geom(bp, 'map-canvas-min-h'),
     s.bodyHeightPx - mapLegendHeight(bp, n) - geom(bp, 'row-gap'),
@@ -4480,9 +4547,23 @@ function inset(widthPx, heightPx, padPx, border = PANEL_BORDER_PX) {
   };
 }
 
+function ledgerAllowance(bp) {
+  return geom(bp, 'ledger-h') + geom(bp, 'head-gap');
+}
+
+function withLedger(s, bp, ledger) {
+  if (!ledger) return s;
+  const cost = ledgerAllowance(bp);
+  return {
+    ...s,
+    contentHeightPx: Math.max(0, s.contentHeightPx - cost),
+    bodyHeightPx: Math.max(0, s.bodyHeightPx - cost),
+  };
+}
+
 function boxGeometry(slot, bpIn, params = {}) {
   const bp = breakpointId(bpIn);
-  const s = stageBox(bp);
+  const s = withLedger(stageBox(bp), bp, params.ledger);
   const n = Math.max(1, Math.floor(params.n || 1));
   const stacked = bp === 'sm';
 
@@ -4596,6 +4677,12 @@ function boxGeometry(slot, bpIn, params = {}) {
         geom(bp, 'card-pad'),
       );
     }
+
+    case 'provenanceLedger': {
+
+      return inset(s.contentWidthPx, geom(bp, 'ledger-h'), geom(bp, 'card-pad'));
+    }
+
     case 'mapText': {
       const scale = mapScale(bp, n);
       return {
@@ -4619,6 +4706,7 @@ const SLOTS = [
   'quoteBox',
   'indexRow', 'indexNumber',
   'mapCanvas', 'mapLegend', 'mapText',
+  'provenanceLedger',
 ];
 
 __exports["PANEL_BORDER_PX"] = PANEL_BORDER_PX;
@@ -4630,6 +4718,7 @@ __exports["fanColumns"] = fanColumns;
 __exports["mapLegendHeight"] = mapLegendHeight;
 __exports["mapScale"] = mapScale;
 __exports["trackWidth"] = trackWidth;
+__exports["ledgerAllowance"] = ledgerAllowance;
 __exports["boxGeometry"] = boxGeometry;
 __exports["SLOTS"] = SLOTS;
 };
@@ -4733,7 +4822,7 @@ const { h } = __require("core/vdom.js");
 const { layoutText } = __require("core/text-metrics.js");
 const { MAP_DESIGN } = __require("scene/geometry.js");
 const { styleForRole } = __require("scene/type-scale.js");
-const { sceneHead, provenanceLabel, emptyState, specimenTitle, specimenMeta, renditionLabel, renditionMeta } = __require("scene/parts.js");
+const { sceneHead, provenanceLabel, emptyState, specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger } = __require("scene/parts.js");
 
 const MAP = {
   nodeW: 200,
@@ -4756,9 +4845,9 @@ function systemMap(ctx) {
   const hasSubject = !!ctx.specimen || rends.length > 0;
 
   if (!hasSubject) {
-    return h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
+    return withProvenanceLedger(h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
       sceneHead(ctx, { kicker: 'How it runs' }),
-      emptyState('This scene has nothing to map yet — attach a specimen or renditions.', { box: 'body' }));
+      emptyState('This scene has nothing to map yet — attach a specimen or renditions.', { box: 'body' })), ctx);
   }
 
   const shown = rends.slice(0, MAP.maxOutputs);
@@ -4778,7 +4867,7 @@ function systemMap(ctx) {
   const recipeCount = new Set(rends.map((r) => r.recipeId).filter(Boolean)).size;
   const transformMeta = recipeCount === 1 ? '1 recipe' : `${recipeCount} recipes`;
 
-  return h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
+  return withProvenanceLedger(h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
     sceneHead(ctx, { kicker: 'How it runs' }),
     h('div', { class: 'pp-map', 'data-pp-box': 'body' },
       h('div', { class: 'pp-map-canvas' },
@@ -4868,7 +4957,7 @@ function systemMap(ctx) {
         shown.length === 0
           ? h('li', { class: 'pp-map-chip pp-map-chip--empty', 'data-pp-box': 'mapLegend', 'data-pp-n': '1' },
             h('p', { class: 'pp-map-chip-label', 'data-pp-tx': 'caption' }, 'No renditions attached to this scene.'))
-          : null)));
+          : null))), ctx);
 }
 
 function outputBoxes(count) {
@@ -4976,12 +5065,12 @@ __modules["scene/layouts/quote-card.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
 const { firstOfType } = __require("scene/blocks.js");
-const { sceneHead, provenanceLabel, emptyState, specimenTitle, renditionLabel, specimenMeta } = __require("scene/parts.js");
+const { sceneHead, provenanceLabel, emptyState, specimenTitle, renditionLabel, specimenMeta, withProvenanceLedger } = __require("scene/parts.js");
 
 function quoteCard(ctx) {
   const pulled = pullQuote(ctx);
 
-  return h('div', {
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--quote',
     'data-pp-layout': 'quoteCard',
     'data-pp-box': 'stage',
@@ -5013,7 +5102,7 @@ function quoteCard(ctx) {
         : null)
       : null,
     provenanceLabel(pulled.rendition, ctx))
-    : emptyState('This scene has no quote yet — attach a specimen with a quote block, or give the scene a headline.', { box: 'body' }));
+    : emptyState('This scene has no quote yet — attach a specimen with a quote block, or give the scene a headline.', { box: 'body' })), ctx);
 }
 
 function pullQuote(ctx) {
@@ -5067,12 +5156,12 @@ __modules["scene/layouts/contents-index.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
 const { blockText } = __require("core/contracts.js");
-const { sceneHead, provenanceLabel, emptyState, waveGroup, specimenTitle, renditionLabel, renditionMeta } = __require("scene/parts.js");
+const { sceneHead, provenanceLabel, emptyState, waveGroup, specimenTitle, renditionLabel, renditionMeta, withProvenanceLedger } = __require("scene/parts.js");
 
 function contentsIndex(ctx) {
   const entries = entriesFor(ctx);
 
-  return h('div', {
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--index',
     'data-pp-layout': 'contentsIndex',
     'data-pp-box': 'stage',
@@ -5094,7 +5183,7 @@ function contentsIndex(ctx) {
         entry.blurb
           ? h('p', { class: 'pp-index-blurb', 'data-pp-tx': 'indexBlurb', 'data-pp-clamp': '2' }, entry.blurb)
           : null,
-        provenanceLabel(entry.rendition, ctx))))));
+        provenanceLabel(entry.rendition, ctx)))))), ctx);
 }
 
 function entriesFor(ctx) {
@@ -5237,6 +5326,10 @@ function collectTextBoxes(node, env) {
       next = { ...next, elementId: attrs['data-pp-el'] };
     }
 
+    if (attrs['data-pp-ledger'] !== undefined && attrs['data-pp-ledger'] !== null) {
+      next = { ...next, ledger: Number(attrs['data-pp-ledger']) > 0 };
+    }
+
     if (typeof attrs['data-pp-box'] === 'string') {
       const slot = attrs['data-pp-box'];
       const params = {
@@ -5244,6 +5337,8 @@ function collectTextBoxes(node, env) {
         unitWidth: attrs['data-pp-unit-w'] !== undefined ? Number(attrs['data-pp-unit-w']) : undefined,
         unitHeight: attrs['data-pp-unit-h'] !== undefined ? Number(attrs['data-pp-unit-h']) : undefined,
         variant: typeof attrs['data-pp-variant'] === 'string' ? attrs['data-pp-variant'] : undefined,
+
+        ledger: slot === 'provenanceLedger' ? false : next.ledger,
       };
       const size = boxGeometry(slot, bp, params);
       const ordinal = (slotCounts.get(slot) || 0) + 1;
@@ -5279,7 +5374,7 @@ function collectTextBoxes(node, env) {
         if (!spec) throw new Error(`scene/measure: element declares unknown text role "${role}"`);
 
         const resolved = styleForRole(role, bp, brand, {
-          scale: spec.svg ? mapScale(bp, next.scaleN) : 1,
+          scale: spec.svg ? mapScale(bp, next.scaleN, next.ledger) : 1,
         });
 
         const box = {
@@ -5318,6 +5413,7 @@ function collectTextBoxes(node, env) {
     widthPx: root.widthPx,
     heightPx: root.heightPx,
     scaleN: 1,
+    ledger: false,
   });
   return boxes;
 }
@@ -5576,6 +5672,10 @@ __exports["PROVENANCE_LABEL_CLASS"] = __require("scene/parts.js").PROVENANCE_LAB
 __exports["PROVENANCE_LABEL_TEXT"] = __require("scene/parts.js").PROVENANCE_LABEL_TEXT;
 __exports["needsProvenanceLabel"] = __require("scene/parts.js").needsProvenanceLabel;
 __exports["provenanceLabel"] = __require("scene/parts.js").provenanceLabel;
+__exports["PROVENANCE_LEDGER_CLASS"] = __require("scene/parts.js").PROVENANCE_LEDGER_CLASS;
+__exports["labelledRenditionIds"] = __require("scene/parts.js").labelledRenditionIds;
+__exports["unlabelledRenditions"] = __require("scene/parts.js").unlabelledRenditions;
+__exports["withProvenanceLedger"] = __require("scene/parts.js").withProvenanceLedger;
 __exports["presentableNotes"] = __require("scene/parts.js").presentableNotes;
 __exports["displayUrl"] = __require("scene/parts.js").displayUrl;
 __exports["URL_LABEL_BUDGET"] = __require("scene/parts.js").URL_LABEL_BUDGET;
@@ -5587,6 +5687,7 @@ __exports["mapLegendHeight"] = __require("scene/geometry.js").mapLegendHeight;
 __exports["fanColumns"] = __require("scene/geometry.js").fanColumns;
 __exports["stagePadPx"] = __require("scene/geometry.js").stagePadPx;
 __exports["trackWidth"] = __require("scene/geometry.js").trackWidth;
+__exports["ledgerAllowance"] = __require("scene/geometry.js").ledgerAllowance;
 __exports["MAP_DESIGN"] = __require("scene/geometry.js").MAP_DESIGN;
 __exports["PANEL_BORDER_PX"] = __require("scene/geometry.js").PANEL_BORDER_PX;
 __exports["SLOTS"] = __require("scene/geometry.js").SLOTS;

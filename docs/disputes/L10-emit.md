@@ -204,3 +204,102 @@ artifact.
 
 **What we would propose instead.** Name the composition root in §5's source
 layout and in §19's lane table, so the next build does not rediscover it.
+
+---
+
+## L10-D8 — `validate/lane-emit.js` makes the emit↔validate dependency a cycle
+
+**The contract.** `API.md` Part 3 gives L10 `scanForNetworkReferences` and
+`assertProvenance`, and gives L11 `runPreflight`. §9 and §13 put the network and
+provenance laws in the emitter; §14 puts *every* severity-1 finding there too.
+
+**The objection.** Those two sentences together require the emitter to run
+L11's rules and require L11 to call L10's checkers, and the module graph cannot
+have both. `src/validate/lane-emit.js` re-exports L10's two functions from
+`../emit/index.js`, so any import from `src/emit/**` into `src/validate/**`
+closes a loop the bundler refuses (D3):
+
+```
+emit/emit.js → validate/index.js → validate/preflight.js
+             → validate/lane-emit.js → emit/index.js → emit/emit.js
+```
+
+The emitter therefore cannot call `runPreflight`, which is the obvious way to
+satisfy §14.
+
+**Built as written.** `src/emit/gate.js` imports `RULES` from
+`src/validate/rules.js`, which is the half of L11 with no back-edge — it takes
+the scanner and the provenance checker through `ctx.deps` rather than importing
+them. The gate supplies L10's own, builds the context `runPreflight` builds, and
+runs every rule. `test/emit/gate.test.mjs` asserts the gate and `runPreflight`
+produce identical findings, so the seam costs no fidelity.
+
+**What we would propose instead.** One line in `src/validate/lane-emit.js`:
+
+```js
+// instead of:  export { scanForNetworkReferences, assertProvenance } from '../emit/index.js';
+export { scanForNetworkReferences } from '../emit/scan.js';
+export { assertProvenance } from '../emit/provenance.js';
+```
+
+Neither of those modules imports `emit/emit.js`, so the cycle disappears and
+`emit()` can call `runPreflight` directly — one call instead of a reconstructed
+context, and no possibility of the two drifting. It is L11's file, so it is
+L11's call; recorded here because the workaround is otherwise unexplained.
+
+---
+
+## L10-D9 — two readers of the promotion-record format disagree
+
+**The contract.** `API.md` gives L7 `promoteProvenance(rendition, {by, at})` as
+"the only route to `verified-by-user`". L7 also publishes
+`hasPromotionRecord(rendition)`, which reads the record it wrote.
+
+**The objection.** `src/validate/provenance.js` carries a *second* reader —
+`PROMOTION_PATTERN` and its own `hasPromotionRecord` — and `runPreflight`
+defaults to it. They do not agree. A rendition promoted through
+`promoteProvenance` is recognised by L7's reader and rejected by L11's, so
+`runPreflight` reports `PROVENANCE_UNLABELED` at **severity 1** against a
+rendition that was properly promoted. In the studio that disables the emit
+button on an honest proof, while `emit()` — which reads the record with L7's
+reader (decision E17) — accepts it. The two gates disagree about the same file.
+
+This is the failure E17 was written to avoid: "two readers of one format is one
+reader too many. The moment they disagree, the artifact ships either an
+unlabelled lie or a false refusal, and neither lane would know which of them was
+wrong."
+
+**Built as written.** The emitter reads promotion records with L7's reader and
+passes it into the rules as `ctx.deps.hasPromotionRecord`, which
+`validate/rules.js` prefers over its own fallback. `test/emit/gate.test.mjs`
+injects the same reader into `runPreflight` so its equivalence assertion is
+about the *rules* rather than about which promotion reader was in scope, and
+`test/emit/gate.test.mjs` separately asserts that a rendition promoted through
+L7 is not reported as unpromoted.
+
+**What we would propose instead.** Delete the reader in
+`src/validate/provenance.js` and re-export L7's, the way `lane-brand.js` and
+`lane-scene.js` already re-export L4's and L8's. One format, one reader, and
+`resolveDeps` needs no default for it.
+
+---
+
+## L10-D10 — `LogoAsset.kind: 'svg'` is read two ways
+
+**The contract.** §4: `LogoAsset.data` is "inline SVG markup or data URI", for
+either value of `kind`.
+
+**The objection.** L11's `ASSET_MISSING` rule requires a `kind: 'svg'` logo to
+carry literal `<svg` markup and reports "no usable SVG markup" at severity 1 for
+a `data:image/svg+xml,…` URI — which the contract permits and which is, in
+substance, SVG. A contract-legal proof is refused.
+
+**Built as written.** The emitter runs the rule unchanged, and the lane's fixture
+now carries its `kind: 'svg'` logo as inline markup — which §7 prefers anyway
+("Prefer inline SVG"), so the fixture is more realistic for the change. The
+divergence is recorded rather than worked around.
+
+**What we would propose instead.** Accept either payload for either `kind`, and
+raise the finding only when `data` is neither markup nor a parseable data URI.
+The `kind` field then describes the asset rather than constraining how it was
+delivered.

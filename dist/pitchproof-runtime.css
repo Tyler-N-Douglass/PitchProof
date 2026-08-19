@@ -524,6 +524,7 @@ html, body {
   --pp-sc-index-gap: 12px;
   --pp-sc-index-num-w: 32px;
   --pp-sc-index-row-gap: 10px;
+  --pp-sc-ledger-h: 48px;
   --pp-sc-list-marker-w: 14px;
   --pp-sc-map-canvas-min-h: 180px;
   --pp-sc-map-legend-cols: 1;
@@ -590,6 +591,7 @@ html, body {
     --pp-sc-index-gap: 14px;
     --pp-sc-index-num-w: 44px;
     --pp-sc-index-row-gap: 12px;
+    --pp-sc-ledger-h: 52px;
     --pp-sc-list-marker-w: 16px;
     --pp-sc-map-canvas-min-h: 240px;
     --pp-sc-map-legend-cols: 3;
@@ -657,6 +659,7 @@ html, body {
     --pp-sc-index-gap: 16px;
     --pp-sc-index-num-w: 52px;
     --pp-sc-index-row-gap: 14px;
+    --pp-sc-ledger-h: 56px;
     --pp-sc-list-marker-w: 18px;
     --pp-sc-map-canvas-min-h: 280px;
     --pp-sc-map-legend-cols: 5;
@@ -1094,6 +1097,46 @@ html, body {
   margin: 8px 0 0;
   align-self: flex-start;
   max-width: 100%;
+}
+
+.pp-provenance-ledger {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pp-sc-row-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.pp-provenance-ledger-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--pp-sc-card-pad);
+  min-width: 0;
+  max-width: 100%;
+  padding: calc(var(--pp-sc-card-pad) / 2) var(--pp-sc-card-pad);
+  border: 1px solid var(--pp-border);
+  border-radius: var(--pp-radius);
+}
+
+.pp-provenance-ledger-name {
+  margin: 0;
+  min-width: 0;
+  opacity: 0.72;
+}
+
+.pp-provenance-ledger .pp-provenance { margin: 0; flex: 0 0 auto; }
+
+.pp-layout--bleed .pp-provenance-ledger {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  justify-content: flex-end;
+  max-width: 100%;
+  padding: var(--pp-sc-bleed-pad);
 }
 
 .pp-split { display: flex; flex-direction: column; min-height: 0; }

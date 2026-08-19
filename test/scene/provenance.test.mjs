@@ -21,8 +21,10 @@ import { beatFrame, REVEAL_ATTR } from '../../src/runtime/beats.js';
 import { normalizeEmitOptions, SCENE_LAYOUTS } from '../../src/core/contracts.js';
 import {
   buildScene, renderSceneTree, measureScene, PROVENANCE_LABEL_CLASS, needsProvenanceLabel,
+  ledgerAllowance,
 } from '../../src/scene/index.js';
-import { layoutCases, contextFor, specimen, rendition, localeFanout, channelVariants } from '../fixtures/scene/content.mjs';
+import { layoutCases, contextFor, specimen, rendition, localeFanout, channelVariants, heroMedia, PIXEL } from '../fixtures/scene/content.mjs';
+import { buildCorpusProof } from '../fixtures/corpus/proof.mjs';
 
 /** Every element carrying a class, as a flat list with its ancestry. */
 function findAll(tree, predicate) {
@@ -40,6 +42,37 @@ function findAll(tree, predicate) {
 }
 
 const isLabel = (node) => String(node.a.class || '').split(/\s+/).includes(PROVENANCE_LABEL_CLASS);
+
+/**
+ * The ids of the renditions a rendered tree labels, unioned across every
+ * `data-pp-rendition` subtree the label sits in. This is the emitter's own
+ * reading of the markup (`src/emit/provenance.js`), rewritten here so the
+ * assertion is independent of the implementation it is checking.
+ * @param {any} tree
+ * @returns {Set<string>}
+ */
+function labelledIn(tree) {
+  /** @type {Set<string>} */
+  const out = new Set();
+  for (const { node, ancestors } of findAll(tree, isLabel)) {
+    for (const a of ancestors.concat([node])) {
+      const owner = a.a && a.a['data-pp-rendition'];
+      if (typeof owner === 'string' && owner) out.add(owner);
+    }
+  }
+  return out;
+}
+
+/**
+ * Every rendition a scene declares, needs a label for, and did not get one for.
+ * @param {any} tree
+ * @param {any[]} renditions   the scene's resolved `renditionIds`
+ * @returns {any[]}
+ */
+function unlabelled(tree, renditions) {
+  const labelled = labelledIn(tree);
+  return renditions.filter((r) => needsProvenanceLabel(r) && !labelled.has(r.id));
+}
 
 /** Renditions in one shape per provenance value, for the same layout. */
 function trio() {
@@ -222,4 +255,279 @@ test('a promotion record never reaches the screen', () => {
   const scene = buildScene({ layout: 'sideNote', specimen: spec, renditions: rends, headline: 'Notes' });
   const html = toHtml(renderSceneTree(scene, contextFor(scene, { specimen: spec, renditions: rends })));
   assert.ok(html.includes('Subject line held to 48 characters'), 'a real note is shown');
+});
+
+// ---------------------------------------------------------------------------
+// The defect: a layout that selects, on a branch that selected nothing
+// ---------------------------------------------------------------------------
+
+/**
+ * The shapes a real corpus produces that the eight layouts' fallback and
+ * empty-state branches were written for. Each one is a scene that declares an
+ * illustrative rendition and gives the layout a reason to render something
+ * other than that rendition.
+ * @returns {{name: string, specimen: any, renditions: any[]}[]}
+ */
+function fallbackShapes() {
+  const withQuote = specimen();
+  const noQuote = specimen({ blocks: specimen().blocks.filter((b) => b.type !== 'quote') });
+  const ill = (spec) => rendition({ provenance: 'illustrative', ...spec });
+
+  return [
+    {
+      // The corpus case. Sectioning a page at heading boundaries hands a
+      // quoteCard scene a rendition with no `quote` block in it, and the
+      // layout falls through to the specimen's quote.
+      name: 'rendition carries no quote block, specimen does',
+      specimen: withQuote,
+      renditions: [ill({
+        id: 'rd_noquote',
+        label: 'Channel variants 4/6',
+        blocks: [
+          { type: 'heading', level: 2, text: 'Ordering and lead time' },
+          { type: 'list', ordered: false, items: ['Standard build ships in six weeks'] },
+        ],
+      })],
+    },
+    {
+      // Neither side has a quote: quoteCard falls all the way through to the
+      // scene's own headline, which in a real proof is the rendition's leading
+      // heading — rendition-derived text, on screen, with nothing to label it.
+      name: 'no quote anywhere in the model',
+      specimen: noQuote,
+      renditions: [ill({
+        id: 'rd_noquote_either',
+        label: 'Brief to asset 4/6',
+        blocks: [{ type: 'paragraph', text: 'Start from the cleaning interval, not the resistance.' }],
+      })],
+    },
+    {
+      // sideNote keeps a note only for a rendition block that carries text. A
+      // rendition of nothing but media contributes no note at all.
+      name: 'rendition of media blocks only',
+      specimen: withQuote,
+      renditions: [ill({
+        id: 'rd_mediaonly',
+        label: 'Assembled at three breakpoints',
+        blocks: [{ type: 'media', ref: 'md_hero', caption: 'The same page at 390px' }],
+        media: [heroMedia()],
+      })],
+    },
+    {
+      // fullBleed picks one carrier. With the specimen holding the only usable
+      // image, the renditions are declared and none is the picked one.
+      name: 'specimen holds the image, renditions do not',
+      specimen: withQuote,
+      renditions: [
+        ill({ id: 'rd_nomedia_a', label: 'Locale fanout 1/9', blocks: [{ type: 'paragraph', text: 'Förderband-Antriebseinheiten für den Dauerbetrieb.' }] }),
+        ill({ id: 'rd_nomedia_b', label: 'Locale fanout 2/9', blocks: [{ type: 'paragraph', text: 'Unités motrices de convoyeur pour service continu.' }] }),
+      ],
+    },
+    {
+      // fullBleed again, from the other side: one rendition carries the image
+      // and is scoped in the overlay; the others are declared and dropped.
+      name: 'one rendition carries the image, the rest do not',
+      specimen: specimen({ media: [], blocks: specimen().blocks.filter((b) => b.type !== 'media') }),
+      renditions: [
+        ill({
+          id: 'rd_withmedia',
+          label: 'Hero, assembled',
+          blocks: [{ type: 'media', ref: 'md_hero' }],
+          media: [{ id: 'md_hero', dataUri: PIXEL, alt: 'The assembled hero', intrinsic: { w: 1200, h: 675 }, bytes: 68 }],
+        }),
+        ill({ id: 'rd_nomedia_c', label: 'Hero, second cut', blocks: [{ type: 'paragraph', text: 'The same hero at a second crop.' }] }),
+      ],
+    },
+    {
+      // systemMap draws five output nodes and collapses the rest into one "N
+      // more renditions" node, which names no rendition and can scope none.
+      name: 'more renditions than the map can draw',
+      specimen: withQuote,
+      renditions: localeFanout(9),
+    },
+    {
+      // A rendition with nothing in it at all — the studio's state between
+      // attaching a rendition and pasting into it.
+      name: 'rendition with no blocks',
+      specimen: withQuote,
+      renditions: [ill({ id: 'rd_empty', label: 'Pasted variant', blocks: [] })],
+    },
+    {
+      // No specimen: several layouts take their empty-state branch here.
+      name: 'no specimen at all',
+      specimen: null,
+      renditions: [ill({ id: 'rd_orphan', label: 'Variant with no source', blocks: [] })],
+    },
+  ];
+}
+
+test('§18.1: every branch of every layout labels every illustrative rendition the scene declares', () => {
+  for (const shape of fallbackShapes()) {
+    for (const layout of SCENE_LAYOUTS) {
+      const scene = buildScene({
+        layout,
+        specimen: shape.specimen,
+        renditions: shape.renditions,
+        headline: 'Ordering and lead time',
+        subhead: 'northwind-industrial.example/equipment/heat-exchangers/hx-400',
+      });
+      const ctx = contextFor(scene, { specimen: shape.specimen, renditions: shape.renditions });
+      const tree = renderSceneTree(scene, ctx);
+      const missing = unlabelled(tree, shape.renditions).map((r) => r.label);
+      assert.deepEqual(missing, [],
+        `${layout} / ${shape.name}: ${missing.length} declared illustrative rendition(s) rendered with no provenance label`);
+    }
+  }
+});
+
+test('the defect: a quoteCard whose rendition holds no quote still labels that rendition', () => {
+  // The exact shape the corpus produced. Before the fix this scene rendered the
+  // specimen's quote, declared an illustrative rendition in `renditionIds`, and
+  // carried no `pp-provenance` element anywhere — which the emitter refused at
+  // severity 1 (`PROVENANCE_UNLABELED`, check `label-count`).
+  const spec = specimen();
+  assert.ok(spec.blocks.some((b) => b.type === 'quote'), 'the specimen has a quote to fall back to');
+  const rends = [rendition({
+    id: 'rd_b43b2462f6be',
+    label: 'Channel variants 4/6',
+    provenance: 'illustrative',
+    blocks: [
+      { type: 'heading', level: 2, text: 'Ordering and lead time' },
+      { type: 'list', ordered: false, items: ['Standard build ships in six weeks from order.'] },
+    ],
+  })];
+  assert.ok(!rends[0].blocks.some((b) => b.type === 'quote'), 'the rendition has no quote of its own');
+
+  const scene = buildScene({ layout: 'quoteCard', specimen: spec, renditions: rends, headline: 'Ordering and lead time' });
+  const tree = renderSceneTree(scene, contextFor(scene, { specimen: spec, renditions: rends }));
+
+  const labels = findAll(tree, isLabel);
+  assert.equal(labels.length, 1, 'exactly one label, for the one rendition that needs one');
+  assert.equal(labels[0].node.a['data-pp-provenance-for'], 'rd_b43b2462f6be');
+  assert.ok(labels[0].ancestors.some((a) => a.a['data-pp-rendition'] === 'rd_b43b2462f6be'),
+    'the label sits inside a subtree scoped to the rendition it names');
+
+  // …and the label names which rendition it is about, so it does not read as
+  // marking the client's own quote — which is on the same screen — illustrative.
+  const html = toHtml(tree);
+  assert.match(html, /pp-provenance-ledger/);
+  assert.ok(html.includes('Channel variants 4/6'), 'the ledger row names the rendition');
+});
+
+test('the ledger appears only where the layout did not label the rendition in place', () => {
+  // A fan card, a split column and a legend chip each carry their own label, so
+  // the ledger is not free noise on the layouts that were already correct.
+  const rends = localeFanout(3);
+  const spec = specimen();
+  for (const layout of ['fanOut', 'splitBeforeAfter', 'stack', 'contentsIndex']) {
+    const scene = buildScene({ layout, specimen: spec, renditions: rends, headline: 'Three markets' });
+    const html = toHtml(renderSceneTree(scene, contextFor(scene, { specimen: spec, renditions: rends })));
+    assert.ok(!html.includes('pp-provenance-ledger'), `${layout} rendered a ledger it does not need`);
+    assert.equal((html.match(/class="pp-provenance"/g) || []).length, rends.length,
+      `${layout}: one label per rendition, and no more`);
+  }
+});
+
+test('the ledger never labels content the client supplied or verified', () => {
+  const rends = [
+    rendition({ id: 'rd_client2', label: 'Their own subject line', provenance: 'client-supplied', blocks: [{ type: 'paragraph', text: 'Copy the client pasted in themselves.' }] }),
+    rendition({ id: 'rd_verified2', label: 'Signed off', provenance: 'verified-by-user', blocks: [{ type: 'paragraph', text: 'Copy somebody promoted.' }] }),
+  ];
+  const spec = specimen();
+  for (const layout of SCENE_LAYOUTS) {
+    const scene = buildScene({ layout, specimen: spec, renditions: rends, headline: 'Nothing to label' });
+    const html = toHtml(renderSceneTree(scene, contextFor(scene, { specimen: spec, renditions: rends })));
+    assert.ok(!html.includes('pp-provenance'), `${layout} labelled content that needs no label`);
+  }
+});
+
+test('a ledger row is not revealable, and survives every beat', () => {
+  const spec = specimen();
+  const rends = [rendition({ id: 'rd_ledger', label: 'Unshown variant', provenance: 'illustrative', blocks: [] })];
+  const scene = buildScene({ layout: 'quoteCard', specimen: spec, renditions: rends, headline: 'A headline' });
+  const tree = renderSceneTree(scene, contextFor(scene, { specimen: spec, renditions: rends }));
+  const rows = findAll(tree, (n) => String(n.a.class || '').includes('pp-provenance-ledger-row'));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].node.a[REVEAL_ATTR], undefined, 'a ledger row is revealable, so a beat could hide it');
+  for (let n = 0; n < scene.beats.length; n++) {
+    const applied = applyBeat(tree, beatFrame(scene, n));
+    assert.equal(findAll(applied, isLabel).length, 1, `the ledger label went missing at beat ${n}`);
+  }
+});
+
+test('the ledger is measured, so its type and the room it takes are both real numbers', () => {
+  const spec = specimen();
+  const rends = [rendition({ id: 'rd_ledger2', label: 'Unshown variant', provenance: 'illustrative', blocks: [] })];
+  const scene = buildScene({ layout: 'quoteCard', specimen: spec, renditions: rends, headline: 'A headline' });
+  const ctx = contextFor(scene, { specimen: spec, renditions: rends });
+
+  for (const bp of ['sm', 'md', 'lg']) {
+    const boxes = measureScene(scene, ctx, bp).boxes;
+    const label = boxes.filter((b) => b.role === 'provenance' && b.slot === 'provenanceLedger');
+    assert.equal(label.length, 1, `${bp}: the ledger label is not measured`);
+    assert.ok(label[0].style.fontSizePx >= 11, `${bp}: §18.1 size floor`);
+    assert.ok(label[0].containerWidthPx > 0 && label[0].containerHeightPx > 0, `${bp}: the ledger row has no box`);
+
+    // The strip is in flow at the foot of the stage, so everything above it has
+    // that much less room. A measurement that ignored it would report the quote
+    // fitting a box the ledger already took part of (§22.2).
+    const bare = buildScene({ layout: 'quoteCard', specimen: spec, renditions: [], headline: 'A headline' });
+    const bareBoxes = measureScene(bare, contextFor(bare, { specimen: spec, renditions: [] }), bp).boxes;
+    const quoted = boxes.find((b) => b.role === 'quote');
+    const bareQuote = bareBoxes.find((b) => b.role === 'quote');
+    assert.ok(quoted && bareQuote, `${bp}: no quote box to compare`);
+    assert.ok(quoted.containerHeightPx < bareQuote.containerHeightPx,
+      `${bp}: the quote box is measured as if the ledger below it took no room`);
+    assert.equal(
+      Math.round(bareQuote.containerHeightPx - quoted.containerHeightPx),
+      Math.round(ledgerAllowance(bp)),
+      `${bp}: the room deducted is not the room the strip takes`,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The same law, over the corpus rather than over a fixture that dodges
+// ---------------------------------------------------------------------------
+
+test('§18.1 holds over every scene of a proof built from the Northwind corpus', async () => {
+  const proof = await buildCorpusProof();
+  const renditionById = new Map(proof.renditions.map((r) => [r.id, r]));
+  const media = new Map((proof.media || []).map((m) => [m.id, m]));
+  const scenes = [...proof.spine, ...proof.branches.flatMap((b) => b.scenes)];
+  assert.ok(scenes.length > 0, 'the corpus proof has scenes');
+
+  /** @type {string[]} */
+  const failures = [];
+  let quoteCardsWithAnUnquotedRendition = 0;
+
+  for (const scene of scenes) {
+    const declared = (scene.renditionIds || []).map((id) => renditionById.get(id)).filter(Boolean);
+    const spec = proof.specimens.find((s) => s.id === scene.specimenId) || null;
+    const tree = renderSceneTree(scene, {
+      brand: proof.brand,
+      specimen: spec,
+      renditions: declared,
+      media,
+      labelIllustrative: true,
+    });
+
+    if (scene.layout === 'quoteCard'
+      && declared.some((r) => needsProvenanceLabel(r) && !(r.blocks || []).some((b) => b.type === 'quote'))) {
+      quoteCardsWithAnUnquotedRendition += 1;
+    }
+
+    for (const r of unlabelled(tree, declared)) {
+      failures.push(`${scene.id} (${scene.layout}): "${r.label}" (${r.id}, ${r.provenance})`);
+    }
+  }
+
+  assert.deepEqual(failures, [],
+    `${failures.length} rendition(s) declared by a corpus scene render with no provenance label`);
+
+  // The corpus is only a regression test for this defect while it still
+  // contains the shape that produced it: a quoteCard scene whose declared
+  // illustrative rendition holds no quote block of its own.
+  assert.ok(quoteCardsWithAnUnquotedRendition > 0,
+    'the corpus no longer produces the scene shape this test exists for — re-derive it before deleting the test');
 });

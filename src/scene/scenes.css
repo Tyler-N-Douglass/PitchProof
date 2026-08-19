@@ -61,6 +61,7 @@
   --pp-sc-index-gap: 12px;
   --pp-sc-index-num-w: 32px;
   --pp-sc-index-row-gap: 10px;
+  --pp-sc-ledger-h: 48px;
   --pp-sc-list-marker-w: 14px;
   --pp-sc-map-canvas-min-h: 180px;
   --pp-sc-map-legend-cols: 1;
@@ -128,6 +129,7 @@
     --pp-sc-index-gap: 14px;
     --pp-sc-index-num-w: 44px;
     --pp-sc-index-row-gap: 12px;
+    --pp-sc-ledger-h: 52px;
     --pp-sc-list-marker-w: 16px;
     --pp-sc-map-canvas-min-h: 240px;
     --pp-sc-map-legend-cols: 3;
@@ -196,6 +198,7 @@
     --pp-sc-index-gap: 16px;
     --pp-sc-index-num-w: 52px;
     --pp-sc-index-row-gap: 14px;
+    --pp-sc-ledger-h: 56px;
     --pp-sc-list-marker-w: 18px;
     --pp-sc-map-canvas-min-h: 280px;
     --pp-sc-map-legend-cols: 5;
@@ -659,6 +662,63 @@
   margin: 8px 0 0;
   align-self: flex-start;
   max-width: 100%;
+}
+
+/*
+ * The provenance ledger (§9, §18.1, §22.6).
+ *
+ * A strip at the foot of the stage carrying one row per rendition the scene
+ * declares, needs a label for, and did not label inside a subtree of its own —
+ * `quoteCard` falling back to the specimen's quote, `fullBleed` showing the
+ * specimen's hero, `sideNote` given a rendition that aligns to nothing,
+ * `systemMap` past its fifth output node. The layouts that label every
+ * rendition where it is drawn render no ledger at all, so this is invisible in
+ * the ordinary case and present in exactly the cases §22.6 is about.
+ *
+ * Nothing here touches the label's own type, colour or size — those are
+ * runtime.css's, because §18.1 makes them a law the emitter checks against the
+ * final cascade. All that is set below is where the row sits.
+ */
+.pp-provenance-ledger {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pp-sc-row-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.pp-provenance-ledger-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--pp-sc-card-pad);
+  min-width: 0;
+  max-width: 100%;
+  padding: calc(var(--pp-sc-card-pad) / 2) var(--pp-sc-card-pad);
+  border: 1px solid var(--pp-border);
+  border-radius: var(--pp-radius);
+}
+
+.pp-provenance-ledger-name {
+  margin: 0;
+  min-width: 0;
+  opacity: 0.72;
+}
+
+.pp-provenance-ledger .pp-provenance { margin: 0; flex: 0 0 auto; }
+
+/* `fullBleed` is a positioned frame with no flow of its own, so the strip is
+   placed against the foot of the frame rather than appended below it. */
+.pp-layout--bleed .pp-provenance-ledger {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  justify-content: flex-end;
+  max-width: 100%;
+  padding: var(--pp-sc-bleed-pad);
 }
 
 /* ------------------------------------------------- layout: splitBeforeAfter */

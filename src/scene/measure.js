@@ -136,7 +136,7 @@ export function collectTextBoxes(node, env) {
 
   /**
    * @param {import('../core/vdom.js').VNode} n
-   * @param {{elementId: string|null, slot: string|null, containerId: string|null, widthPx: number, heightPx: number}} state
+   * @param {{elementId: string|null, slot: string|null, containerId: string|null, widthPx: number, heightPx: number, scaleN?: number, ledger?: boolean}} state
    */
   const visit = (n, state) => {
     if (n === null || n === undefined || n === false) return;
@@ -151,6 +151,14 @@ export function collectTextBoxes(node, env) {
       next = { ...next, elementId: attrs['data-pp-el'] };
     }
 
+    // A provenance ledger in flow at the foot of the stage takes vertical room
+    // from everything above it. The layout root states how many rows it added
+    // (`withProvenanceLedger`), and every box below inherits the fact, so the
+    // slot geometry and the rendered box stay in agreement (§22.2).
+    if (attrs['data-pp-ledger'] !== undefined && attrs['data-pp-ledger'] !== null) {
+      next = { ...next, ledger: Number(attrs['data-pp-ledger']) > 0 };
+    }
+
     if (typeof attrs['data-pp-box'] === 'string') {
       const slot = attrs['data-pp-box'];
       const params = {
@@ -158,6 +166,8 @@ export function collectTextBoxes(node, env) {
         unitWidth: attrs['data-pp-unit-w'] !== undefined ? Number(attrs['data-pp-unit-w']) : undefined,
         unitHeight: attrs['data-pp-unit-h'] !== undefined ? Number(attrs['data-pp-unit-h']) : undefined,
         variant: typeof attrs['data-pp-variant'] === 'string' ? attrs['data-pp-variant'] : undefined,
+        // The ledger strip itself is not shortened by its own presence.
+        ledger: slot === 'provenanceLedger' ? false : next.ledger,
       };
       const size = boxGeometry(slot, bp, params);
       const ordinal = (slotCounts.get(slot) || 0) + 1;
@@ -198,7 +208,7 @@ export function collectTextBoxes(node, env) {
         // scale depends on how many legend chips sit under it — the count the
         // element carries as `data-pp-n`.
         const resolved = styleForRole(role, bp, brand, {
-          scale: spec.svg ? mapScale(bp, next.scaleN) : 1,
+          scale: spec.svg ? mapScale(bp, next.scaleN, next.ledger) : 1,
         });
         /** @type {MeasuredBox} */
         const box = {
@@ -240,6 +250,7 @@ export function collectTextBoxes(node, env) {
     widthPx: root.widthPx,
     heightPx: root.heightPx,
     scaleN: 1,
+    ledger: false,
   });
   return boxes;
 }

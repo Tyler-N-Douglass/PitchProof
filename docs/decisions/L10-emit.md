@@ -228,7 +228,8 @@ artifact to fetch one.
 **Unsettled by:** §13's literal instruction to scan for `http://` and `https://`.
 
 **Decision.** The scanner reads attributes, CSS, and executable script. It does
-not read text nodes, `<title>`, or `<textarea>` content.
+not read text nodes, `<title>`, or `<textarea>` content — nor, per **E23**, the
+closed set of attributes that hold prose rather than references.
 
 **Why.** The artifact presents the prospect's own content, and that content says
 `northwind.example` all over it. A browser never fetches a text node. A scanner
@@ -364,7 +365,9 @@ artifact: three assets resampled to 50%, 229,096 bytes saved, every line's
 **Unsettled by:** §4's `FIXED_SEVERITY` pins `PROVENANCE_UNLABELED`,
 `NETWORK_REFERENCE` and `STALE_CAPTURE`, and leaves `SIZE_BUDGET_EXCEEDED` open.
 
-**Decision.** Severity 1. The emit is refused.
+**Decision.** Severity 1. The emit is refused. This is the one code the gate
+(E24) does not run, because the emitter has measured what the rule can only
+estimate.
 
 **Why.** §22.5: "a 60MB artifact that takes eleven seconds to open is a failed
 artifact." A warning the caller can walk past is exactly the silent partial emit
@@ -395,6 +398,156 @@ paint and the provenance check.
 always spends the least important asset that still has a ladder step, so the
 number of steps applied never decreases as rank increases. The logo on the
 opening beat is the last thing to lose pixels.
+
+---
+
+## E23 — An accessible name is text, not a reference
+
+**Unsettled by:** D10 classifies `src`/`href` and leaves every other attribute
+to the emitter's judgement. E8 settled that a URL in visible text is not a
+reference, and said nothing about a URL in `aria-label`.
+
+**Decision.** A closed, named set of attributes is classified as prose and
+exempt from the absolute-URL catch-all: `alt`, `title`, `label`, `placeholder`,
+`download`, `abbr`, `aria-label`, `aria-description`, `aria-placeholder`,
+`aria-roledescription`, `aria-valuetext`, `aria-keyshortcuts`
+(`TEXT_ATTRS` in `src/emit/scan.js`). No finding at any severity, exactly as for
+a text node. Everything else is untouched: every attribute in `URL_ATTRS` and
+`SRCSET_ATTRS`, every `data-*`, `style`, every `on*` handler, `<meta content>`,
+and every URL inside CSS or JavaScript stay as strict as D10 makes them.
+
+**Why.** E8's argument is that a browser never fetches a text node and the
+artifact presents the prospect's own content, which says their domain all over
+it. An accessible name is that same information delivered to a different sense —
+a screen reader reads `aria-label` aloud exactly as a sighted viewer reads the
+paragraph beside it. Treating one as prose and the other as a reference was an
+inconsistency in the scanner, not a policy, and it had a cost: L8 writes the
+accessible name for a `systemMap` as "…flowing through https://… to 1 output",
+and the corpus proof could not be emitted. The same URL passed in a `<p>` and
+refused the emit as the alt text for the same diagram, with no override. A rule
+that makes the accessible version of a scene less emittable than the
+inaccessible one is a rule that gets layouts stripped of their alt text.
+
+Severity 2 with an explanation was the alternative. It was rejected for the same
+reason: reporting the accessible copy and staying silent on the identical body
+text reintroduces the inconsistency one notch quieter, and a warning on every
+scene that names its source trains people to ignore findings.
+
+The set is closed and every member is a string the HTML specification defines as
+human-readable text that no user agent resolves. `test/emit/scanner.test.mjs`
+asserts both halves: a URL in each of them passes, and the same URL in ten
+fetching attributes, in `data-*`, in `style`, in an event handler, in CSS, in a
+JS literal and in `<meta content>` still refuses.
+
+---
+
+## E24 — `emit()` runs the whole §14 sweep, not only the laws it owns
+
+**Unsettled by:** §14 says "Severity 1 findings block emit. There is no override
+flag." `API.md` Part 3 repeats it. Neither says *which* severity-1 findings, and
+the emitter is not the lane that owns most of the rules.
+
+**Decision.** `emit()` runs every rule in `src/validate/rules.js` — L11's rule
+objects, not a second copy of them — against the artifact that is about to ship,
+and refuses on any severity-1 result. `src/emit/gate.js` builds the same context
+`runPreflight` builds. The one exception is `SIZE_BUDGET_EXCEEDED`, which
+`runPreflight` must *estimate* because it runs before serialization and which
+the emitter has *measured* by the time the gate runs; running the estimate too
+would put two findings for one question in front of the user, less accurate one
+first, and would raise a false alarm on every proof the budgeter successfully
+fits.
+
+**Why.** Until this existed, §14's sentence was false. The emitter enforced the
+laws it owned — network references, provenance, model assets, the size budget,
+the §4 contract — and let `TEXT_OVERFLOW` and `CONTRAST_FAIL` through. The
+critic demonstrated it (F8): a proof whose body text measured below 4.5:1 emitted
+cleanly at 532,712 bytes. The law survived in the shipped product only because
+`src/ui/gate.js` runs preflight before enabling the button, which makes it a
+property of one caller rather than a property of the artifact. §9's reasoning
+about provenance — "enforce this in the emitter, not just in the UI" — applies
+here word for word: a `.pitchproof.html` handed to a client must not depend on
+which program produced it.
+
+**Why not simply call `runPreflight`.** It is a module cycle the bundler refuses
+(D3):
+
+```
+emit/emit.js → validate/index.js → validate/preflight.js
+             → validate/lane-emit.js → emit/index.js → emit/emit.js
+```
+
+The dependency between the two lanes is genuinely mutual: preflight needs L10's
+scanner and provenance checker, which `validate/lane-emit.js` re-exports.
+`validate/rules.js` is the half with no back-edge — it takes both through
+`ctx.deps` rather than importing them — so an emitter that supplies its own can
+run the whole rule set. `docs/disputes/L10-emit.md` (L10-D8) records the one-line
+change to `lane-emit.js` that would remove the cycle for good.
+
+**What keeps the two from drifting.** `test/emit/gate.test.mjs` runs the gate and
+`runPreflight` over the same proof and asserts the finding lists are equal,
+severity for severity and message for message, on a clean proof and on a failing
+one. That test found a real gap on its first run: the gate was not building
+`renderedElementIds`, so half of `BEAT_EMPTY` — the half that catches a beat
+revealing an id the layout does not render — was silently inert.
+
+**Two things the emitter still answers itself**, because the rules cannot:
+
+- the **per-scene** network scan (E6). The rules scan `ctx.html`, which is the
+  document, and the document is the opening beat; scenes 2..n exist only in the
+  model payload.
+- §9's **label-option** check (E10). `normalizeEmitOptions` forces
+  `labelIllustrativeContent` back to true before the model is serialized, so by
+  the time the rule reads `proof.emitOptions` the evidence of the request is
+  gone. L11's rule skips L10's copy of that finding precisely so there is one of
+  it, and only the emitter still knows it was asked for.
+
+---
+
+## E25 — One payload is one budgeting unit
+
+**Unsettled by:** §13 says "compute the byte cost of every asset". It does not
+say what to do when two assets are the same bytes.
+
+**Decision.** `dedupeAssets` collapses assets by exact payload before ranking,
+budgeting and reporting. The surviving entry keeps the earliest placement of any
+reference and lists every id in `DegradationLine.assetIds`.
+
+**Why.** `splitMedia` already deduplicates the media table by exact URI, so the
+artifact pays for a shared payload **once**. Counting it per reference made the
+budgeter believe the proof was larger than it is and degrade further than it
+needed to — on the critic's corpus (F13) it produced 32 degradation lines for 15
+distinct assets and emitted 11.1MB against a 13.5MB budget, throwing away
+quality nobody asked it to spend. And a seller reading that report saw the same
+image downscaled three times, at three different ranks, with identical from/to.
+§13 requires reporting "exactly what was degraded and by how much"; three lines
+for one degradation is not that.
+
+---
+
+## E26 — The degradation prediction is anchored to a measurement
+
+**Unsettled by:** `API.md` gives `DegradationLine` both `predictedBytes` and
+`actualBytes` without saying what the prediction is made from.
+
+**Decision.** The prediction for a ladder step is computed from the **measured**
+cost of the same image at the previous step, corrected for two things the naive
+model ignored: the bytes a PNG spends before storing a pixel
+(`PNG_CONTAINER_BYTES`), and base64 — 4 bytes per 3, plus the
+`data:<mime>;base64,` prefix.
+
+**Why.** The previous model was `bytes × scale²`. It looked reasonable on large
+images and was out by 1200% at the bottom of the ladder, where a 30×18 thumbnail
+is mostly container: it predicted 14 bytes for a file that came out at 182. A
+`predictedBytes` with a median error of 1200% is worse than no prediction,
+because it invites the reader to trust it. Anchoring to a measurement of the
+*same picture* also tracks something no closed form knows: area-averaging noise
+makes it compressible, so entropy changes as the image shrinks.
+
+**Measured**, on the critic's corpus (15 × 600×400 noise PNGs, budgets from 90%
+down to 45% of the full artifact): median error 9.4%, worst 21.5%, and every
+line but one within 10% — against a previous median of 1200% and 13 of 32 lines
+within 10%. `test/emit/budget.test.mjs` asserts a median at or below 25% and a
+worst case at or below 100%, so the model cannot silently regress.
 
 ---
 

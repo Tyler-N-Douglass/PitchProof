@@ -21,7 +21,7 @@ import { h } from '../../core/vdom.js';
 import { renderBlock, summarize } from '../blocks.js';
 import {
   sceneHead, provenanceLabel, emptyState,
-  specimenTitle, specimenMeta, renditionLabel, renditionMeta,
+  specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger,
 } from '../parts.js';
 
 /**
@@ -31,7 +31,10 @@ import {
 export function stack(ctx) {
   const steps = stepsOf(ctx);
 
-  return h('div', {
+  // One step per rendition, each labelled in its own header, so the ledger is
+  // empty in every ordinary case — and asked for anyway, because the
+  // empty-state branch renders no steps at all.
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--stack',
     'data-pp-layout': 'stack',
     'data-pp-box': 'stage',
@@ -40,7 +43,7 @@ export function stack(ctx) {
   steps.length === 0
     ? emptyState('This scene has no states to show yet — attach a specimen or renditions.', { box: 'body' })
     : h('ol', { class: 'pp-stack', 'data-pp-box': 'body', 'data-pp-n': String(steps.length) },
-      steps.map((step, index) => renderStep(ctx, step, index, steps.length))));
+      steps.map((step, index) => renderStep(ctx, step, index, steps.length)))), ctx);
 }
 
 /**

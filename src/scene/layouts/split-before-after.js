@@ -29,6 +29,7 @@ import { renderBlock } from '../blocks.js';
 import {
   sceneHead, panelHead, provenanceLabel, emptyState,
   specimenMeta, specimenTitle, renditionMeta, renditionLabel,
+  withProvenanceLedger,
 } from '../parts.js';
 
 /**
@@ -45,14 +46,18 @@ export function splitBeforeAfter(ctx) {
     ? emptyState('This scene has no specimen and no rendition attached yet.', { box: 'body' })
     : renderSplit(ctx, sourceBlocks, rends, columnCount);
 
-  return h('div', {
+  // Every rendition gets a head cell of its own with its label in it, so the
+  // ledger is normally empty here. It is still asked for: the empty-state
+  // branch above renders no cells at all, and a law that only holds on the
+  // branch somebody remembered is not a law (§18.1).
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--split',
     'data-pp-layout': 'splitBeforeAfter',
     'data-pp-box': 'stage',
     style: { '--pp-sc-split-cols': String(columnCount) },
   },
   sceneHead(ctx, { kicker: 'Their content, and what it becomes' }),
-  body);
+  body), ctx);
 }
 
 /**

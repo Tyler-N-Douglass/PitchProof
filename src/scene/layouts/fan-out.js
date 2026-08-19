@@ -25,7 +25,7 @@ import { h } from '../../core/vdom.js';
 import { renderBlock, summarize } from '../blocks.js';
 import {
   sceneHead, panelHead, provenanceLabel, emptyState, waveGroup,
-  specimenMeta, specimenTitle, renditionLabel,
+  specimenMeta, specimenTitle, renditionLabel, withProvenanceLedger,
 } from '../parts.js';
 
 /** Cards past this count reveal in waves rather than one at a time. */
@@ -40,7 +40,10 @@ export function fanOut(ctx) {
   const rends = Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
   const sourceBlocks = specimen && Array.isArray(specimen.blocks) ? specimen.blocks : [];
 
-  return h('div', {
+  // A card per rendition, each carrying its own label, so the ledger is empty
+  // in every ordinary case. It is asked for on the way out regardless — the
+  // empty-state branch renders no cards, and §18.1 has to hold on every branch.
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--fan',
     'data-pp-layout': 'fanOut',
     'data-pp-box': 'stage',
@@ -50,7 +53,7 @@ export function fanOut(ctx) {
     ? emptyState('This scene has no renditions attached yet.', { box: 'body' })
     : h('div', { class: 'pp-fan', 'data-pp-box': 'body' },
       renderSource(ctx, sourceBlocks, rends.length),
-      renderGrid(ctx, rends)));
+      renderGrid(ctx, rends))), ctx);
 }
 
 /**

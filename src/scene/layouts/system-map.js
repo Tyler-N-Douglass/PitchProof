@@ -35,7 +35,7 @@ import { MAP_DESIGN } from '../geometry.js';
 import { styleForRole } from '../type-scale.js';
 import {
   sceneHead, provenanceLabel, emptyState,
-  specimenTitle, specimenMeta, renditionLabel, renditionMeta,
+  specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger,
 } from '../parts.js';
 
 /** The drawing's design geometry, in viewBox units. */
@@ -64,9 +64,9 @@ export function systemMap(ctx) {
   const hasSubject = !!ctx.specimen || rends.length > 0;
 
   if (!hasSubject) {
-    return h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
+    return withProvenanceLedger(h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
       sceneHead(ctx, { kicker: 'How it runs' }),
-      emptyState('This scene has nothing to map yet — attach a specimen or renditions.', { box: 'body' }));
+      emptyState('This scene has nothing to map yet — attach a specimen or renditions.', { box: 'body' })), ctx);
   }
 
   const shown = rends.slice(0, MAP.maxOutputs);
@@ -87,7 +87,12 @@ export function systemMap(ctx) {
   const recipeCount = new Set(rends.map((r) => r.recipeId).filter(Boolean)).size;
   const transformMeta = recipeCount === 1 ? '1 recipe' : `${recipeCount} recipes`;
 
-  return h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
+  // The legend chips carry the labels, and there is a chip only for the outputs
+  // the drawing can hold: past `MAP.maxOutputs` the rest collapse into one "N
+  // more renditions" node that names no rendition and can scope none. Those are
+  // the renditions the ledger picks up — the room is being told they exist, and
+  // §18.1 does not stop applying because the drawing ran out of room.
+  return withProvenanceLedger(h('div', { class: 'pp-layout pp-layout--map', 'data-pp-layout': 'systemMap', 'data-pp-box': 'stage' },
     sceneHead(ctx, { kicker: 'How it runs' }),
     h('div', { class: 'pp-map', 'data-pp-box': 'body' },
       h('div', { class: 'pp-map-canvas' },
@@ -178,7 +183,7 @@ export function systemMap(ctx) {
         shown.length === 0
           ? h('li', { class: 'pp-map-chip pp-map-chip--empty', 'data-pp-box': 'mapLegend', 'data-pp-n': '1' },
             h('p', { class: 'pp-map-chip-label', 'data-pp-tx': 'caption' }, 'No renditions attached to this scene.'))
-          : null)));
+          : null))), ctx);
 }
 
 /**

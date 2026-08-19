@@ -10,7 +10,11 @@
  *    and it never puts `data-pp-el` on the label — a beat can hide anything
  *    carrying that attribute, and a label a beat can hide is not
  *    non-removable. The emitter re-checks the result (§22.6); this is the
- *    render-side half of the same law.
+ *    render-side half of the same law. `withProvenanceLedger()` closes the
+ *    gap the fallback branches left: a layout that selects — `quoteCard` takes
+ *    one quotation, `fullBleed` one image, `systemMap` five outputs — can leave
+ *    a declared illustrative rendition on the scene with no label anywhere, and
+ *    every layout now ends by asking for the ones it did not label.
  *  - **§18.2 no invention.** Nothing here writes a number, a customer name, a
  *    testimonial or a logo that is not already in the model. `renditionCount()`
  *    counts renditions the proof actually contains; that is arithmetic over
@@ -64,6 +68,136 @@ export function provenanceLabel(rendition, ctx) {
     'data-pp-tx': 'provenance',
     'data-pp-provenance-for': rendition.id,
   }, PROVENANCE_LABEL_TEXT);
+}
+
+/**
+ * The class on the strip of labels a layout renders for renditions it declared
+ * but did not label inside a subtree of their own.
+ */
+export const PROVENANCE_LEDGER_CLASS = 'pp-provenance-ledger';
+
+/**
+ * The renditions a rendered tree has already labelled: every id that appears as
+ * `data-pp-rendition` on some element whose subtree contains a
+ * `pp-provenance` label.
+ *
+ * Derived from the tree rather than declared beside it, for the same reason the
+ * beat plan is (decision L8-2): a table of "which layout labels which
+ * rendition where" is a second description of the render, and the two drift the
+ * first time a layout gains a fallback branch. This walks what was actually
+ * emitted.
+ *
+ * The union across scopes is deliberate. A layout may scope one rendition in
+ * more than one place — `splitBeforeAfter` gives it a panel head and a body
+ * cell per row — and the label lives in exactly one of them; a rendition
+ * labelled anywhere is labelled.
+ *
+ * @param {import('../core/vdom.js').VNode} tree
+ * @returns {Set<string>}
+ */
+export function labelledRenditionIds(tree) {
+  /** @type {Set<string>} */
+  const labelled = new Set();
+
+  /**
+   * @param {import('../core/vdom.js').VNode} node
+   * @param {string[]} scopes  ids of the `data-pp-rendition` ancestors
+   */
+  const visit = (node, scopes) => {
+    if (node === null || node === undefined || node === false) return;
+    if (Array.isArray(node)) { node.forEach((child) => visit(child, scopes)); return; }
+    if (typeof node !== 'object' || 'raw' in node) return;
+    const attrs = node.a || {};
+    const owner = attrs['data-pp-rendition'];
+    const next = typeof owner === 'string' && owner ? scopes.concat([owner]) : scopes;
+    if (String(attrs.class || '').split(/\s+/).includes(PROVENANCE_LABEL_CLASS)) {
+      for (const id of next) labelled.add(id);
+    }
+    (node.c || []).forEach((child) => visit(child, next));
+  };
+
+  visit(tree, []);
+  return labelled;
+}
+
+/**
+ * The renditions a scene declares, needs a label for, and has not labelled.
+ * @param {import('../runtime/layouts.js').LayoutContext} ctx
+ * @param {Set<string>} labelled
+ * @returns {import('../core/contracts.d.ts').Rendition[]}
+ */
+export function unlabelledRenditions(ctx, labelled) {
+  const rends = ctx && Array.isArray(ctx.renditions) ? ctx.renditions.filter(Boolean) : [];
+  return rends.filter((r) => needsProvenanceLabel(r) && !labelled.has(r.id));
+}
+
+/**
+ * Append the provenance ledger to a finished layout tree (§9, §18.1, §22.6).
+ *
+ * **The rule this implements.** A scene's `renditionIds` are the material the
+ * scene is built out of, and the room is looking at a scene built out of them
+ * whether or not the layout chose to put every one of them on screen. So: every
+ * rendition a scene declares that needs a provenance label carries one, in
+ * every layout, on every branch the layout can take. Where the layout scopes
+ * the rendition and labels it there — a fan card, a split column, a legend chip
+ * — nothing is added. Where it does not, the ledger carries the label, named to
+ * the rendition it is about.
+ *
+ * **Why the label names the rendition.** A ledger row appears exactly where the
+ * rendition's own material is *not* under the label, so an unnamed label would
+ * float beside whatever the layout did render — which, on `quoteCard` and
+ * `fullBleed`, is often the prospect's own content. Marking the client's page
+ * "illustrative" is the same law read backwards (§18.3). The row names the
+ * rendition, so the label is a statement about that rendition and about nothing
+ * else on the screen.
+ *
+ * **Why not "only label what is visibly rendition-derived".** Because a layout
+ * cannot tell. `quoteCard` renders `scene.headline`, and in a real proof that
+ * headline is frequently the rendition's own leading heading — rendition text
+ * on screen with nothing in the layout that knows it. Deciding from what the
+ * scene *declares* is the predicate the layout can actually evaluate, and it
+ * can only over-state the presence of illustrative material, never hide it.
+ * Recorded as decision L8-13.
+ *
+ * The row is a `data-pp-rendition` scope of its own, so the label sits inside
+ * the subtree of the rendition it describes exactly like every other label, and
+ * carries no `data-pp-el`, so no beat can hide it.
+ *
+ * @param {import('../core/vdom.js').VNode} tree   the layout's root element
+ * @param {import('../runtime/layouts.js').LayoutContext} ctx
+ * @returns {import('../core/vdom.js').VNode}
+ */
+export function withProvenanceLedger(tree, ctx) {
+  if (!tree || typeof tree !== 'object' || Array.isArray(tree) || 'raw' in tree) return tree;
+  if (!ctx || ctx.labelIllustrative === false) return tree;
+
+  const pending = unlabelledRenditions(ctx, labelledRenditionIds(tree));
+  if (pending.length === 0) return tree;
+
+  const order = new Map((Array.isArray(ctx.renditions) ? ctx.renditions : [])
+    .filter(Boolean).map((r, i) => [r.id, i]));
+
+  const rows = pending.map((rendition) => h('li', {
+    class: 'pp-provenance-ledger-row',
+    'data-pp-box': 'provenanceLedger',
+    'data-pp-container': 'ledger',
+    'data-pp-rendition': rendition.id,
+  },
+  h('p', {
+    class: 'pp-provenance-ledger-name',
+    'data-pp-tx': 'noteLabel',
+    'data-pp-clamp': '1',
+  }, renditionLabel(rendition, order.has(rendition.id) ? order.get(rendition.id) : 0)),
+  provenanceLabel(rendition, ctx)));
+
+  const ledger = h('ul', { class: PROVENANCE_LEDGER_CLASS }, rows);
+  // The root states the strip's row count so `measureScene` can take the room
+  // it costs out of every box above it (`ledgerAllowance` in geometry.js).
+  return {
+    ...tree,
+    a: { ...(tree.a || {}), 'data-pp-ledger': String(rows.length) },
+    c: (tree.c || []).concat([ledger]),
+  };
 }
 
 /**

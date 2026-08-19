@@ -415,6 +415,21 @@ export function buildCorpusBranches(specimens, renditions, deps) {
       layout: 'splitBeforeAfter',
       returnPolicy: 'nextSpineScene',
     },
+    {
+      // Nested. A room does not ask its objections one at a time: the answer to
+      // the approval-chain question invites the budget question, and §11's
+      // return stack exists precisely so the presenter can take the second
+      // without losing their way back out of the first. A deck with only flat
+      // branches never exercises the unwinding, and §22.4's stranding case —
+      // the one D1 was — lives entirely in the nested path.
+      objection: 'Even approved, this lands in next year\'s capital budget',
+      aliases: ['budget', 'capex', 'next year', 'funding'],
+      kind: 'product',
+      layout: 'sideNote',
+      returnPolicy: 'anchor',
+      // Offered from inside the approval-chain branch rather than from the spine.
+      nestedUnder: 'This will not clear our approval chain this quarter',
+    },
   ];
 
   const branches = plan.map((entry) => {
@@ -433,10 +448,10 @@ export function buildCorpusBranches(specimens, renditions, deps) {
         subhead: null,
         idMinter: deps.idMinter,
       })],
-      // Not part of §4's `Branch`. Carried here so `anchorBranches` can put the
-      // branch on the spine scene built from the same specimen, and dropped
-      // before the branch reaches the proof.
+      // Not part of §4's `Branch`. Carried here so `anchorBranches` can place
+      // the branch, and dropped before the branch reaches the proof.
       anchorSpecimenId: specimen.id,
+      nestedUnder: entry.nestedUnder || null,
     };
   });
   return branches;
@@ -456,8 +471,21 @@ export function buildCorpusBranches(specimens, renditions, deps) {
  * @returns {any[]} the branches, without the fixture-only field
  */
 export function anchorBranches(spine, branches) {
+  const byObjection = new Map(branches.map((b) => [b.objection, b]));
   return branches.map((branch) => {
-    const { anchorSpecimenId, ...rest } = branch;
+    const { anchorSpecimenId, nestedUnder, ...rest } = branch;
+
+    // A nested branch is offered from a scene *inside* another branch, not from
+    // the spine. That is what puts a second frame on §11's return stack.
+    if (nestedUnder) {
+      const parent = byObjection.get(nestedUnder);
+      if (!parent) throw new Error(`corpus: no branch says "${nestedUnder}" to nest under`);
+      const host = parent.scenes[0];
+      if (!host) throw new Error(`corpus: the branch "${nestedUnder}" has no scene to offer from`);
+      if (!host.branchAnchors.includes(rest.id)) host.branchAnchors.push(rest.id);
+      return rest;
+    }
+
     const scene = spine.find((s) => s.specimenId === anchorSpecimenId) || spine[0];
     if (!scene) throw new Error('corpus: the spine is empty, so no branch can be anchored');
     if (!scene.branchAnchors.includes(rest.id)) scene.branchAnchors.push(rest.id);
@@ -526,4 +554,253 @@ export async function buildCorpusProofWithTrace(options = {}) {
   const captured = await ingestCorpus({ http: options.http, clock });
   const proof = await buildCorpusProof({ ...options, clock });
   return { proof, captured, idMinter };
+}
+
+// ---------------------------------------------------------------------------
+// Planted defects
+// ---------------------------------------------------------------------------
+
+/**
+ * §17.4 asks for precision and recall against a corpus with known defects. The
+ * planted-defect corpora each lane built measure that over synthetic text,
+ * because synthetic text is the only place ground truth is knowable by
+ * construction — and that is exactly the gap the §20 critic named: a detector
+ * can be perfect on planted paragraphs and blind on a real page.
+ *
+ * A plant here injects one named defect into the corpus proof **through the
+ * same published surfaces the rest of the pipeline uses**, and returns what it
+ * injected. So precision and recall can be measured over the prospect's own copy
+ * in real layouts, with ground truth that is still knowable — because we put it
+ * there.
+ *
+ * What a plant may not do: reach into a lane's internals, construct a §4 record
+ * by hand that no surface would produce, or plant a defect the detector is
+ * already looking for by name. Each one below is a thing a seller could actually
+ * do to their own deck by accident.
+ *
+ * @typedef {object} Plant
+ * @property {string} name
+ * @property {import('../../../src/core/contracts.d.ts').FindingCode} code
+ * @property {string} describe   what a seller did to cause this
+ * @property {boolean} [expectsNothing]  the pipeline is expected to neutralise
+ *   this before the detector sees it; the plant is a negative control
+ * @property {(proof: any) => any[]} apply  mutates the proof, returns the expected findings
+ * @property {Record<string, string>} [alsoMoves]  other finding codes this defect
+ *   legitimately implies, each with the reason. Anything *not* declared here and
+ *   moved by the plant is a precision failure and fails the test.
+ */
+
+/** A token no line breaker can break, long enough to overflow any container. */
+const UNBREAKABLE = 'HX400SHELLANDTUBECOUNTERFLOWCONFIGURATIONWITHREMOVABLEBUNDLEANDFLOATINGHEAD';
+
+/** @type {Plant[]} */
+export const PLANTS = [
+  {
+    name: 'TEXT_OVERFLOW_CLIP',
+    code: 'TEXT_OVERFLOW',
+    describe: 'the seller pasted an unbroken part number into a headline',
+    apply(proof) {
+      // A heading, because headings are the boxes layouts clip rather than clamp.
+      const scene = proof.spine.find((s) => s.headline);
+      if (!scene) throw new Error('corpus plant: no scene carries a headline');
+      scene.headline = `${scene.headline} ${UNBREAKABLE}`;
+      return [{ code: 'TEXT_OVERFLOW', sceneId: scene.id, severity: 1 }];
+    },
+  },
+  {
+    name: 'NETWORK_REFERENCE',
+    code: 'NETWORK_REFERENCE',
+    describe: 'the brand team\'s logo SVG links a remote raster it renders on top of',
+    apply(proof) {
+      // The route that actually reaches the document. §4's `LogoAsset` carries
+      // the mark as `data` — SVG markup, inlined — and an SVG may reference an
+      // external image. It is a real shape: a brand's "vector" logo is often a
+      // vector frame around a placed raster, and the export keeps the link.
+      // Nothing about it looks like a network reference until it is scanned.
+      const logo = proof.brand.logos.find((l) => l.variant === 'primary') || proof.brand.logos[0];
+      if (!logo) throw new Error('corpus plant: the brand carries no logo');
+      if (logo.kind !== 'svg' || typeof logo.data !== 'string') {
+        throw new Error('corpus plant: the primary logo is not inline SVG, so there is nothing to smuggle a link into');
+      }
+      logo.data = logo.data.replace(
+        '</svg>',
+        '  <image href="https://cdn.northwind-industrial.example/logo-raster@2x.png" x="0" y="0" width="240" height="48"/>\n</svg>');
+      return [{ code: 'NETWORK_REFERENCE', logoId: logo.id, severity: 1 }];
+    },
+  },
+  {
+    // A negative control, and the one plant that expects *nothing*.
+    //
+    // §13's scanner refuses an absolute URL in the emitted document, and dispute
+    // 31 argues that makes an outbound link in the prospect's own content a
+    // severity-1 refusal. In practice it never gets that far: `scene/blocks.js`
+    // renders a `cta` block's label and drops its `href`, so the URL never
+    // reaches the document to be scanned. Two defences, and this asserts the
+    // outer one still holds — if a layout ever starts rendering hrefs, this
+    // plant starts failing before the scanner has to catch it.
+    name: 'CTA_LIVE_LINK_NEUTRALISED',
+    code: 'NETWORK_REFERENCE',
+    expectsNothing: true,
+    describe: "the seller kept a live 'Request a quote' link out of the source page",
+    apply(proof) {
+      const rendition = proof.renditions.find((r) => r.blocks.length > 0);
+      if (!rendition) throw new Error('corpus plant: no rendition carries blocks');
+      rendition.blocks = rendition.blocks.concat([{
+        type: 'cta',
+        label: 'Request a quote',
+        href: 'https://www.northwind-industrial.example/contact/',
+      }]);
+      return [{ code: 'NETWORK_REFERENCE', renditionId: rendition.id, expectCount: 0 }];
+    },
+  },
+  {
+    name: 'CONTRAST_FAIL',
+    code: 'CONTRAST_FAIL',
+    describe: 'the seller hand-picked a body colour off the brand guide',
+    apply(proof) {
+      // §7's solve guarantees 4.5:1, so the only way to reach this state is the
+      // one the studio offers: a manual override applied after the solve. That
+      // is the path worth testing — it is the path a real failure takes.
+      const onSurface = proof.brand.colors.find((c) => c.role === 'onSurface');
+      const surface = proof.brand.colors.find((c) => c.role === 'surface');
+      if (!onSurface || !surface) throw new Error('corpus plant: the palette has no surface pair');
+      onSurface.hex = '#b9c4cf';          // ~1.9:1 on white
+      onSurface.source = 'manual';
+      onSurface.contrastWithPair = null;  // no longer the solver's number
+      proof.brand.manualOverrides = [...(proof.brand.manualOverrides || []), 'onSurface'];
+      return [{ code: 'CONTRAST_FAIL', role: 'onSurface', severity: 1 }];
+    },
+  },
+  {
+    name: 'BRANCH_NO_RETURN',
+    code: 'BRANCH_NO_RETURN',
+    describe: 'the seller deleted the scene a branch was hung off',
+    apply(proof) {
+      const branch = proof.branches.find((b) => b.returnPolicy === 'anchor');
+      if (!branch) throw new Error('corpus plant: no anchored branch to strand');
+      for (const scene of proof.spine) {
+        scene.branchAnchors = scene.branchAnchors.filter((id) => id !== branch.id);
+      }
+      return [{ code: 'BRANCH_NO_RETURN', branchId: branch.id }];
+    },
+  },
+  {
+    name: 'BRANCH_UNREACHABLE',
+    code: 'BRANCH_UNREACHABLE',
+    describe: 'the seller cleared a branch\'s objection and deleted the scene that offered it',
+    apply(proof) {
+      // Subtractive on purpose. An earlier version of this plant added an
+      // orphan branch with a scene of its own, and that scene's copy overflowed
+      // like every other scene built from the same specimen — so the plant moved
+      // `TEXT_OVERFLOW` as well, and the precision measurement was reporting the
+      // fixture's own content rather than the detector's behaviour. Taking an
+      // existing branch off the deck changes nothing but reachability.
+      const branch = proof.branches.find((b) => b.objection);
+      if (!branch) throw new Error('corpus plant: every branch is already unnamed');
+      branch.objection = '';
+      branch.aliases = [];
+      for (const scene of proof.spine) {
+        scene.branchAnchors = scene.branchAnchors.filter((id) => id !== branch.id);
+      }
+      return [{ code: 'BRANCH_UNREACHABLE', branchId: branch.id }];
+    },
+    alsoMoves: {
+      // Inherent, not collateral. Nothing anchors the branch, so §10's
+      // `returnPolicy: 'anchor'` has no scene to return to. Both findings are
+      // true of it and both should be reported.
+      BRANCH_NO_RETURN: 'an unanchored branch has no return target either',
+    },
+  },
+  {
+    name: 'ASSET_MISSING',
+    code: 'ASSET_MISSING',
+    describe: 'the seller removed an image the copy still refers to',
+    apply(proof) {
+      for (const specimen of proof.specimens) {
+        const block = (specimen.blocks || []).find((b) => b.type === 'media');
+        if (!block) continue;
+        specimen.media = (specimen.media || []).filter((m) => m.id !== block.ref);
+        for (const rendition of proof.renditions) {
+          if (rendition.specimenId !== specimen.id) continue;
+          rendition.media = (rendition.media || []).filter((m) => m.id !== block.ref);
+        }
+        return [{ code: 'ASSET_MISSING', specimenId: specimen.id, ref: block.ref, severity: 1 }];
+      }
+      throw new Error('corpus plant: no specimen carries a media block');
+    },
+  },
+  {
+    name: 'BEAT_EMPTY',
+    code: 'BEAT_EMPTY',
+    describe: 'the seller swapped a scene\'s layout and left its beats pointing at the old one',
+    apply(proof) {
+      const scene = proof.spine.find((s) => (s.beats || []).length > 1);
+      if (!scene) throw new Error('corpus plant: no scene has more than one beat');
+      const beat = scene.beats[scene.beats.length - 1];
+      beat.reveals = ['el_planted_nothing_reveals_this'];
+      return [{ code: 'BEAT_EMPTY', sceneId: scene.id, beatId: beat.id }];
+    },
+  },
+  {
+    name: 'DUPLICATE_SCENE',
+    code: 'DUPLICATE_SCENE',
+    describe: 'the seller duplicated a scene and never changed it',
+    apply(proof) {
+      const scene = proof.spine[1] || proof.spine[0];
+      if (!scene) throw new Error('corpus plant: the spine is empty');
+      const specimen = proof.specimens.find((s) => s.id === scene.specimenId) || null;
+      const renditions = proof.renditions.filter((r) => scene.renditionIds.includes(r.id));
+      // Built by `buildScene`, not deep-copied. A structural copy keeps the
+      // original's element ids, so every beat in the copy would reveal ids that
+      // exist only in the scene it was copied from — three `BEAT_EMPTY` findings
+      // the plant did not mean to introduce. A scene built from the same inputs
+      // is what a seller's "duplicate" actually produces.
+      const copy = sceneLane.buildScene({
+        layout: scene.layout,
+        specimen,
+        renditions,
+        headline: scene.headline,
+        subhead: scene.subhead,
+        id: `${scene.id}x`,
+      });
+      proof.spine = proof.spine.concat([copy]);
+      return [{ code: 'DUPLICATE_SCENE', sceneId: copy.id, ofSceneId: scene.id }];
+    },
+    alsoMoves: {
+      // Inherent. The copy renders the same text in the same containers, so it
+      // overflows in the same places. A duplicate-scene detector that suppressed
+      // them would be hiding findings the seller still has to fix once they keep
+      // one of the two.
+      TEXT_OVERFLOW: 'the copy overflows wherever the original does',
+    },
+  },
+];
+
+/** @param {string} name @returns {Plant} */
+export function plantByName(name) {
+  const plant = PLANTS.find((p) => p.name === name);
+  if (!plant) throw new Error(`corpus: no plant named ${name}. Known: ${PLANTS.map((p) => p.name).join(', ')}`);
+  return plant;
+}
+
+/**
+ * A corpus proof with one named defect planted in it, and the ground truth for
+ * what was planted.
+ *
+ * The clean proof is built first and asserted clean of the planted code, so a
+ * plant that was already true of the corpus is caught here rather than being
+ * scored as a detection.
+ *
+ * @param {string} name  one of `PLANTS[].name`
+ * @param {any} [options]  passed to `buildCorpusProof`
+ * @returns {Promise<{proof: any, plant: Plant, expected: any[]}>}
+ */
+export async function buildPlantedProof(name, options = {}) {
+  const plant = plantByName(name);
+  const proof = await buildCorpusProof(options);
+  const expected = plant.apply(proof);
+  if (!Array.isArray(expected) || expected.length === 0) {
+    throw new Error(`corpus: plant ${name} declared no ground truth`);
+  }
+  return { proof, plant, expected };
 }

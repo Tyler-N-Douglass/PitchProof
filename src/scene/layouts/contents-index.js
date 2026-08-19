@@ -21,7 +21,7 @@ import { h } from '../../core/vdom.js';
 import { blockText } from '../../core/contracts.js';
 import {
   sceneHead, provenanceLabel, emptyState, waveGroup,
-  specimenTitle, renditionLabel, renditionMeta,
+  specimenTitle, renditionLabel, renditionMeta, withProvenanceLedger,
 } from '../parts.js';
 
 /**
@@ -31,7 +31,9 @@ import {
 export function contentsIndex(ctx) {
   const entries = entriesFor(ctx);
 
-  return h('div', {
+  // Every rendition is listed as an entry of its own and labelled there, so the
+  // ledger is empty unless the entry list itself came up empty.
+  return withProvenanceLedger(h('div', {
     class: 'pp-layout pp-layout--index',
     'data-pp-layout': 'contentsIndex',
     'data-pp-box': 'stage',
@@ -53,7 +55,7 @@ export function contentsIndex(ctx) {
         entry.blurb
           ? h('p', { class: 'pp-index-blurb', 'data-pp-tx': 'indexBlurb', 'data-pp-clamp': '2' }, entry.blurb)
           : null,
-        provenanceLabel(entry.rendition, ctx))))));
+        provenanceLabel(entry.rendition, ctx)))))), ctx);
 }
 
 /**

@@ -23,7 +23,9 @@
  */
 
 import { h } from '../../core/vdom.js';
-import { provenanceLabel, emptyState, specimenTitle, renditionLabel } from '../parts.js';
+import {
+  provenanceLabel, emptyState, specimenTitle, renditionLabel, withProvenanceLedger,
+} from '../parts.js';
 
 /**
  * @param {import('../../runtime/layouts.js').LayoutContext} ctx
@@ -33,7 +35,12 @@ export function fullBleed(ctx) {
   const pick = pickVisual(ctx);
   const scene = ctx.scene;
 
-  return h('div', {
+  // `pickVisual` selects one carrier. Where the specimen supplied the image the
+  // selected rendition is null, and where several renditions are attached only
+  // the one that carried a usable image is scoped — so the overlay's label
+  // covers at most one of them. The ledger carries the rest, pinned to the foot
+  // of the frame by `.pp-layout--bleed .pp-provenance-ledger`.
+  return withProvenanceLedger(h('div', {
     class: `pp-layout pp-layout--bleed${pick.media ? '' : ' pp-layout--bleed-type'}`,
     'data-pp-layout': 'fullBleed',
     'data-pp-box': 'stage',
@@ -78,7 +85,7 @@ export function fullBleed(ctx) {
     !scene.headline && !scene.subhead && !pick.caption && !pick.source
       ? emptyState('This scene has no headline yet.')
       : null),
-  provenanceLabel(pick.rendition, ctx)));
+  provenanceLabel(pick.rendition, ctx))), ctx);
 }
 
 /**

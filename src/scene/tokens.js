@@ -82,6 +82,7 @@ export const GEOM = {
     'map-legend-h': 120,
     'map-legend-cols': 1,
     'map-canvas-min-h': 180,
+    'ledger-h': 48,
   },
   md: {
     'head-h': 104,
@@ -116,6 +117,7 @@ export const GEOM = {
     'map-legend-h': 104,
     'map-legend-cols': 3,
     'map-canvas-min-h': 240,
+    'ledger-h': 52,
   },
   lg: {
     'head-h': 120,
@@ -150,6 +152,7 @@ export const GEOM = {
     'map-legend-h': 104,
     'map-legend-cols': 5,
     'map-canvas-min-h': 280,
+    'ledger-h': 56,
   },
 };
 
