@@ -143,6 +143,32 @@ test('§18.3: the marker is not suppressible — no data-pp-el, and no beat hide
   }
 });
 
+test('§18.3: the marker has no reveal of its own — it can only go dark with the panel it is about', () => {
+  // The marker carries no `data-pp-el`, so no beat addresses it. What is checked
+  // here is the other half: that it is not sitting inside somebody *else's*
+  // reveal. Its nearest revealable ancestor is either absent — the notice strip,
+  // which is visible from the first beat — or it is the panel that names the
+  // client's content, in which case the marker goes dark exactly when that
+  // content does and never on its own.
+  const spec = editedSpecimen();
+  const title = spec.title;
+  for (const layout of SCENE_LAYOUTS) {
+    const rends = localeFanout(2);
+    const scene = buildScene({ layout, specimen: spec, renditions: rends, headline: 'H' });
+    const tree = renderSceneTree(scene, contextFor(scene, { specimen: spec, renditions: rends }));
+    for (const { node, ancestors } of findAll(tree, isMark)) {
+      const revealable = ancestors.filter((a) => typeof a.a[REVEAL_ATTR] === 'string');
+      if (revealable.length === 0) continue;
+      const nearest = revealable[revealable.length - 1];
+      assert.ok(toHtml(nearest).includes(title),
+        `${layout}: the marker's reveal (${nearest.a[REVEAL_ATTR]}) does not carry the client's content`);
+      assert.ok(!toHtml(nearest).includes('data-pp-rendition'),
+        `${layout}: the marker rides a rendition's reveal, not the specimen's`);
+      assert.equal(node.a[REVEAL_ATTR], undefined);
+    }
+  }
+});
+
 test('§18.3: no build flag turns the marker off — the function has no switch to flip', () => {
   const spec = editedSpecimen();
   // §9 gives a presenter-only build one legitimate way to drop the *provenance*

@@ -162,6 +162,46 @@ test('the provenance label takes its type from runtime.css, and this sheet does 
   }
 });
 
+test('§18.3: one rule decides how legible the edit marker is, and nothing else may reach it', () => {
+  // The §18.1 label's type lives in runtime.css because the emitter checks it
+  // against the final cascade. §18.3's marker is this lane's own element, so the
+  // protection has to be built here: exactly one rule sizes, colours and shows
+  // it, and no other rule in the sheet may touch the properties that could take
+  // it away. A ban written against a single selector would not survive the next
+  // rule somebody adds, so this is written against *every* rule that reaches the
+  // class — the same shape the provenance ban above had to grow (L8-25).
+  const spec = TYPE_ROLES.editedMark;
+  assert.equal(spec.definedIn, undefined, 'the marker is styled here, so it is checked here');
+
+  const base = rule('.pp-scene .pp-edited');
+  assert.ok(base, 'nothing in this sheet gives the marker a box');
+  assert.equal(base.decls.opacity, '1', 'the marker does not declare itself visible');
+  assert.equal(base.decls.visibility, 'visible', 'the marker does not declare itself visible');
+  assert.ok(base.decls.background && base.decls.color, 'the marker does not declare a contrast pair');
+  // The pair is the one the role solver guarantees at >= 4.5:1 and the one
+  // src/validate/contrast.js checks — the same pair runtime.css gives §18.1's
+  // label, and for the same reason.
+  const label = parseCss(RUNTIME_CSS).find((r) => r.selector === '.pp-provenance');
+  assert.equal(base.decls.background, label.decls.background, 'the two honesty markers wear different fills');
+  assert.equal(base.decls.color, label.decls.color, 'the two honesty markers wear different inks');
+
+  // The size floor, at every breakpoint, read off the sheet rather than trusted.
+  for (const bp of ['sm', 'md', 'lg']) {
+    const declared = sceneVars(bp)['--pp-sc-fs-edited-mark'];
+    assert.ok(Number(/(\d+)/.exec(declared)[1]) >= 11, `${bp}: the marker is declared at ${declared}`);
+  }
+
+  const reaching = RULES.filter((r) => r.selector.split(',')
+    .some((sel) => /(^|[\s>+~])\.pp-edited(\s|$|[.:[])/.test(`${sel.trim()} `)));
+  assert.ok(reaching.length >= 2, 'no rule in this sheet touches the marker');
+  for (const r of reaching) {
+    if (r === base) continue;
+    for (const banned of ['display', 'opacity', 'visibility', 'font-size', 'color', 'background']) {
+      assert.equal(r.decls[banned], undefined, `${r.selector} sets ${banned} on the §18.3 marker`);
+    }
+  }
+});
+
 test('the stage padding the geometry assumes is the one runtime.css declares', () => {
   const root = parseCss(RUNTIME_CSS).find((r) => r.selector === ':root');
   assert.equal(root.decls['--pp-stage-pad'], 'clamp(20px, 3.2vw, 56px)',

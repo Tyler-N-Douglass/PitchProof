@@ -31,7 +31,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  buildCorpusProof, ingestCorpus, sectionBlocks, CORPUS_SEED,
+  buildCorpusProof, buildPlantedProof, ingestCorpus, sectionBlocks, CORPUS_SEED,
 } from '../fixtures/corpus/proof.mjs';
 import {
   CORPUS_PAGES, CORPUS_DOCUMENTS, CORPUS_BRAND, CORPUS_ASSETS,
@@ -39,7 +39,8 @@ import {
 } from '../fixtures/corpus/index.mjs';
 import { collectColors } from '../../src/brand/color.js';
 import { emit } from '../../src/emit/index.js';
-import { registerAllLayouts } from '../../src/scene/index.js';
+import { registerAllLayouts, specimenEdited, EDITED_MARK_CLASS } from '../../src/scene/index.js';
+import { runPreflight, autoFixes } from '../../src/validate/index.js';
 import { renderLayout } from '../../src/runtime/layouts.js';
 import { toHtml } from '../../src/core/vdom.js';
 import { buildRuntime } from '../../scripts/build.mjs';
@@ -385,6 +386,70 @@ test('the deck has a nested branch, so the return stack is exercised (§22.4)', 
     assert.ok(hosts.length > 0, `${branch.id} is anchored nowhere at all`);
     assert.ok(!hosts.some((h) => h.id === branch.id), `${branch.id} is offered from inside itself`);
   }
+});
+
+test('an auto-fix that removes the client\'s content is recorded, and the deck says so (§18.3)', async () => {
+  // §18.3: *if a specimen was edited, the artifact says so.* Three lanes hold a
+  // piece of that sentence and no test held the whole of it — L11's fixer calls
+  // markEdited, L6 stores it, L8 renders a marker, and each was checked in its
+  // own lane against its own fixture. This walks the sentence: plant a defect,
+  // take the remedy the studio offers, and look at what the room would see.
+  //
+  // The critic found the first link broken (CRITIQUE-3 P6): the fix spliced the
+  // prospect's content out and set neither `edited` nor `editNotes`, so the
+  // artifact — the one surface the rule is written about — stayed silent.
+  const clock = () => '2026-02-10T10:00:00.000Z';
+  const { proof: planted } = await buildPlantedProof('ASSET_MISSING');
+  const findings = await runPreflight(planted, { clock });
+
+  // The fix on a *specimen*. A rendition is the tool's own draft, and L11
+  // deliberately records nothing when one is trimmed — editing your own work is
+  // not editing the client's.
+  const fixes = autoFixes(planted, findings, { clock })
+    .filter((f) => f.finding.code === 'ASSET_MISSING');
+  const onSpecimen = fixes.find((f) => / of specimen /.test(f.finding.message));
+  assert.ok(onSpecimen, `no ASSET_MISSING fix acts on a specimen: ${fixes.map((f) => f.label).join(' | ')}`);
+
+  const fixed = onSpecimen.apply(planted);
+  const edited = fixed.specimens.filter((s) => s.edited);
+  assert.equal(edited.length, 1, 'removing the client\'s content left no record on any specimen');
+  assert.ok(specimenEdited(edited[0]));
+
+  // The note is what a reader is left with, so it has to say what went and why.
+  const notes = JSON.stringify(edited[0].editNotes);
+  assert.match(notes, /Removed an image/);
+  assert.match(notes, /would have shown to the room as a broken image/);
+  assert.match(notes, /Everything else on the page is as it was captured/);
+
+  // And the deck carries the marker where the client will see it.
+  const scene = fixed.spine.find((sc) => sc.specimenId === edited[0].id);
+  assert.ok(scene, 'the edited specimen is on no scene, so this proves nothing');
+  const html = toHtml(renderLayout({
+    scene,
+    specimen: edited[0],
+    renditions: fixed.renditions.filter((r) => scene.renditionIds.includes(r.id)),
+    brand: fixed.brand,
+    el: (path) => `el_${path}`,
+    revealed: () => true,
+  }));
+  assert.ok(html.includes(EDITED_MARK_CLASS),
+    `the ${scene.layout} layout rendered an edited specimen with no .${EDITED_MARK_CLASS} anywhere`);
+
+  // An untouched specimen must not wear it — a marker on everything says
+  // nothing, which is the failure mode of every honesty label.
+  const untouched = fixed.specimens.find((sp) => !sp.edited && fixed.spine.some((sc) => sc.specimenId === sp.id));
+  assert.ok(untouched, 'every specimen is edited, so the negative case is untested');
+  const cleanScene = fixed.spine.find((sc) => sc.specimenId === untouched.id);
+  const cleanHtml = toHtml(renderLayout({
+    scene: cleanScene,
+    specimen: untouched,
+    renditions: fixed.renditions.filter((r) => cleanScene.renditionIds.includes(r.id)),
+    brand: fixed.brand,
+    el: (path) => `el_${path}`,
+    revealed: () => true,
+  }));
+  assert.ok(!cleanHtml.includes(EDITED_MARK_CLASS),
+    `the ${cleanScene.layout} layout marked an unedited specimen as edited`);
 });
 
 test('nothing in the proof claims to be verified by a user', async () => {

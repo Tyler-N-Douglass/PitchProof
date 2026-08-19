@@ -1089,3 +1089,125 @@ The residual is nine boxes and is entirely accounted for:
 L11 filters nothing by role. The precision assertion holds because the
 measurement says something true about the box, not because its consumer drops a
 population.
+
+---
+
+## L8-32 — The artifact says a specimen was edited, and nothing can talk it out of it
+
+**Defect it came from:** CRITIQUE-3 **P6**, second half, reported by L11 after it
+fixed its own. §18.3 is *"the prospect's own content is presented unmodified on
+the 'before' side; if a specimen was edited, the artifact says so."* Three parties
+had to say it and only two did. The model records it — `Specimen.edited` /
+`editNotes`, L6's dispute #4, written only by `markEdited()`, and now called by
+L11's `ASSET_MISSING` auto-fix so a seller clicking *"Remove the block
+referencing missing media"* leaves a record. The studio shows it at
+`src/ui/panels/specimens.js:153`. The **artifact** did not: `specimenMeta()` in
+`parts.js`, the line printed under every before panel, carried URL, locale and
+kind and nothing else. The model knowing and the studio showing are both upstream
+of the person the rule protects.
+
+### The two questions worth more than the field
+
+**1. What belongs on stage.** `editNotes` is generated prose. One line from
+L11's fix runs to a full sentence naming the file, its caption, the heading it
+sat under and why it went — true and useful, and three times the length of the
+meta line it would have to fit in. A panel meta line cannot carry it; truncating
+it would be worse than not printing it, because a half-sentence about the
+client's own content reads as evasion.
+
+So the deck carries the **fact** and the review surfaces carry the **record**.
+`EDITED_MARK_TEXT` is fixed words in §18.1's shape — what happened and what it
+means, plain and unsoftened — and the marker carries `data-pp-edit-notes`, the
+count of records, so the emitter, the validator and the studio can reach the
+notes themselves without the deck reading them out. The count is a count of
+*records written*, never of "changes to the page": one record can describe two
+removals, and a number the model does not know is a number §18.2 does not let a
+layout invent.
+
+**Why not render the notes in Review mode.** Because L8-14 says no layout branches
+on `ctx.mode`, and that decision is load-bearing: the scene a recipient opens in
+Review is the scene the room saw, which is what keeps reveal ids and the
+measurement mode-invariant. A review surface that carries the full log belongs
+where presenter notes already live — outside the layouts — and is named as such
+in the handoff rather than smuggled in here.
+
+**2. It must not be suppressible.** This is §18.1's class of problem, and
+`judgeLabelRoom` exists in L10 because the provenance label had exactly the hole
+being guarded against here. Four defences, none of them a comment:
+
+- **No flag.** `provenanceLabel(rendition, ctx)` takes a context because §9 gives
+  a presenter-only build one legitimate way to drop the label. §18.3 gives nothing
+  that power, so `editedMark(specimen)` takes a specimen and nothing else. A
+  function with no switch cannot have its switch flipped; the signature is the
+  enforcement, and `test/scene/edited.test.mjs` asserts the arity so a later
+  second argument fails the build rather than passing review.
+- **No `data-pp-el`.** An element without it is always visible, so no beat can
+  reveal-order the marker away from the content it describes.
+- **Every layout, every branch.** Four layouts give the client's content a panel
+  of its own and mark it there: `splitBeforeAfter`'s before column, `fanOut`'s
+  source rail, `stack`'s first step, `sideNote`'s source chip. The other four have
+  nowhere to hang it — `contentsIndex` renders the specimen's headings with no
+  panel head, `quoteCard` one sentence of it, `fullBleed` one image, `systemMap` a
+  node inside an SVG whose legibility the emitter cannot verify (L8-12) — and
+  every layout has an empty-state branch that renders no panel at all. For those,
+  `withEditedNotice()` appends the notice strip, named to the specimen. The sweep
+  reads the tree for a marker already rendered rather than consulting a table of
+  which layout marks where, exactly as `withProvenanceLedger()` does and for the
+  same reason (L8-2, L8-25): a second description of the render drifts from the
+  render the first time a layout grows a branch.
+- **One rule decides its legibility.** `.pp-scene .pp-edited` sets the box, the
+  contrast pair and `opacity: 1; visibility: visible` in one place, and
+  `test/scene/css-agreement.test.mjs` fails the build if any *other* rule in the
+  sheet sets `display`, `opacity`, `visibility`, `font-size`, `color` or
+  `background` on the class. The ban is written against every rule that reaches
+  the selector, not against one selector, because the provenance ban had to grow
+  that shape once already.
+
+### Why the marker is the provenance label's own pill
+
+Same box, same 3px warning rule, same `surfaceAlt`/`onSurfaceAlt` pair — the one
+pairing the role solver guarantees at ≥ 4.5:1 and the one `src/validate/contrast.js`
+checks — and the same 12px, one step above §18.1's floor and flat across
+breakpoints. Two honesty markers in two visual languages would be two things for
+the room to learn and two contrast pairings for nobody to have verified. It is
+`data-pp-fit: shrink` for the same reason the label is, so the measurement reports
+the *room* as a bound rather than claiming the pill fills it (L8-28), and it is
+the third and only new member of that enumerated set.
+
+### Why "the scene's specimen", not "specimen content visibly on screen"
+
+L8-25's argument, one law over. A layout cannot evaluate the second predicate:
+`quoteCard` renders `scene.headline`, and whether that headline is a line of the
+client's page is knowable to L9 and to a text probe in the emitter but not here.
+What a layout *can* evaluate is what the scene was built from, and that predicate
+can only over-state the presence of edited material, never hide it — the direction
+§18.3 wants.
+
+`specimenEdited()` is likewise written as "the flag *or* a record", not
+`edited === true`. A specimen carrying edit notes with the flag unset was edited
+by something that half-remembered to say so, and the marker is the wrong place to
+be extending trust — the same reasoning that made `needsProvenanceLabel()` "not
+one of the two safe values" rather than "equals illustrative".
+
+### What it costs the measurement
+
+The notice is a second foot strip, independent of the provenance ledger and
+present with it or without it, so `withLedger()` became `withFoot()` and takes
+both. `editedNoticeAllowance()` is exact rather than approximate — the strip is
+always one row, because a scene has one specimen — and the ledger's own documented
+single-strip approximation is left exactly as it was, because changing it is a
+different decision with the corpus numbers behind it. `data-pp-edited` on the
+layout root is what carries the fact down the tree, the same mechanism
+`data-pp-ledger` already used, and `test/scene/geometry-browser.test.mjs` renders
+both of the marker's homes so Chromium checks the pill's room and the strip's box
+rather than this file asserting them.
+
+### What is still open, and whose it is
+
+The emitter should check this the way §22.6 checks the provenance label: that a
+scene whose specimen is edited emitted a `.pp-edited`, and that the final cascade
+— including `deps.userCss`, where CRITIQUE-3 P8 found two live attacks on the
+provenance label — leaves it legible. `judgeLabelRoom` is L10's and the attack
+list is L10's, so this is filed for routing rather than reached across for. The
+full `editNotes` log wants a home in the review build, next to presenter notes;
+that surface is L9's and L12's, and the count on the marker is the thread to it.
