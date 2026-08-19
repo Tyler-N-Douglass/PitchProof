@@ -38,7 +38,7 @@ export {
   documentChainPrefix, allScenesOf, nodeText, provenanceFinding, labelOptionFinding,
   glyphPaint, parseFilter, editedScenesOf, htmlHasClass, markerFor,
   PROVENANCE_LABEL_CLASS, EDITED_MARK_CLASS, MIN_LABEL_FONT_PX, LABEL_MIN_WIDTH_EM,
-  LABEL_MIN_TRACKING_EM, LABEL_MAX_BLUR_EM, RENDITION_ATTR, SPECIMEN_ATTR,
+  LABEL_MIN_TRACKING_EM, LABEL_MAX_BLUR_EM, RENDITION_ATTR, SPECIMEN_ATTR, EDITED_FOR_ATTR,
   PROTECTED_MARKERS, LABEL_MARKER, EDITED_MARKER,
 } from './provenance.js';
 

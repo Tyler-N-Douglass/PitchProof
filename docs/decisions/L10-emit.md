@@ -1375,3 +1375,230 @@ no-telemetry law is verified by this scanner on every emit, and a scanner whose
 cost is quadratic in the size of an inlined asset is a scanner a large enough
 proof turns into a hang. Three tests now hold it: the long-run detection cases,
 the long-scheme case, and a bound on the scan time itself.
+
+---
+
+## E40 — The two protected class names are read from L8, not spelled again here
+
+**Unsettled by:** nothing. Found while adding §18.3's enforcement.
+
+**Decision.** `PROVENANCE_LABEL_CLASS` and `EDITED_MARK_CLASS` are imported from
+`src/scene/index.js` and re-exported, rather than declared as string literals in
+`src/emit/provenance.js`. `specimenEdited`, `editRecordCount` and
+`markedSpecimenIds` come from the same place.
+
+**Why.** E17's argument, one law over: *two readers of one format is one reader
+too many*. A second spelling of a class name fails in whichever direction the
+rename goes — the emitter looks for a label that no longer exists and refuses
+every proof, or it looks for one nothing styles and passes everything — and
+neither lane would know which of them was wrong. `pp-provenance` was a literal
+here for four passes and got away with it; `pp-edited` would have been a second
+one, and §18.3's whole point is that the marker is not optional.
+
+`src/scene/index.js` is a leaf as far as this import is concerned: L8's modules
+reach `core/*` and `runtime/layouts.js` and nothing in L10 or L11, so this adds
+no cycle to the one D3 removed.
+
+---
+
+## E41 — The style detector judges a **set** of protected markers, not the provenance label
+
+**Unsettled by:** §18.1 names one label. §18.3 introduces a second marker with
+the same properties — a small pill, a contrast pair, a size floor — and says
+nothing about how it is enforced.
+
+**Decision.** `PROTECTED_MARKERS` is a list of descriptors
+(`{className, noun, title, law, what, emptyText, nonRemovable}`), the scene walk
+collects every element in any of those classes, and `judgeLabelStyle` /
+`judgeLabelRoom` take the descriptor as a third argument that decides only the
+wording of the refusal. A third marker is one more entry in the list.
+
+**Why this was a widening and not a rewrite.** The detector never read a class
+name. It is handed an ancestor chain and a resolved cascade and it answers *"can
+this text be read"*: `display`, `visibility`, `content-visibility`, effective
+opacity, the line box against the declared height, the width against a 6em
+floor, tracking as a fraction of the size it is applied at, the composed blur
+radius against the type, the composed scale, the glyph paint after the element's
+own filter, and the contrast of that paint against the backdrop it sits on. The
+class only ever decided *which elements got asked*. So every route C9 and P8
+closed against `.pp-provenance` closes against `.pp-edited` with no second
+implementation and no second list to keep in step — which is the property that
+matters, because a second list is what would be one property behind the next
+stylesheet.
+
+`test/emit/edited.test.mjs` runs fourteen of them at the pill and asserts the
+refusal cites §18.3 rather than §18.1 — a marker refused under the wrong section
+sends the seller to the wrong law.
+
+**One thing the attacks taught.** A bare `.pp-edited{display:none}` in
+`deps.userCss` does **not** hide the marker, and the checker correctly says so:
+L8 declares the pill's box, colour pair, `opacity` and `visibility` under
+`.pp-scene .pp-edited`, which beats a single-class rule on specificity. The
+tests attack through `.pp-scene .pp-edited` for that reason. Attacking through
+the weaker selector would have produced eight green tests about nothing — the
+same failure mode as a rule that passes because it never ran.
+
+---
+
+## E42 — §18.1 and §18.3 are one walk, in `assertProvenance`
+
+**Unsettled by:** `API.md` Part 3 declares `assertProvenance(proof, html, css)`
+and nothing else in this lane's surface. §18.3 needed a home.
+
+**Decision.** The edit-record check lives inside `assertProvenance`, in the same
+per-scene loop as the label check, rather than in a second exported entry point
+that `emit()` calls separately.
+
+**Why.** Three reasons, in order of weight.
+
+1. **Rehearsal must not clear what the emitter refuses.** `emit()` does not call
+   `assertProvenance` directly — it runs L11's whole §14 sweep (E24), and L11's
+   `PROVENANCE_UNLABELED` rule is what calls this function. A separate entry
+   point called only from `emit()` would mean the studio's rehearse pass passes
+   and the emit then refuses, which `src/scene/scenes.css` already has a comment
+   about: *"a rehearsal that clears what the emitter refuses is worse than no
+   rehearsal (§14)"*. Folding it in means preflight, the studio's live check
+   (`src/ui/services.js`) and the emit gate all see it, with no edit to another
+   lane's files.
+2. **One render.** Both laws are questions about the same rendered tree under
+   the same resolved cascade. A second entry point would render every scene a
+   second time to ask the second question.
+3. **One finding code.** §4 freezes `FindingCode` at fourteen values and none of
+   them means "edited without saying so". `PROVENANCE_UNLABELED` is the one that
+   fits — see E43 — so the findings would have to be merged in the caller
+   anyway.
+
+The early return is now conditioned on *both* halves being empty: a proof with
+no illustrative renditions but an edited specimen used to return before the
+scene walk began.
+
+---
+
+## E43 — An unmarked edit is severity 1, under `PROVENANCE_UNLABELED`
+
+**Unsettled by:** §18.3 states the law and does not grade it. §14's finding list
+grades `PROVENANCE_UNLABELED` at 1 and names no code for §18.3.
+
+**Decision.** A scene that renders an edited specimen without `.pp-edited`, or
+with one the stylesheet has made unreadable, is `PROVENANCE_UNLABELED` at
+severity 1. The emit is refused.
+
+**Why this code.** §4's set is closed and `FIXED_SEVERITY` pins this code at 1,
+so the grade is the contract's rather than mine to argue — but it is also the
+right one on the merits, and the merits are what would have to justify asking
+L1 for a fifteenth code. §22.6: *"the single reputational risk in this product
+is a proof that implies generated sample content is the client's approved
+copy."* Replace "generated sample content" with "content the presenting team
+edited" and the sentence is unchanged in every part that matters: the client is
+looking at material that is not what they wrote, believing it is. §18.3 sits in
+the same list as §18.1, one line below it, and §18.1's failure is graded at 1.
+Grading §18.3 lower would say the two halves of "this is theirs, that is ours"
+are worth different amounts, and they are not — the second one is the half that
+touches the prospect's own page.
+
+**Why not severity 2.** Severity 2 does not block, and §14 allows a written
+rationale in `DEFERRED.md` in place of a fix. A law that ships when the seller
+declines to fix it is a documented intention, which is exactly what §18's
+preamble forbids: *"build these as enforced code paths, not documentation."*
+
+**What is deliberately not severity 1.** The marker carries the record count in
+`data-pp-edit-notes`. A count that disagrees with `editNotes.length` is a
+broken thread back to the notes, not a client being misled, and refusing an
+emit over it would be the false positive this whole check is written to avoid.
+The count is reported in the refusal's message and locus instead, so a seller
+reading the refusal knows how many records they have to go and read.
+
+---
+
+## E44 — The marker is looked for two ways, because either alone refuses something a client can read
+
+**Unsettled by:** L8 places the pill inside a `data-pp-specimen` scope *and*
+stamps `data-pp-edited-for` on it. Neither is declared as the contract.
+
+**Decision.** A scene's edited specimen counts as marked if L8's own
+`markedSpecimenIds(tree)` names it **or** an edit marker in the tree carries
+`data-pp-edited-for="<that id>"`.
+
+**Why not the scope alone.** It is the primary reader and it is L8's own — using
+the function the render used to decide whether it had already marked the
+specimen is what makes this a check rather than a second opinion. But a layout
+that renders the pill and forgets the ancestor attribute has produced a marker
+the client reads perfectly well, and refusing that is the failure mode the brief
+names: *a rule that refuses a hidden marker but also refuses a legitimately
+styled one is worse than no rule.*
+
+**Why not "a `.pp-edited` anywhere in the scene".** `stack` opens one
+`data-pp-specimen` scope per step, so a scene tree can carry markers about more
+than one specimen. An unattributed fallback would accept a marker about step
+three as proof that the scene's own specimen was marked. `data-pp-edited-for`
+names the specimen, so it cannot.
+
+Both readers fail in the safe direction: a marker inside a `raw()` VNode is
+opaque to the tree walk and is therefore counted missing, which refuses rather
+than passes.
+
+---
+
+## E45 — The document check reads class *tokens*, not `\b`
+
+**Unsettled by:** nothing. Found while extending check 5 to the edit marker.
+
+**Decision.** `htmlHasClass(html, className)` extracts each `class` attribute
+and splits it on whitespace. The check that the marker reached the emitted bytes
+uses it for both markers.
+
+**Why.** The existing test was
+``new RegExp(`class="[^"]*\\b${PROVENANCE_LABEL_CLASS}\\b`)``, and `\b` matches
+at a hyphen. Against `pp-edited` that regex answers *yes* to
+`class="pp-edited-notice"` — the strip the marker sits in, which
+`withEditedNotice` renders whether or not the pill inside it survived. A layout
+that rendered the container and dropped the pill would have passed the one check
+that reads the file. It also answers yes to `pp-provenance-ledger`, which is the
+same hazard on the older marker; it had not bitten only because the ledger and
+the label are rendered together.
+
+---
+
+## Not built: the edit log in a Review build
+
+§14 makes the Review build the one a client's team reads at leisure, and L8
+declined — correctly — to print `editNotes` on stage: one record from L11's
+`ASSET_MISSING` fix names the file, its caption, the heading it sat under and
+the reason, and a truncated sentence about the client's own content reads as
+evasion. So the marker carries the *count* as the thread back to the notes, and
+nothing in the artifact carries the notes themselves.
+
+This lane has not built the review surface for them, and the argument for it is
+recorded here rather than acted on, because it is a product decision:
+
+**For.** §18.3 says the artifact says *that* a specimen was edited; it does not
+say *what* was edited, and the count on the pill is a promise of a record the
+artifact does not contain. A recipient who reads "2 edit records" in a Review
+build has nowhere to go. The emitter is the natural place for it — the notes are
+in the model it is already serializing, it is where the mode is known, and it is
+the only lane that can put something in the artifact without a layout having to
+find room for it.
+
+**Against, and this is the part that needs deciding by someone other than me.**
+Every candidate surface costs something the build has already paid for once:
+
+- A per-scene surface is a layout change, and L8-14 forbids mode-branching in
+  layouts precisely so that ids and measurement are mode-invariant. Breaking
+  that to print a log would put the deck's geometry back in play.
+- A deck-level surface (an overlay, a final "what we changed" scene) is L9's
+  and L8's, not L10's, and it is a scene a presenter can navigate past.
+- An emitter-level surface that is *not* on stage — an HTML comment, a
+  `<details>` element after the stage, a section of the model payload rendered
+  by the runtime — is either invisible to the reader it is for, or it is a
+  presentation surface built outside the presentation lane.
+
+My own reading is that it belongs in Review mode as a **runtime** surface, not
+an emitter one: the notes already travel in the model payload, the review build
+already differs from the presenter build in what the model carries (E12 strips
+presenter notes), and a reviewer-only panel is L2/L9 furniture. If the
+integrator wants it, the emitter's part is one line — stop stripping, start
+declaring — and the surface is a lane away. What the emitter should *not* do is
+grow a second rendering path so that one law can print its evidence.
+
+Until that is decided, the enforcement above is the part that was actually
+missing: the artifact now cannot ship saying nothing.

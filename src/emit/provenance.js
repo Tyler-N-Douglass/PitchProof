@@ -43,8 +43,9 @@
  *      label alone, because the detector never read a class name in the first
  *      place — it reads a chain and a cascade (E41).
  *   5. **The edit record.** Every scene whose specimen was edited after capture
- *      must render `.pp-edited` inside that specimen's subtree, checked with
- *      L8's own `markedSpecimenIds` against the tree the artifact will show.
+ *      must render a `.pp-edited` marker for that specimen — read with L8's own
+ *      `markedSpecimenIds`, or from the marker's own `data-pp-edited-for`
+ *      (E44) — against the tree the artifact will actually show.
  *   6. **The file.** The opening scene is pre-rendered into the document, so
  *      both markers are looked for in the emitted bytes as well as in the tree.
  *

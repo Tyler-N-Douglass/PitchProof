@@ -33315,8 +33315,7 @@ const { CONTRAST_AA_BODY } = __require("core/contracts.js");
 const { parseStylesheet, computeCascade, backgroundColorOf, resolveLengthPx, resolveLineHeightPx } = __require("emit/css.js");
 const { parseColor, contrastRatio, compositeOver, toHex } = __require("emit/color-value.js");
 const { requiresProvenanceLabel, isUnearnedVerification, promotionRecord } = __require("emit/promotion.js");
-
-const PROVENANCE_LABEL_CLASS = 'pp-provenance';
+const { PROVENANCE_LABEL_CLASS, EDITED_MARK_CLASS, specimenEdited, editRecordCount, markedSpecimenIds } = __require("scene/index.js");
 
 const MIN_LABEL_FONT_PX = 11;
 
@@ -33329,6 +33328,40 @@ const LABEL_MAX_BLUR_EM = 0.04;
 const CLIPPING_OVERFLOW = new Set(['hidden', 'clip']);
 
 const RENDITION_ATTR = 'data-pp-rendition';
+
+const SPECIMEN_ATTR = 'data-pp-specimen';
+
+const EDITED_FOR_ATTR = 'data-pp-edited-for';
+
+const PROTECTED_MARKERS = [
+  {
+    className: PROVENANCE_LABEL_CLASS,
+    noun: 'the label',
+    title: 'The provenance label',
+    law: '§18.1',
+    what: 'illustrative content presented without its label',
+    emptyText: 'A label that says nothing labels nothing',
+    nonRemovable: '§18.1 makes the label non-removable, and that includes styling it away.',
+  },
+  {
+    className: EDITED_MARK_CLASS,
+    noun: 'the edit marker',
+    title: 'The edit marker',
+    law: '§18.3',
+    what: 'an edited specimen presented as captured',
+    emptyText: 'A marker that says nothing does not say the specimen was edited',
+    nonRemovable: '§18.3 makes the marker non-removable, and that includes styling it away.',
+  },
+];
+
+const LABEL_MARKER = PROTECTED_MARKERS[0];
+
+const EDITED_MARKER = PROTECTED_MARKERS[1];
+
+function markerFor(desc, markers = PROTECTED_MARKERS) {
+  for (const marker of markers) if (desc.classes.includes(marker.className)) return marker;
+  return null;
+}
 
 const DEFAULT_PAGE_BACKGROUND = { r: 255, g: 255, b: 255, a: 1 };
 
@@ -33420,7 +33453,12 @@ function documentChainPrefix() {
   ];
 }
 
-const isLabel = (desc) => desc.classes.includes(PROVENANCE_LABEL_CLASS);
+function specimenTitleOf(specimen) {
+  const title = typeof specimen.title === 'string' ? specimen.title.trim() : '';
+  if (title) return title;
+  const url = typeof specimen.sourceUrl === 'string' ? specimen.sourceUrl.trim() : '';
+  return url || specimen.id;
+}
 
 function nodeText(node) {
   if (node === null || node === undefined || node === false) return '';
@@ -33466,15 +33504,17 @@ function blockTextRuns(block) {
   return out;
 }
 
-function judgeLabelStyle(chain, rules) {
+function judgeLabelStyle(chain, rules, marker = LABEL_MARKER) {
   const computed = computeCascade(chain, rules);
   const self = computed[computed.length - 1];
+  const noun = marker.noun;
+  const law = marker.law;
 
   const reasons = [];
 
   for (let i = 0; i < chain.length; i++) {
     const style = computed[i];
-    const who = i === chain.length - 1 ? 'the label' : `an ancestor <${chain[i].tag}${chain[i].classes.length ? `.${chain[i].classes.join('.')}` : ''}>`;
+    const who = i === chain.length - 1 ? noun : `an ancestor <${chain[i].tag}${chain[i].classes.length ? `.${chain[i].classes.join('.')}` : ''}>`;
 
     const display = (style.props.display || '').trim().toLowerCase();
     if (display === 'none') reasons.push(`display:none on ${who}`);
@@ -33522,20 +33562,20 @@ function judgeLabelStyle(chain, rules) {
     }
   }
 
-  if (self.effectiveOpacity === 0) reasons.push('opacity:0 — the label is styled to invisibility');
+  if (self.effectiveOpacity === 0) reasons.push(`opacity:0 — ${noun} is styled to invisibility`);
 
   const fontSizePx = self.fontSizePx;
   if (!(fontSizePx >= MIN_LABEL_FONT_PX)) {
-    reasons.push(`font-size computes to ${round(fontSizePx)}px, below the ${MIN_LABEL_FONT_PX}px floor §18.1 enforces`);
+    reasons.push(`font-size computes to ${round(fontSizePx)}px, below the ${MIN_LABEL_FONT_PX}px floor ${law} enforces`);
   }
 
-  const room = judgeLabelRoom(chain, computed);
+  const room = judgeLabelRoom(chain, computed, marker);
   reasons.push(...room.reasons);
 
   if (room.scale < 1) {
     const rendered = fontSizePx * room.scale;
     if (!(rendered >= MIN_LABEL_FONT_PX)) {
-      reasons.push(`the label is scaled by ${round(room.scale)}, so ${round(fontSizePx)}px type renders at ${round(rendered)}px — below the ${MIN_LABEL_FONT_PX}px floor §18.1 enforces`);
+      reasons.push(`${noun} is scaled by ${round(room.scale)}, so ${round(fontSizePx)}px type renders at ${round(rendered)}px — below the ${MIN_LABEL_FONT_PX}px floor ${law} enforces`);
     }
   }
 
@@ -33555,7 +33595,7 @@ function judgeLabelStyle(chain, rules) {
     const filtered = ownFilter.transfer ? ` after filter:${String(self.props.filter).trim()}` : '';
     reasons.push(
       `computed contrast is ${ratio.toFixed(2)}:1 (${toHex(foreground)} on ${toHex(filteredBackground)})${source}${filtered}, `
-      + `below the ${CONTRAST_AA_BODY}:1 floor §18.1 enforces`,
+      + `below the ${CONTRAST_AA_BODY}:1 floor ${law} enforces`,
     );
   }
 
@@ -33581,7 +33621,9 @@ function judgeLabelStyle(chain, rules) {
   };
 }
 
-function judgeLabelRoom(chain, computed) {
+function judgeLabelRoom(chain, computed, marker = LABEL_MARKER) {
+  const noun = marker.noun;
+  const law = marker.law;
   const self = computed[computed.length - 1];
   const rootPx = computed.length ? computed[0].fontSizePx : 16;
   const fontSizePx = self.fontSizePx;
@@ -33602,7 +33644,7 @@ function judgeLabelRoom(chain, computed) {
   for (let i = 0; i < computed.length; i++) {
     const style = computed[i];
     const el = chain[i];
-    const who = i === chain.length - 1 ? 'the label' : `an ancestor <${el.tag}${el.classes.length ? `.${el.classes.join('.')}` : ''}>`;
+    const who = i === chain.length - 1 ? noun : `an ancestor <${el.tag}${el.classes.length ? `.${el.classes.join('.')}` : ''}>`;
 
     const cuts = clipsContent(style);
     if (cuts) clipped = true;
@@ -33614,7 +33656,7 @@ function judgeLabelRoom(chain, computed) {
       if (cuts && px < lineBoxPx) {
         reasons.push(
           `${prop}:${String(style.props[prop]).trim()} on ${who} leaves ${round(px)}px for a line box of ${round(lineBoxPx)}px, `
-          + 'and that element clips what does not fit — a box too short to hold one line of the label is the label styled to invisibility (§18.1)',
+          + `and that element clips what does not fit — a box too short to hold one line of ${noun} is ${noun} styled to invisibility (${law})`,
         );
       }
     }
@@ -33625,7 +33667,7 @@ function judgeLabelRoom(chain, computed) {
       if (cuts && px < widthFloor) {
         reasons.push(
           `${prop}:${String(style.props[prop]).trim()} on ${who} leaves ${round(px)}px against a ${round(widthFloor)}px floor `
-          + `(${LABEL_MIN_WIDTH_EM}em of ${round(fontSizePx)}px type), and that element clips what does not fit — there is not room to read it (§18.1)`,
+          + `(${LABEL_MIN_WIDTH_EM}em of ${round(fontSizePx)}px type), and that element clips what does not fit — there is not room to read it (${law})`,
         );
       }
     }
@@ -33654,8 +33696,8 @@ function judgeLabelRoom(chain, computed) {
   const blurFloor = LABEL_MAX_BLUR_EM * fontSizePx;
   if (blurPx > blurFloor) {
     reasons.push(
-      `the label is painted under a ${round(blurPx)}px blur against ${round(fontSizePx)}px type — `
-      + `past the ${LABEL_MAX_BLUR_EM}em ceiling (${round(blurFloor)}px), which is where the strokes of the glyphs stop resolving (§18.1)`,
+      `${noun} is painted under a ${round(blurPx)}px blur against ${round(fontSizePx)}px type — `
+      + `past the ${LABEL_MAX_BLUR_EM}em ceiling (${round(blurFloor)}px), which is where the strokes of the glyphs stop resolving (${law})`,
     );
   }
 
@@ -33820,6 +33862,30 @@ function resolveBackground(chain, computed) {
   return result;
 }
 
+function editedScenesOf(proof) {
+  const specimenById = new Map((proof.specimens || []).map((sp) => [sp.id, sp]));
+
+  const out = new Map();
+  for (const { scene } of allScenesOf(proof)) {
+    if (!scene.specimenId) continue;
+    const specimen = specimenById.get(scene.specimenId);
+    if (specimen && specimenEdited(specimen)) out.set(scene.id, specimen);
+  }
+  return out;
+}
+
+function htmlHasClass(html, className) {
+  if (typeof html !== 'string' || !html) return false;
+  const attr = /\sclass\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi;
+  let match = attr.exec(html);
+  while (match) {
+    const value = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : match[4] || '');
+    if (value.split(/\s+/).includes(className)) return true;
+    match = attr.exec(html);
+  }
+  return false;
+}
+
 function assertProvenance(proof, html, css, options = {}) {
 
   const findings = [];
@@ -33848,7 +33914,9 @@ function assertProvenance(proof, html, css, options = {}) {
   });
   if (optionFinding) findings.push(optionFinding);
 
-  if (needingLabel.length === 0) return findings;
+  const editedScenes = editedScenesOf(proof);
+
+  if (needingLabel.length === 0 && editedScenes.size === 0) return findings;
 
   const prefix = documentChainPrefix();
   let labelsSeenAnywhere = 0;
@@ -33857,32 +33925,51 @@ function assertProvenance(proof, html, css, options = {}) {
     const needed = (scene.renditionIds || [])
       .map((id) => renditionById.get(id))
       .filter((r) => r && requiresProvenanceLabel(r));
-    if (needed.length === 0) continue;
+    const editedSpecimen = editedScenes.get(scene.id) || null;
+    if (needed.length === 0 && !editedSpecimen) continue;
 
     if (!renderScene) {
-      findings.push(provenanceFinding(
-        `Scene ${scene.id} renders ${needed.length} rendition(s) that must carry a provenance label, but the emitter was given no way to render the scene, `
-        + 'so the label could not be verified. The emit is refused rather than assumed correct.',
-        { sceneId: scene.id, branchId: branchId || undefined, check: 'render' },
-      ));
+      if (needed.length > 0) {
+        findings.push(provenanceFinding(
+          `Scene ${scene.id} renders ${needed.length} rendition(s) that must carry a provenance label, but the emitter was given no way to render the scene, `
+          + 'so the label could not be verified. The emit is refused rather than assumed correct.',
+          { sceneId: scene.id, branchId: branchId || undefined, check: 'render' },
+        ));
+      }
+      if (editedSpecimen) {
+        findings.push(provenanceFinding(
+          `Scene ${scene.id} renders specimen "${specimenTitleOf(editedSpecimen)}" (${editedSpecimen.id}), which was edited after capture, `
+          + 'but the emitter was given no way to render the scene, so the §18.3 marker could not be verified. '
+          + 'The emit is refused rather than assumed correct.',
+          { sceneId: scene.id, branchId: branchId || undefined, specimenId: editedSpecimen.id, check: 'edited-render' },
+        ));
+      }
       continue;
     }
 
     const tree = renderScene(scene);
 
-    const labels = [];
+    const markers = [];
 
     const scoped = new Map();
 
     const scopes = [];
 
+    const namedByMarker = new Set();
+
     walkWithChain(tree, (node, chain) => {
       const desc = chain[chain.length - 1];
       const renditionId = desc.attrs[RENDITION_ATTR];
       if (renditionId) scopes.push({ id: renditionId, chain });
-      if (isLabel(desc)) labels.push({ node, chain: prefix.concat(chain) });
+      const marker = markerFor(desc);
+      if (marker) {
+        markers.push({ marker, node, chain: prefix.concat(chain) });
+        const names = desc.attrs[EDITED_FOR_ATTR];
+        if (marker === EDITED_MARKER && names) namedByMarker.add(names);
+      }
     });
 
+    const labels = markers.filter((m) => m.marker === LABEL_MARKER).map((m) => ({ node: m.node, chain: m.chain }));
     labelsSeenAnywhere += labels.length;
 
     for (const scope of scopes) {
@@ -33919,21 +34006,51 @@ function assertProvenance(proof, html, css, options = {}) {
       }
     }
 
-    for (const label of labels) {
-      const text = nodeText(label.node).replace(/\s+/g, ' ').trim();
-      if (!text) {
+    if (editedSpecimen) {
+      const marked = markedSpecimenIds(tree);
+      if (!marked.has(editedSpecimen.id) && !namedByMarker.has(editedSpecimen.id)) {
+        const records = editRecordCount(editedSpecimen);
         findings.push(provenanceFinding(
-          `A .${PROVENANCE_LABEL_CLASS} element in scene ${scene.id} renders no text. A label that says nothing labels nothing (§18.1).`,
-          { sceneId: scene.id, branchId: branchId || undefined, check: 'label-text' },
+          `Scene ${scene.id} renders specimen "${specimenTitleOf(editedSpecimen)}" (${editedSpecimen.id}), which the presenting team edited after capture`
+          + `${records ? ` and which carries ${records} edit record(s)` : ''}, but the scene rendered no .${EDITED_MARK_CLASS} element for it — `
+          + `neither inside a [${SPECIMEN_ATTR}="${editedSpecimen.id}"] subtree nor carrying ${EDITED_FOR_ATTR}="${editedSpecimen.id}". `
+          + '§18.3 requires the artifact to say a specimen was edited, '
+          + 'and a client reading the "before" side of this scene would be shown changed material as if it were their own page as captured.',
+          {
+            sceneId: scene.id,
+            branchId: branchId || undefined,
+            specimenId: editedSpecimen.id,
+            editRecords: records,
+            check: 'edited-present',
+          },
         ));
       }
-      const verdict = judgeLabelStyle(label.chain, rules);
+    }
+
+    for (const found of markers) {
+      const { marker } = found;
+      const text = nodeText(found.node).replace(/\s+/g, ' ').trim();
+      if (!text) {
+        findings.push(provenanceFinding(
+          `A .${marker.className} element in scene ${scene.id} renders no text. ${marker.emptyText} (${marker.law}).`,
+          {
+            sceneId: scene.id,
+            branchId: branchId || undefined,
+            marker: marker.className,
+            check: marker === LABEL_MARKER ? 'label-text' : 'edited-text',
+          },
+        ));
+      }
+      const verdict = judgeLabelStyle(found.chain, rules, marker);
       if (!verdict.ok) {
         findings.push(provenanceFinding(
-          `The provenance label in scene ${scene.id} does not survive the emitted stylesheet: ${verdict.reasons.join('; ')}. `
-          + '§18.1 makes the label non-removable, and that includes styling it away.',
+          `${marker.title} in scene ${scene.id} does not survive the emitted stylesheet: ${verdict.reasons.join('; ')}. `
+          + marker.nonRemovable,
           {
-            sceneId: scene.id, branchId: branchId || undefined, check: 'label-style',
+            sceneId: scene.id,
+            branchId: branchId || undefined,
+            marker: marker.className,
+            check: marker === LABEL_MARKER ? 'label-style' : 'edited-style',
             ...verdict.detail,
           },
         ));
@@ -33941,16 +34058,25 @@ function assertProvenance(proof, html, css, options = {}) {
     }
   }
 
-  if (labelsSeenAnywhere > 0 && typeof html === 'string' && html.length > 0) {
+  if (typeof html === 'string' && html.length > 0) {
     const firstScene = (proof.spine || [])[0];
     const firstNeeds = firstScene
       ? (firstScene.renditionIds || []).map((id) => renditionById.get(id)).filter((r) => r && requiresProvenanceLabel(r)).length
       : 0;
-    if (firstNeeds > 0 && !new RegExp(`class="[^"]*\\b${PROVENANCE_LABEL_CLASS}\\b`).test(html)) {
+    if (labelsSeenAnywhere > 0 && firstNeeds > 0 && !htmlHasClass(html, PROVENANCE_LABEL_CLASS)) {
       findings.push(provenanceFinding(
         `The opening scene renders ${firstNeeds} rendition(s) needing a provenance label, but no .${PROVENANCE_LABEL_CLASS} element reached the emitted document. `
         + 'The first thing the client sees would be unlabelled illustrative content.',
         { sceneId: firstScene.id, check: 'label-serialized' },
+      ));
+    }
+    const firstEdited = firstScene ? editedScenes.get(firstScene.id) : null;
+    if (firstEdited && renderScene && !htmlHasClass(html, EDITED_MARK_CLASS)) {
+      findings.push(provenanceFinding(
+        `The opening scene renders specimen "${specimenTitleOf(firstEdited)}" (${firstEdited.id}), which was edited after capture, `
+        + `but no .${EDITED_MARK_CLASS} element reached the emitted document. `
+        + 'The first thing the client sees would be edited material presented as their own page as captured (§18.3).',
+        { sceneId: firstScene.id, specimenId: firstEdited.id, check: 'edited-serialized' },
       ));
     }
   }
@@ -33988,11 +34114,18 @@ function sameElement(a, b) {
 }
 
 __exports["PROVENANCE_LABEL_CLASS"] = PROVENANCE_LABEL_CLASS;
+__exports["EDITED_MARK_CLASS"] = EDITED_MARK_CLASS;
 __exports["MIN_LABEL_FONT_PX"] = MIN_LABEL_FONT_PX;
 __exports["LABEL_MIN_WIDTH_EM"] = LABEL_MIN_WIDTH_EM;
 __exports["LABEL_MIN_TRACKING_EM"] = LABEL_MIN_TRACKING_EM;
 __exports["LABEL_MAX_BLUR_EM"] = LABEL_MAX_BLUR_EM;
 __exports["RENDITION_ATTR"] = RENDITION_ATTR;
+__exports["SPECIMEN_ATTR"] = SPECIMEN_ATTR;
+__exports["EDITED_FOR_ATTR"] = EDITED_FOR_ATTR;
+__exports["PROTECTED_MARKERS"] = PROTECTED_MARKERS;
+__exports["LABEL_MARKER"] = LABEL_MARKER;
+__exports["EDITED_MARKER"] = EDITED_MARKER;
+__exports["markerFor"] = markerFor;
 __exports["provenanceFinding"] = provenanceFinding;
 __exports["allScenesOf"] = allScenesOf;
 __exports["describeElement"] = describeElement;
@@ -34007,6 +34140,8 @@ __exports["scaleFactorOf"] = scaleFactorOf;
 __exports["glyphPaint"] = glyphPaint;
 __exports["parseFilter"] = parseFilter;
 __exports["resolveBackground"] = resolveBackground;
+__exports["editedScenesOf"] = editedScenesOf;
+__exports["htmlHasClass"] = htmlHasClass;
 __exports["assertProvenance"] = assertProvenance;
 __exports["labelOptionFinding"] = labelOptionFinding;
 __exports["requiresProvenanceLabel"] = __require("emit/promotion.js").requiresProvenanceLabel;
@@ -38123,12 +38258,21 @@ __exports["provenanceFinding"] = __require("emit/provenance.js").provenanceFindi
 __exports["labelOptionFinding"] = __require("emit/provenance.js").labelOptionFinding;
 __exports["glyphPaint"] = __require("emit/provenance.js").glyphPaint;
 __exports["parseFilter"] = __require("emit/provenance.js").parseFilter;
+__exports["editedScenesOf"] = __require("emit/provenance.js").editedScenesOf;
+__exports["htmlHasClass"] = __require("emit/provenance.js").htmlHasClass;
+__exports["markerFor"] = __require("emit/provenance.js").markerFor;
 __exports["PROVENANCE_LABEL_CLASS"] = __require("emit/provenance.js").PROVENANCE_LABEL_CLASS;
+__exports["EDITED_MARK_CLASS"] = __require("emit/provenance.js").EDITED_MARK_CLASS;
 __exports["MIN_LABEL_FONT_PX"] = __require("emit/provenance.js").MIN_LABEL_FONT_PX;
 __exports["LABEL_MIN_WIDTH_EM"] = __require("emit/provenance.js").LABEL_MIN_WIDTH_EM;
 __exports["LABEL_MIN_TRACKING_EM"] = __require("emit/provenance.js").LABEL_MIN_TRACKING_EM;
 __exports["LABEL_MAX_BLUR_EM"] = __require("emit/provenance.js").LABEL_MAX_BLUR_EM;
 __exports["RENDITION_ATTR"] = __require("emit/provenance.js").RENDITION_ATTR;
+__exports["SPECIMEN_ATTR"] = __require("emit/provenance.js").SPECIMEN_ATTR;
+__exports["EDITED_FOR_ATTR"] = __require("emit/provenance.js").EDITED_FOR_ATTR;
+__exports["PROTECTED_MARKERS"] = __require("emit/provenance.js").PROTECTED_MARKERS;
+__exports["LABEL_MARKER"] = __require("emit/provenance.js").LABEL_MARKER;
+__exports["EDITED_MARKER"] = __require("emit/provenance.js").EDITED_MARKER;
 __exports["promotionRecord"] = __require("emit/promotion.js").promotionRecord;
 __exports["hasPromotionRecord"] = __require("emit/promotion.js").hasPromotionRecord;
 __exports["requiresProvenanceLabel"] = __require("emit/promotion.js").requiresProvenanceLabel;

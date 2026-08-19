@@ -40,7 +40,8 @@ import { SCENE_LAYOUTS } from '../../src/core/contracts.js';
 import { registerAllLayouts } from '../../src/scene/index.js';
 import { registerTestLayouts } from '../fixtures/emit/layouts.mjs';
 import { runtimeBundle, FIXED_CLOCK } from '../fixtures/emit/runtime-bundle.mjs';
-import { emitProof } from '../fixtures/emit/proofs.mjs';
+import { emitProof, scene as sceneFixture } from '../fixtures/emit/proofs.mjs';
+import { Runtime } from '../../src/runtime/runtime.js';
 
 const { js: runtimeJs, css: runtimeCss } = runtimeBundle();
 
@@ -134,6 +135,35 @@ test('the control case — an edited specimen through the real layouts emits, an
   assert.ok(
     htmlHasClass(result.value.html, EDITED_MARK_CLASS),
     'the opening scene renders the edited specimen, so the marker must be in the emitted bytes',
+  );
+});
+
+test('all eight §4 layouts satisfy the check — the emitter agrees with L8 on every one', () => {
+  resetLayouts();
+  registerAllLayouts();
+  const base = editedProof();
+  const subject = subjectOf(base);
+  // One scene per layout, every one of them showing the edited specimen. Four
+  // of L8's layouts hang the pill on a panel of their own and four have nowhere
+  // to hang it and get `withEditedNotice`'s strip; a check that only ever saw
+  // the first four would pass while half the deck shipped silent.
+  const proof = {
+    ...base,
+    spine: SCENE_LAYOUTS.map((layout, i) => sceneFixture(`sc_${layout}`, {
+      layout, specimenId: subject.id, blockCount: i === 0 ? 2 : 1,
+    })),
+    branches: [],
+  };
+  assert.equal(editedScenesOf(proof).size, SCENE_LAYOUTS.length);
+
+  const runtime = new Runtime(proof, { mode: 'both' });
+  const findings = assertProvenance(proof, '', runtimeCss, {
+    renderScene: (scene) => runtime.renderScene(scene),
+  }).filter((f) => String(f.locus.check || '').startsWith('edited'));
+  assert.deepEqual(
+    findings.map((f) => `${f.locus.sceneId}: ${f.message}`),
+    [],
+    'a layout L8 covers that the emitter refuses is a false positive, and a false positive is how a law gets switched off',
   );
 });
 
@@ -308,7 +338,10 @@ for (const [name, userCss, match] of ATTACKS) {
   test(`attack: ${name} on the edit marker is refused (§18.3)`, async () => {
     const result = await attempt({ userCss });
     assertBlocked(result, match, `${name} on .pp-edited`);
-    const refusals = result.detail.findings.filter((f) => match.test(f.message));
+    // An attack aimed at an ancestor reaches both markers, and both refusals
+    // are correct; these assertions are about the edit marker's own sentence.
+    const refusals = result.detail.findings.filter((f) => match.test(f.message) && /edit marker/.test(f.message));
+    assert.ok(refusals.length > 0, `${name} produced no refusal naming the edit marker`);
     for (const f of refusals) {
       assert.match(f.message, /§18\.3 makes the marker non-removable/, 'the refusal must cite the law it is refusing under');
       assert.ok(!/§18\.1/.test(f.message), 'the edit marker is not refused under the provenance label\'s section');

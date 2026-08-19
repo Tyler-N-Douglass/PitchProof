@@ -15,12 +15,13 @@ file has been forgotten, not decided.
 | Pass | Report | Axes | Findings | Disposition |
 |---|---|---|---|---|
 | 1 | `CRITIQUE-1.md` | 6 pass, 5 fail | 7 sev-1, 10 sev-2, 7 sev-3 | **All 24 fixed.** Nothing deferred |
-| 2 | `CRITIQUE-2.md` | 9 pass, 2 fail | 1 sev-1, 7 sev-2, 8 sev-3 | **All 16 closed.** Two deferrals below |
+| 2 | `CRITIQUE-2.md` | 9 pass, 2 fail | 1 sev-1, 7 sev-2, 8 sev-3 | **All 16 closed** |
+| 3 | `CRITIQUE-3.md` | 10 pass, 1 fail | 2 sev-1, 5 sev-2, 5 sev-3 | **All 12 closed.** One item not built, argued below |
 
 §21's exit condition is the critic clean on all eleven axes **twice
-consecutively**, the second pass against a freshly emitted artifact. Neither
-condition is met yet: pass 2 failed axes 5 and 9, and no pass has come back
-clean.
+consecutively**, the second pass against a freshly emitted artifact. **No pass
+has yet come back clean**, so the counter stands at zero: pass 1 failed five
+axes, pass 2 failed two, pass 3 failed one.
 
 The two axes that failed are the two the fixes were aimed at, and both now have
 a number rather than an assertion. Axis 5, overflow detection efficacy: §17.4
@@ -28,6 +29,37 @@ asks for recall ≥ 0.98 and pass 2 measured 0.65. It is now **0.9921** per box
 and per finding, measured in Chromium against the emitted corpus artifact, with
 precision 1.0000. Axis 9, degradation honesty: the reported saving now equals
 the actual saving at every budget tested, where it was out by exactly 2×.
+
+---
+
+## Not built, from CRITIQUE-3
+
+### The edit log in a Review build
+
+*Not a deferral of a finding — §18.3 is enforced. A question raised while
+closing it, answered, and deliberately left for the lane that owns the surface.*
+
+§18.3 makes the artifact say **that** a specimen was edited, and L8's marker
+carries the record count. In a Review build — §14's "the one a client's team
+reads at leisure" — that count is a promise of a record the artifact does not
+contain. A recipient reading "2 edit records" has nowhere to go.
+
+L10's answer, which I accept: **yes it should exist, and no it should not be
+built in the emitter.** Every emitter-shaped surface is the wrong one. A
+per-scene surface is a layout change, and L8-14 forbids mode-branching precisely
+so ids and measurement stay mode-invariant — breaking that to print a log puts
+the deck's geometry back in play. A deck-level surface is L8's and L9's. And an
+emitter-level surface that is not on stage (an HTML comment, a `<details>` after
+the stage) is either invisible to the reader it is for, or a presentation
+surface built outside the presentation lane.
+
+It belongs in Review mode as a **runtime** surface: the notes already travel in
+the model payload, the review build already differs in what the model carries
+(E12 strips presenter notes), and a reviewer-only panel is L2/L9 furniture. The
+emitter's part is one line — stop stripping, start declaring.
+
+Recorded rather than built because *what the emitter should not do is grow a
+second rendering path so one law can print its evidence.*
 
 ---
 
