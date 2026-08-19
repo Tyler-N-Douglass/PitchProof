@@ -173,6 +173,14 @@ export const PROMOTION_RECORD_RE =
 const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 
 /**
+ * A BCP-47 language tag, conservatively: a 2–3 letter primary subtag followed by
+ * alphanumeric subtags. Anything else is refused rather than coerced, because a
+ * `lang` value reaches an emitted attribute and an unvalidated one is a way to
+ * put arbitrary text there.
+ */
+const LANG_TAG_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
+
+/**
  * base64url without padding — safe inside the record delimiters.
  * @param {string} s
  * @returns {string}
@@ -381,7 +389,13 @@ export function resolveProvenance(requested, producedBy) {
  * change its id, or every `Scene.renditionIds` reference would break the moment
  * a user verified something. See D-L7-3.
  *
- * @param {{specimenId: string, recipeId: string, label: string, blocks: unknown, media: unknown, producedBy: string}} parts
+ * `dir` and `lang` are in the payload because they are content: two renditions
+ * that differ only in writing direction are two different renditions, and the
+ * one the studio shows must not collide with the one it does not. They are
+ * omitted from the hash when absent — `stableStringify` drops `undefined` keys —
+ * so every id minted before the extensions existed is unchanged.
+ *
+ * @param {{specimenId: string, recipeId: string, label: string, blocks: unknown, media: unknown, producedBy: string, dir?: 'ltr'|'rtl', lang?: string}} parts
  * @returns {string}
  */
 export function renditionId(parts) {
@@ -392,6 +406,8 @@ export function renditionId(parts) {
     blocks: parts.blocks,
     media: parts.media,
     producedBy: parts.producedBy,
+    dir: parts.dir,
+    lang: parts.lang,
   });
 }
 
@@ -409,7 +425,7 @@ export function renditionId(parts) {
  * @param {string|null} [args.notes]
  * @returns {import('../core/contracts.d.ts').Rendition}
  */
-export function buildRendition({ specimen, recipe, label, blocks, media = [], producedBy, provenance, notes = null }) {
+export function buildRendition({ specimen, recipe, label, blocks, media = [], producedBy, provenance, notes = null, dir, lang }) {
   const specimenId = typeof specimen === 'string' ? specimen : specimen && specimen.id;
   const recipeId = typeof recipe === 'string' ? recipe : recipe && recipe.id;
   if (typeof specimenId !== 'string' || !specimenId) throw new Error('buildRendition: specimen id is required');
@@ -428,8 +444,23 @@ export function buildRendition({ specimen, recipe, label, blocks, media = [], pr
   // caller-supplied notes is either stale or forged; both are removed.
   const cleanNotes = stripPromotionRecords(notes);
 
+  // §4 optional extensions. Validated here rather than trusted, because a
+  // rendition that declares `dir: 'RTL'` or a language tag with a newline in it
+  // would reach an emitted attribute, and the emitter is not the place to find
+  // that out. An absent or unusable value is left absent, never defaulted:
+  // `undefined` means "this recipe made no claim about direction", which is a
+  // different thing from "left to right".
+  const cleanDir = dir === 'ltr' || dir === 'rtl' ? dir : undefined;
+  if (dir !== undefined && cleanDir === undefined) {
+    throw new Error(`buildRendition: dir must be ltr|rtl, got ${String(dir)}`);
+  }
+  const cleanLang = typeof lang === 'string' && LANG_TAG_RE.test(lang.trim()) ? lang.trim() : undefined;
+  if (lang !== undefined && lang !== null && cleanLang === undefined) {
+    throw new Error(`buildRendition: lang must be a BCP-47 tag, got ${String(lang)}`);
+  }
+
   const resolved = resolveProvenance(provenance, producedBy);
-  const id = renditionId({ specimenId, recipeId, label, blocks, media, producedBy });
+  const id = renditionId({ specimenId, recipeId, label, blocks, media, producedBy, dir: cleanDir, lang: cleanLang });
 
   /** @type {import('../core/contracts.d.ts').Rendition} */
   const rendition = {
@@ -443,6 +474,8 @@ export function buildRendition({ specimen, recipe, label, blocks, media = [], pr
     producedBy,
     notes: cleanNotes,
   };
+  if (cleanDir !== undefined) /** @type {any} */(rendition).dir = cleanDir;
+  if (cleanLang !== undefined) /** @type {any} */(rendition).lang = cleanLang;
 
   /** @type {string[]} */
   const errs = [];

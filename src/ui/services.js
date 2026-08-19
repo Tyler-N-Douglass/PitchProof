@@ -344,6 +344,45 @@ export function makeServices(env) {
     },
 
     /**
+     * The stylesheet the artifact wears, as one string.
+     *
+     * **The preview and the emit call this same method, and nothing else.**
+     * CRITIQUE-2 C7: the preview compiled the brand through L5's `compileTheme`
+     * and the emit passed no `themeCss` at all, so every emitted file fell
+     * through to L10's `compileFallbackTheme` — the path named for a build where
+     * L5 has not landed. Nineteen of twenty-three custom properties happened to
+     * agree; the four that did not were the stage padding, the transition
+     * duration and the shadow, which is precisely the set §15's "live preview at
+     * true aspect" promises to be showing. Two functions compiling the same
+     * brand is a divergence waiting to widen, so there is now one.
+     * @param {any} brand
+     * @returns {string}
+     */
+    artifactThemeCss(brand) {
+      const theme = services.compileTheme(brand);
+      return theme && typeof theme.css === 'string' ? theme.css : '';
+    },
+
+    /**
+     * Attach a user-supplied font file to a face and mark it embeddable.
+     *
+     * §7 permits exactly one route to `embeddable: true` — "the user explicitly
+     * supplies a font file they assert they have rights to" — and L5's
+     * `attachUserFont` is that route: it refuses without a file and refuses
+     * without a rights assertion naming who made it. The studio has no other
+     * way to set the flag (CRITIQUE-2 C3), which is what keeps the claim and
+     * the fact from moving independently.
+     * @param {any[]} faces
+     * @param {any} supply    `{family, fileName, bytes, dataUri, mime, weights, style, rightsAssertion}`
+     * @returns {any}
+     */
+    attachUserFont(faces, supply) {
+      if (!themeLane) return laneErr('theme');
+      try { return ok(themeLane.attachUserFont(faces, supply, { clock })); }
+      catch (e) { return err(`The font file was not attached: ${message(e)}`, e); }
+    },
+
+    /**
      * @param {any} logo
      * @returns {any|null}
      */
@@ -844,6 +883,11 @@ export function makeServices(env) {
           runtimeJs: env.runtimeJs || '',
           runtimeCss: env.runtimeCss || '',
           clock,
+          // C7: the artifact wears the theme the preview showed, compiled once.
+          themeCss: services.artifactThemeCss(proof && proof.brand),
+          // C3: and the faces the user supplied a licensed file for, so the
+          // `@font-face` rules L10 is ready to write actually reach the file.
+          fonts: artifactFonts(proof && proof.brand),
         });
       } catch (e) { return err(`Emit failed: ${message(e)}`, e); }
     },
@@ -893,6 +937,61 @@ export function makeServices(env) {
 
 /** @param {unknown} e @returns {string} */
 function message(e) { return e instanceof Error ? e.message : String(e); }
+
+/**
+ * The faces the emitter may write an `@font-face` rule for.
+ *
+ * §13 inlines "fonts (only user-supplied, license-asserted)", and §7 makes the
+ * supplied file the thing that licences the claim. So a face reaches this list
+ * only when it carries all three: the flag, a `data:` URI for the file the user
+ * handed over, and the rights assertion naming who made it. A face flagged
+ * embeddable with no file behind it is not shipped and not silently believed —
+ * it is dropped here and reported on the Brand panel, because the artifact
+ * would otherwise substitute a fallback while the studio said it had not.
+ *
+ * L10 filters on `licenseAsserted` again on its own side. Two independent
+ * checks of the same law is the intent, not duplication.
+ *
+ * @param {any} brand
+ * @returns {{family: string, dataUri: string, weight: number, style: string, licenseAsserted: boolean}[]}
+ */
+export function artifactFonts(brand) {
+  /** @type {any[]} */
+  const out = [];
+  for (const face of (brand && brand.faces) || []) {
+    if (!face || face.embeddable !== true) continue;
+    const file = face.fontFile;
+    if (!file || typeof file.dataUri !== 'string' || !file.dataUri.startsWith('data:')) continue;
+    const assertion = face.rightsAssertion;
+    if (!assertion || !assertion.assertedBy || !assertion.statement) continue;
+    const weights = (face.weightsSeen || []).filter((w) => Number.isFinite(w));
+    out.push({
+      family: String(face.family || ''),
+      dataUri: file.dataUri,
+      weight: Number(face.primaryWeight) || weights[0] || 400,
+      style: file.style === 'italic' ? 'italic' : 'normal',
+      licenseAsserted: true,
+    });
+  }
+  return out;
+}
+
+/**
+ * Faces that claim a licence with no file behind them.
+ *
+ * There is no longer a control that can produce one — the checkbox that could
+ * was CRITIQUE-2 C3 and is gone — but a project saved by an older build can
+ * carry one, and an imported `.pitchproof.json` can carry one from anywhere.
+ * The claim is cleared on load rather than honoured; this is how the studio
+ * finds them.
+ * @param {any} brand
+ * @returns {any[]}
+ */
+export function unfoundedFontClaims(brand) {
+  return ((brand && brand.faces) || []).filter((face) => face
+    && face.embeddable === true
+    && !(face.fontFile && typeof face.fontFile.dataUri === 'string' && face.fontFile.dataUri.startsWith('data:')));
+}
 
 /**
  * A minimal id minter shaped like L1's `IdMinter` but seeded per call, so two

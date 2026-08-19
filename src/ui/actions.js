@@ -30,6 +30,7 @@ import { QUALITY_STEPS, COLOR_ROLES, SPECIMEN_KINDS, SCENE_LAYOUTS } from '../co
 import { plural } from './format.js';
 import { exportProjectJson, importProjectJson, makeRecord } from '../core/storage.js';
 import { downloadText, readFiles, pickFiles, safeFilename } from './io.js';
+import { base64Encode } from '../core/bytes.js';
 import { emitBlockers, proofDigest } from './gate.js';
 import { brandYield } from './services.js';
 import { SETTING_KEYS } from './constants.js';
@@ -474,14 +475,93 @@ export const ACTIONS = [
       fallbackStack: value(ctx).split(',').map((s) => s.trim()).filter(Boolean),
     }), { coalesceKey: `brand.setFaceStack:${arg}`, scope: 'brand' }),
   },
+  // §7 permits one route to `embeddable: true`: "the user explicitly supplies a
+  // font file they assert they have rights to". These two actions are that
+  // route and its withdrawal, and there is no third.
+  //
+  // What was here before was `brand.setFaceEmbeddable`, a checkbox reading
+  // "I have a licence for this font file and may embed it". Ticking it with no
+  // file cleared both FONT_UNAVAILABLE warnings, opened the emit, and shipped an
+  // artifact with no `@font-face` in it and the prospect's family still at the
+  // head of the stack — so the client's machine rendered Arial while the studio
+  // said the face was embedded. CRITIQUE-2 C3: a control that changes a claim
+  // without changing a fact is the thing §18 exists to prevent. The claim is now
+  // the file: choosing one asserts the licence, in the operator's name, and
+  // removing the file withdraws the assertion with it.
   {
-    id: 'brand.setFaceEmbeddable', label: 'Assert a font licence', group: 'Brand', palette: false, control: true,
-    mutates: true, sample: () => ({ arg: '0', value: true }),
-    run: (app, arg, ctx) => app.mutate(
-      checked(ctx) ? 'Assert font licence' : 'Withdraw font licence assertion',
-      (doc) => M.setBrandFace(doc, Number(arg), { embeddable: checked(ctx) }),
-      { scope: 'brand' },
-    ),
+    id: 'brand.attachFont', label: 'Attach a licensed font file', group: 'Brand', palette: false, control: true,
+    mutates: true, sample: () => ({ arg: '0', element: fakeFontInput('Inter-Regular.woff2') }),
+    run: async (app, arg, ctx) => {
+      const index = Number(arg);
+      const face = (app.proof.brand.faces || [])[index];
+      const clear = () => { if (ctx.element) ctx.element.value = ''; };
+      if (!face) { clear(); return undefined; }
+      if (!String(face.family || '').trim()) {
+        app.notify('warn', 'Name the family before attaching a file — the `@font-face` rule and the CSS stack have to agree on what it is called.');
+        clear();
+        return undefined;
+      }
+      const who = operator(app);
+      if (!who) {
+        app.notify('warn', 'Put your name in Settings first. §7 lets an artifact carry a font only against an explicit rights assertion, and an assertion nobody made is not one.');
+        clear();
+        return undefined;
+      }
+      const files = ctx.element && ctx.element.files
+        ? await readFiles(ctx.element.files)
+        : await readFiles(await pickFiles({ document: app.document, accept: FONT_ACCEPT, multiple: false }));
+      clear();
+      if (!files.length) return undefined;
+      const file = files[0];
+      const mime = fontMime(file.name, file.mime);
+      if (!mime) {
+        app.notify('bad', `“${file.name}” is not a font file. Supply the .woff2, .woff, .ttf or .otf the foundry licensed to you.`, { sticky: true });
+        return undefined;
+      }
+      const attached = app.services.attachUserFont(app.proof.brand.faces || [], {
+        family: face.family,
+        fileName: file.name,
+        bytes: file.bytes,
+        dataUri: `data:${mime};base64,${base64Encode(file.bytes)}`,
+        mime,
+        weights: face.weightsSeen || [],
+        style: /italic|oblique/i.test(file.name) ? 'italic' : 'normal',
+        rightsAssertion: {
+          assertedBy: who,
+          statement: `${who} supplied ${file.name} and asserts the right to embed ${face.family} in an artifact handed to a client (§7).`,
+        },
+      });
+      if (!attached.ok) { app.notify('bad', attached.error, { sticky: true }); return undefined; }
+      const next = app.mutate(`Attach ${file.name} to ${face.family}`, (doc) => M.setBrandFace(doc, index, attached.value.face), {
+        scope: 'brand',
+      });
+      app.notify('ok', `${file.name} (${plural(Math.max(1, Math.round(file.bytes.length / 1024)), 'kB')}) will be embedded as ${face.family}, recorded against ${who}. It is now part of every emit and of the project's size budget.`);
+      return next;
+    },
+  },
+  {
+    id: 'brand.detachFont', label: 'Remove the font file', group: 'Brand', palette: false, control: true,
+    mutates: true,
+    sample: (app) => {
+      // Something to remove. The action is the withdrawal of an assertion, so a
+      // sample that runs against a face with no file would assert nothing.
+      app.mutate('Attach a font file', (doc) => M.setBrandFace(doc, 0, {
+        embeddable: true,
+        fontFile: { fileName: 'Sample.woff2', mime: 'font/woff2', style: 'normal', bytes: 4, dataUri: 'data:font/woff2;base64,AAAA' },
+        rightsAssertion: { assertedBy: 'Alex Mercer', statement: 'sample', assertedAt: app.clock() },
+      }), { scope: 'brand' });
+      return { arg: '0' };
+    },
+    run: (app, arg) => {
+      const index = Number(arg);
+      const face = (app.proof.brand.faces || [])[index];
+      if (!face) return undefined;
+      const next = app.mutate(`Remove the font file from ${face.family || 'the face'}`, (doc) => M.setBrandFace(doc, index, {
+        embeddable: false, fontFile: null, rightsAssertion: null,
+      }), { scope: 'brand' });
+      app.notify('ok', `The file is gone and the licence assertion with it. ${face.family || 'The face'} will be substituted by its fallback stack again, and the sweep will say so.`);
+      return next;
+    },
   },
   {
     id: 'brand.addFace', label: 'Add a face', group: 'Brand',

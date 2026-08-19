@@ -269,17 +269,17 @@ const DEFAULT_SHELL = `<!doctype html>
  *
  * @returns {string}
  */
-export function sourceFingerprint() {
+export function sourceFingerprint(root = SRC) {
   /** @type {string[]} */
   const parts = [];
   const walk = (dir) => {
     for (const name of readdirSync(dir).sort()) {
       const p = join(dir, name);
       if (statSync(p).isDirectory()) walk(p);
-      else parts.push(`${relative(ROOT, p).split('\\').join('/')}\u0000${readFileSync(p, 'utf8')}`);
+      else parts.push(`${relative(root, p).split('\\').join('/')}\u0000${readFileSync(p, 'utf8')}`);
     }
   };
-  walk(SRC);
+  walk(root);
   return sha256Hex(parts.join('\u0001'));
 }
 
@@ -327,9 +327,24 @@ function diffOutputs(a, b) {
 }
 
 function main() {
-  const args = new Set(process.argv.slice(2));
-  const verifyRepeat = args.has('--verify-repeat');
+  const argv = process.argv.slice(2);
+  const args = new Set(argv);
   const check = args.has('--check');
+
+  // `--verify-repeat` was a boolean, so `--verify-repeat 3` built exactly twice
+  // and silently ignored the 3 (CRITIQUE-2 C12) — while printing "3 output(s)
+  // byte-identical across two builds", where the 3 is the file count and reads
+  // like a repeat count. Two builds is the right default; a caller who asks for
+  // more should get more.
+  const flagAt = argv.indexOf('--verify-repeat');
+  const requested = flagAt >= 0 ? Number(argv[flagAt + 1]) : NaN;
+  const repeats = flagAt < 0 ? 0 : (Number.isInteger(requested) && requested >= 2 ? requested : 2);
+  if (flagAt >= 0 && argv[flagAt + 1] !== undefined && !argv[flagAt + 1].startsWith('-')
+      && !(Number.isInteger(requested) && requested >= 2)) {
+    console.error(`build: --verify-repeat takes an integer of 2 or more; got ${JSON.stringify(argv[flagAt + 1])}`);
+    process.exit(2);
+  }
+  const verifyRepeat = repeats > 0;
 
   let first;
   try {
@@ -341,19 +356,21 @@ function main() {
 
   if (verifyRepeat) {
     const before = sourceFingerprint();
-    const second = buildAll();
-    const differing = diffOutputs(first.outputs, second.outputs);
-    if (differing.length) {
-      if (before !== second.fingerprint || before !== first.fingerprint) {
+    for (let run = 2; run <= repeats; run += 1) {
+      const next = buildAll();
+      const differing = diffOutputs(first.outputs, next.outputs);
+      if (!differing.length) continue;
+      if (before !== next.fingerprint || before !== first.fingerprint) {
         console.error(
-          'build: cannot verify — src/ changed while the two builds ran, so the outputs describe '
+          `build: cannot verify — src/ changed during run ${run}, so the outputs describe `
           + `two different working trees (${differing.join(', ')} differ). Re-run on a quiet tree.`);
         process.exit(2);
       }
-      console.error(`build: NOT deterministic — differing outputs: ${differing.join(', ')}`);
+      console.error(`build: NOT deterministic — run ${run} differs from run 1: ${differing.join(', ')}`);
       process.exit(1);
     }
-    console.log(`build: deterministic — ${first.outputs.size} output(s) byte-identical across two builds`);
+    console.log(
+      `build: deterministic — ${first.outputs.size} output(s) byte-identical across ${repeats} builds`);
   }
 
   if (!check) write(first.outputs);

@@ -176,8 +176,12 @@ export class Preview {
 
     this.services.ensureLayouts();
 
-    const theme = this.services.compileTheme(proof.brand);
-    const themeCss = theme && theme.css ? theme.css : '';
+    // The one compile. `artifactThemeCss` is what the emit passes to L10 too,
+    // so the stylesheet on screen at true aspect and the stylesheet in the file
+    // the seller hands over are the same string rather than two compilations of
+    // the same brand that agreed on nineteen properties out of twenty-three
+    // (CRITIQUE-2 C7).
+    const themeCss = this.services.artifactThemeCss(proof.brand);
     if (themeCss !== this.themeCss) {
       this.themeCss = themeCss;
       if (this.themeStyle) this.themeStyle.textContent = themeCss;

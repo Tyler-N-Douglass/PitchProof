@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { bundle, parseModule, BundleError } from '../../scripts/lib/bundler.mjs';
 import { scan, BANNED, jsFiles } from '../../scripts/lint-determinism.mjs';
-import { buildAll, jsStringLiteral, cssFiles, concatCss, sourceFingerprint, SRC } from '../../scripts/build.mjs';
+import { buildAll, jsStringLiteral, cssFiles, concatCss, sourceFingerprint } from '../../scripts/build.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -151,19 +151,33 @@ test('the whole build is deterministic across two runs', () => {
 });
 
 test('the source fingerprint moves when a source moves, and not otherwise', () => {
-  assert.equal(sourceFingerprint(), sourceFingerprint());
+  assert.equal(sourceFingerprint(), sourceFingerprint(), 'the real tree does not fingerprint stably');
   assert.match(sourceFingerprint(), /^[0-9a-f]{64}$/);
 
-  const probe = join(SRC, '__fingerprint-probe.css');
-  assert.ok(!existsSync(probe), 'the probe path is already taken');
-  const before = sourceFingerprint();
-  writeFileSync(probe, '/* probe */\n');
+  // Probed against a temporary tree, never against `src/`. An earlier version of
+  // this test wrote a probe file into `src/` and deleted it — which was harmless
+  // in isolation and made `the whole build is deterministic across two runs`
+  // fail intermittently in the full parallel run, because that test builds from
+  // `src/` in another process at the same moment. A test that mutates the tree
+  // other tests read is a source of exactly the flake the fingerprint exists to
+  // diagnose.
+  const dir = tree({ 'a.css': '.a{}', 'nested/b.js': 'export const b = 1;\n' });
   try {
-    assert.notEqual(sourceFingerprint(), before, 'adding a source file did not move the fingerprint');
+    const before = sourceFingerprint(dir);
+    assert.equal(sourceFingerprint(dir), before);
+
+    writeFileSync(join(dir, 'c.css'), '/* probe */\n');
+    const added = sourceFingerprint(dir);
+    assert.notEqual(added, before, 'adding a file did not move the fingerprint');
+
+    rmSync(join(dir, 'c.css'), { force: true });
+    assert.equal(sourceFingerprint(dir), before, 'removing the file did not restore the fingerprint');
+
+    writeFileSync(join(dir, 'a.css'), '.a{color:red}');
+    assert.notEqual(sourceFingerprint(dir), before, 'editing a file did not move the fingerprint');
   } finally {
-    rmSync(probe, { force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
-  assert.equal(sourceFingerprint(), before, 'removing the probe did not restore the fingerprint');
 });
 
 test('embedded source strings cannot break out of a script element', () => {

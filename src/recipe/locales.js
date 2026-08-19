@@ -179,6 +179,35 @@ export function localeById(id) {
   return LOCALES.find((l) => l.id === id) || null;
 }
 
+/** A BCP-47 tag, conservatively. Matches `src/recipe/provenance.js`. */
+const LANG_TAG_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
+
+/**
+ * The language the specimen's own text is written in, as the specimen declares
+ * it — never as the recipe wishes it were.
+ *
+ * This is the field a `locale-fanout` rendition marks its prose with, and the
+ * reason it is the *source's* language and not the market's is D-L7-18: the
+ * copy is reformatted, not translated, so it is still in whatever language the
+ * prospect wrote it in. §8 asks capture to "preserve `lang` and locale hints";
+ * this reads them back. When the specimen declares nothing, this returns `null`
+ * and the rendition carries no language claim at all.
+ *
+ * @param {import('../core/contracts.d.ts').Specimen|null|undefined} specimen
+ * @returns {string|null}
+ */
+export function sourceLanguage(specimen) {
+  if (!specimen || typeof specimen !== 'object') return null;
+  const meta = specimen.meta && typeof specimen.meta === 'object' ? specimen.meta : {};
+  const candidates = [specimen.locale, meta.lang, meta['og:locale'], meta.language];
+  for (const raw of candidates) {
+    if (typeof raw !== 'string') continue;
+    const tag = raw.trim().replace(/_/g, '-');
+    if (LANG_TAG_RE.test(tag)) return tag;
+  }
+  return null;
+}
+
 /** Source-side date shapes recognised for reformatting. */
 const DATE_SLASH = /\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g;   // assumed US order: month/day/year
 const DATE_DOT = /\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b/g;     // assumed day.month.year

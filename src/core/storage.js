@@ -143,6 +143,24 @@ function utf8Bytes(s) {
  * @property {() => void} close
  */
 
+/**
+ * A save refused because the store is full.
+ *
+ * Carries the numbers as fields as well as in the message: §16's pressure
+ * listener is already watching usage against quota, and a caller that has to
+ * regex a sentence to find out how much space it needs will not bother.
+ */
+export class QuotaError extends Error {
+  /** @param {string} message @param {{usage: number, quota: number, needed: number}} detail */
+  constructor(message, detail) {
+    super(message);
+    this.name = 'QuotaError';
+    this.usage = detail.usage;
+    this.quota = detail.quota;
+    this.needed = detail.needed;
+  }
+}
+
 /** In-memory backend. Deterministic, synchronous under the hood, always available. */
 export class MemoryBackend {
   /** @param {number} [quota] bytes reported by `estimate` */
@@ -168,9 +186,38 @@ export class MemoryBackend {
     return v === undefined ? undefined : structuredCloneish(v);
   }
 
-  /** @param {string} store @param {any} value */
+  /**
+   * @param {string} store
+   * @param {any} value
+   *
+   * Refuses past the quota it reports, because a backend that reports a quota
+   * and never enforces one is lying about the only thing it is asked
+   * (CRITIQUE-2 C15): with a 400kB quota, eight saves of the corpus project ran
+   * usage to 3.6x it, every one returning success. §16's pressure warning fired
+   * correctly the whole way — so the seller was told they were over and then
+   * told each save had worked.
+   *
+   * This is the fallback backend, the one a user in a locked-down browser gets,
+   * so its failure mode has to be the honest one. The refusal names the numbers
+   * and the way out; `QuotaError` carries them so a caller can act without
+   * parsing prose. A record already stored is replaced rather than refused —
+   * overwriting an existing project with a *smaller* one must always work, or
+   * a full store cannot be emptied one project at a time.
+   */
   async put(store, value) {
-    this.bucket(store).set(value.id, structuredCloneish(value));
+    const bucket = this.bucket(store);
+    const incoming = utf8Bytes(JSON.stringify(value));
+    const replacing = bucket.has(value.id) ? utf8Bytes(JSON.stringify(bucket.get(value.id))) : 0;
+    const { usage } = await this.estimate();
+    const after = usage - replacing + incoming;
+    if (after > this.quota) {
+      throw new QuotaError(
+        `Storage is full: this save needs ${after.toLocaleString('en-US')} bytes of `
+        + `${this.quota.toLocaleString('en-US')}. Delete a project, or export this one to a file.`,
+        { usage, quota: this.quota, needed: after },
+      );
+    }
+    bucket.set(value.id, structuredCloneish(value));
   }
 
   /** @param {string} store @param {string} key */
@@ -379,12 +426,17 @@ export class ProjectStore {
     } catch { /* a read failure is not a reason to refuse a write */ }
 
     const record = makeRecord({ id, name, proof, seed, revision, clock: this.clock });
-    const pressure = await this.pressure();
-    if (pressure.level !== 'ok') for (const fn of this.pressureListeners) fn(pressure);
 
     try {
       await this.backend.put(STORE_PROJECTS, record);
       this.lastHash.set(id, hash);
+      // Measured **after** the write, and reported after it. Measuring before
+      // means the save that takes a seller past 80% is the one that says
+      // nothing — they are told on their *next* save, which may be after the
+      // one that fails. §16 asks for a warning at 80%; the only reading of that
+      // which helps is "as soon as you are at 80%".
+      const pressure = await this.pressure();
+      if (pressure.level !== 'ok') for (const fn of this.pressureListeners) fn(pressure);
       return ok({ record, skipped: false, pressure });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -479,7 +531,79 @@ export function exportProjectJson(record) {
 }
 
 /**
+ * The shape a `ProjectRecord` must have before anything is allowed to open it.
+ *
+ * `migrateRecord` answers a different question — "is this envelope a version I
+ * can move forward" — and answers it correctly. It says nothing about whether
+ * the envelope contains a proof. So a file carrying
+ * `{format, formatVersion, record: {schemaVersion: 1}}` imported cleanly, and
+ * the studio then opened a project with no `proof`, no `id` and no `seed`
+ * (CRITIQUE-2 C4). Every panel downstream reads `record.proof.*`.
+ *
+ * This checks the envelope's own fields and the §4 `Proof` fields the studio
+ * dereferences without guarding — not the whole contract. A record that passes
+ * can still hold a proof with an odd scene in it; that is what §14's sweep is
+ * for. What it cannot hold is nothing.
+ *
+ * Reported per field, because "invalid project file" tells a seller who has
+ * just lost a file nothing they can act on.
+ *
+ * @param {any} rec
+ * @returns {string[]} one message per problem; empty means well formed
+ */
+export function recordProblems(rec) {
+  /** @type {string[]} */
+  const problems = [];
+  if (!rec || typeof rec !== 'object') return ['the record is not an object'];
+
+  /** @param {string} field @param {string} type */
+  const require = (field, type) => {
+    const v = rec[field];
+    // eslint-disable-next-line valid-typeof
+    if (typeof v !== type) problems.push(`${field} is ${describeValue(v)}, expected a ${type}`);
+  };
+  require('id', 'string');
+  require('name', 'string');
+  require('seed', 'string');
+  require('savedAt', 'string');
+  if (typeof rec.revision !== 'number' || !Number.isFinite(rec.revision)) {
+    problems.push(`revision is ${describeValue(rec.revision)}, expected a number`);
+  }
+
+  const proof = rec.proof;
+  if (!proof || typeof proof !== 'object') {
+    problems.push(`proof is ${describeValue(proof)} — there is no proof in this file`);
+    return problems;
+  }
+  for (const [field, kind] of [
+    ['id', 'string'], ['prospectName', 'string'], ['createdAt', 'string'],
+    ['brand', 'object'], ['emitOptions', 'object'],
+  ]) {
+    const v = proof[field];
+    const okType = kind === 'object' ? (v && typeof v === 'object' && !Array.isArray(v)) : typeof v === kind;
+    if (!okType) problems.push(`proof.${field} is ${describeValue(v)}, expected ${kind === 'object' ? 'an object' : `a ${kind}`}`);
+  }
+  for (const field of ['specimens', 'renditions', 'recipes', 'spine', 'branches']) {
+    if (!Array.isArray(proof[field])) problems.push(`proof.${field} is ${describeValue(proof[field])}, expected an array`);
+  }
+  return problems;
+}
+
+/** @param {any} v @returns {string} */
+function describeValue(v) {
+  if (v === undefined) return 'missing';
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'an array';
+  return `a ${typeof v}`;
+}
+
+/**
  * Parse a `.pitchproof.json` file back into a record, migrating it forward.
+ *
+ * Validation happens **after** migration, not before: an old record is entitled
+ * to be missing a field this version requires, and that is exactly what a
+ * migration exists to add.
+ *
  * @param {string} text
  * @returns {{ok: true, value: ProjectRecord} | {ok: false, error: string}}
  */
@@ -488,5 +612,11 @@ export function importProjectJson(text) {
   try { parsed = JSON.parse(text); }
   catch (e) { return err(`Not valid JSON: ${e instanceof Error ? e.message : String(e)}`); }
   if (!parsed || parsed.format !== 'pitchproof-project') return err('Not a PitchProof project export');
-  return migrateRecord(parsed.record);
+  const migrated = migrateRecord(parsed.record);
+  if (!migrated.ok) return migrated;
+  const problems = recordProblems(migrated.value);
+  if (problems.length) {
+    return err(`This file is a PitchProof export but it is not a usable project: ${problems.join('; ')}.`);
+  }
+  return migrated;
 }

@@ -37171,6 +37171,17 @@ function utf8Bytes(s) {
   return n;
 }
 
+class QuotaError extends Error {
+
+  constructor(message, detail) {
+    super(message);
+    this.name = 'QuotaError';
+    this.usage = detail.usage;
+    this.quota = detail.quota;
+    this.needed = detail.needed;
+  }
+}
+
 class MemoryBackend {
 
   constructor(quota = 50 * 1024 * 1024) {
@@ -37194,7 +37205,19 @@ class MemoryBackend {
   }
 
   async put(store, value) {
-    this.bucket(store).set(value.id, structuredCloneish(value));
+    const bucket = this.bucket(store);
+    const incoming = utf8Bytes(JSON.stringify(value));
+    const replacing = bucket.has(value.id) ? utf8Bytes(JSON.stringify(bucket.get(value.id))) : 0;
+    const { usage } = await this.estimate();
+    const after = usage - replacing + incoming;
+    if (after > this.quota) {
+      throw new QuotaError(
+        `Storage is full: this save needs ${after.toLocaleString('en-US')} bytes of `
+        + `${this.quota.toLocaleString('en-US')}. Delete a project, or export this one to a file.`,
+        { usage, quota: this.quota, needed: after },
+      );
+    }
+    bucket.set(value.id, structuredCloneish(value));
   }
 
   async del(store, key) { this.bucket(store).delete(key); }
@@ -37416,12 +37439,62 @@ function exportProjectJson(record) {
   }, null, 2);
 }
 
+function recordProblems(rec) {
+
+  const problems = [];
+  if (!rec || typeof rec !== 'object') return ['the record is not an object'];
+
+  const require = (field, type) => {
+    const v = rec[field];
+
+    if (typeof v !== type) problems.push(`${field} is ${describeValue(v)}, expected a ${type}`);
+  };
+  require('id', 'string');
+  require('name', 'string');
+  require('seed', 'string');
+  require('savedAt', 'string');
+  if (typeof rec.revision !== 'number' || !Number.isFinite(rec.revision)) {
+    problems.push(`revision is ${describeValue(rec.revision)}, expected a number`);
+  }
+
+  const proof = rec.proof;
+  if (!proof || typeof proof !== 'object') {
+    problems.push(`proof is ${describeValue(proof)} — there is no proof in this file`);
+    return problems;
+  }
+  for (const [field, kind] of [
+    ['id', 'string'], ['prospectName', 'string'], ['createdAt', 'string'],
+    ['brand', 'object'], ['emitOptions', 'object'],
+  ]) {
+    const v = proof[field];
+    const okType = kind === 'object' ? (v && typeof v === 'object' && !Array.isArray(v)) : typeof v === kind;
+    if (!okType) problems.push(`proof.${field} is ${describeValue(v)}, expected ${kind === 'object' ? 'an object' : `a ${kind}`}`);
+  }
+  for (const field of ['specimens', 'renditions', 'recipes', 'spine', 'branches']) {
+    if (!Array.isArray(proof[field])) problems.push(`proof.${field} is ${describeValue(proof[field])}, expected an array`);
+  }
+  return problems;
+}
+
+function describeValue(v) {
+  if (v === undefined) return 'missing';
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'an array';
+  return `a ${typeof v}`;
+}
+
 function importProjectJson(text) {
   let parsed;
   try { parsed = JSON.parse(text); }
   catch (e) { return err(`Not valid JSON: ${e instanceof Error ? e.message : String(e)}`); }
   if (!parsed || parsed.format !== 'pitchproof-project') return err('Not a PitchProof project export');
-  return migrateRecord(parsed.record);
+  const migrated = migrateRecord(parsed.record);
+  if (!migrated.ok) return migrated;
+  const problems = recordProblems(migrated.value);
+  if (problems.length) {
+    return err(`This file is a PitchProof export but it is not a usable project: ${problems.join('; ')}.`);
+  }
+  return migrated;
 }
 
 __exports["SCHEMA_VERSION"] = SCHEMA_VERSION;
@@ -37432,11 +37505,13 @@ __exports["PRESSURE_WARN_RATIO"] = PRESSURE_WARN_RATIO;
 __exports["MIGRATIONS"] = MIGRATIONS;
 __exports["migrateRecord"] = migrateRecord;
 __exports["makeRecord"] = makeRecord;
+__exports["QuotaError"] = QuotaError;
 __exports["MemoryBackend"] = MemoryBackend;
 __exports["IndexedDbBackend"] = IndexedDbBackend;
 __exports["selectBackend"] = selectBackend;
 __exports["ProjectStore"] = ProjectStore;
 __exports["exportProjectJson"] = exportProjectJson;
+__exports["recordProblems"] = recordProblems;
 __exports["importProjectJson"] = importProjectJson;
 };
 __modules["ui/io.js"] = function (__exports, __require) {
