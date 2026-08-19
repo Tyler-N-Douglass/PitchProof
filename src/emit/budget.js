@@ -420,8 +420,12 @@ export function applyReplacements(proof, byPayload) {
   const media = (list) => (list || []).map((m) => {
     const hit = byPayload.get(m.dataUri);
     if (!hit) return m;
-    const decoded = parseDataUri(hit.dataUri);
-    return { ...m, dataUri: hit.dataUri, intrinsic: { w: hit.width, h: hit.height }, bytes: decoded ? decoded.bytes : m.bytes };
+    // `MediaRef.bytes` is the **inlined** cost — `utf8Length(dataUri)` — not the
+    // decoded payload (L6's F19 fix). `degradeAsset` already measures it that
+    // way, so `hit.bytes` is the number, and `parseDataUri(...).bytes` would
+    // hand a seller a size a third short for the one asset the product has just
+    // told them it shrank.
+    return { ...m, dataUri: hit.dataUri, intrinsic: { w: hit.width, h: hit.height }, bytes: hit.bytes };
   });
   return {
     ...proof,

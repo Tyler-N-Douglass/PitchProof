@@ -30,6 +30,35 @@ export const TINY_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
 /**
+ * A PNG data URI whose **inlined** length is `target` bytes, give or take the
+ * rounding to a whole base64 quantum.
+ *
+ * §4's `MediaRef.bytes` is the inlined cost — `utf8Length(dataUri)` — so a
+ * fixture that wants a large asset has to *carry* one. Declaring a size the
+ * payload contradicts describes a proof that cannot exist: L6 mints `bytes`
+ * from the URI at capture and nothing else writes a `MediaRef`, so the two never
+ * disagree in production. These fixtures used to declare 9MB against a 118-byte
+ * payload, which is why nothing noticed when the two branches of L11's
+ * `mediaBytes` were measuring different quantities (L11-D24).
+ *
+ * @param {number} target  inlined bytes wanted
+ * @returns {string}
+ */
+export function pngOfInlinedBytes(target) {
+  const head = 'data:image/png;base64,';
+  const unit = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk';
+  const bodyLen = Math.max(4, Math.floor((target - head.length) / 4) * 4);
+  const body = unit.repeat(Math.ceil(bodyLen / unit.length)).slice(0, bodyLen);
+  return head + body;
+}
+
+/** Over the per-asset limit — `maxBytes * 0.08` at the default budget — carried rather than claimed. */
+const OVERSIZE_PNG = pngOfInlinedBytes(2_400_000);
+
+/** Enough to put the 400KB budget fixture over, with room to degrade. */
+const BUDGET_PNG = pngOfInlinedBytes(1_200_000);
+
+/**
  * A palette in which every pair clears the minimum it is held to: the five
  * foreground roles at 4.5:1, the brand colours as display text at 3:1, and the
  * border and status colours at the 3:1 non-text minimum.
@@ -103,7 +132,7 @@ export function specimen(overrides = {}) {
     sourceUrl: null,
     capturedAt: CAPTURED_AT,
     blocks,
-    media: [{ id: 'md_hero', dataUri: TINY_PNG, alt: 'Hero', intrinsic: { w: 1200, h: 630 }, bytes: 68 }],
+    media: [{ id: 'md_hero', dataUri: TINY_PNG, alt: 'Hero', intrinsic: { w: 1200, h: 630 }, bytes: TINY_PNG.length }],
     meta: { lang: 'en' },
     wordCount: 7,
     locale: 'en',
@@ -266,7 +295,9 @@ function plantDefect(code) {
       return p;
 
     case 'ASSET_OVERSIZE':
-      p.specimens[0].media[0].bytes = 9_000_000;
+      // A real payload over the per-asset floor, not a declaration of one.
+      p.specimens[0].media[0].dataUri = OVERSIZE_PNG;
+      p.specimens[0].media[0].bytes = OVERSIZE_PNG.length;
       p.specimens[0].media[0].intrinsic = { w: 4000, h: 3000 };
       return p;
 
@@ -356,7 +387,7 @@ function plantDefect(code) {
     case 'SIZE_BUDGET_EXCEEDED':
       p.emitOptions.maxBytes = 400_000;
       p.specimens[0].media.push({
-        id: 'md_big', dataUri: TINY_PNG, alt: null, intrinsic: { w: 2000, h: 1200 }, bytes: 3_000_000,
+        id: 'md_big', dataUri: BUDGET_PNG, alt: null, intrinsic: { w: 2000, h: 1200 }, bytes: BUDGET_PNG.length,
       });
       return p;
 

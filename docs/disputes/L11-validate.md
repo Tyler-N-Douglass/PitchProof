@@ -241,6 +241,15 @@ and have L10 and L11 import it rather than each carrying a parser.
   through one accessor that returns `number | null` and says "unmeasured" in
   every message rather than quoting a percentage it does not have (L11-D17).
   §22.2's case is the unknown family, so `null` is the answer that matters most.
+- **§4 gives no finding code for a `MediaRef` whose declared `bytes` is not what
+  it carries.** L11 grades the payload and never the declaration (L11-D24), so a
+  drifted declaration cannot change a finding — but it is still a model that
+  misdescribes itself, and the only place it surfaces is `declaredBytes` in an
+  `ASSET_OVERSIZE` detail, which exists only if that asset is oversize for some
+  other reason. Not filed, because in production the two cannot disagree: L6
+  mints `bytes` from the data URI at capture and no other lane writes a
+  `MediaRef`. It would matter for a hand-edited or externally-generated project.
+  Recorded so the next critic does not read the silence as an oversight.
 - **§4 gives no finding code for a `LogoAsset` whose `kind` and payload
   disagree.** `data` is documented as "inline SVG markup or data URI" for either
   kind, so a `kind: 'svg'` logo carrying `data:image/png;…` is contract-legal and

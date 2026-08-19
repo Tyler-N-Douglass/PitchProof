@@ -159,3 +159,97 @@ test('a dry run walks the whole corpus deck with a live counter', async () => {
   for (let i = 1; i < counts.length; i++) assert.ok(counts[i] >= counts[i - 1]);
   assert.equal(result.summary.canEmit, true);
 });
+
+// ---------------------------------------------------------------------------
+// §4's `MediaRef.bytes` is the inlined cost, and one thing measures it
+// ---------------------------------------------------------------------------
+
+/**
+ * The regression for the tail of L6's F19, in L11's half.
+ *
+ * `MediaRef.bytes` means the **inlined** cost — `utf8Length(dataUri)`, base64
+ * expansion and `data:` preamble included — not the decoded payload. L11's
+ * `mediaBytes` had three branches: the declared size, else `parseDataUri().bytes`,
+ * else three quarters of the URI's length. The first meant one thing and the
+ * other two meant another, so a ref that declared its size was graded against a
+ * different quantity from one that did not, and `ASSET_OVERSIZE` — the rule that
+ * exists to catch an asset over §13's per-asset limit — was passing assets a
+ * third over it (L11-D24).
+ *
+ * The oracle is computed here from the data URI itself, never from the code
+ * under test, and driven by the corpus's own assets rather than by a fixture
+ * written to agree with the implementation.
+ */
+test('every corpus asset declares the inlined cost, and preflight measures the same number', () => {
+  const refs = [
+    ...proof.specimens.flatMap((s) => (s.media || []).map((m) => ({ owner: s.id, m }))),
+    ...proof.renditions.flatMap((r) => (r.media || []).map((m) => ({ owner: r.id, m }))),
+  ];
+  assert.ok(refs.length >= 4, `the corpus should carry several real assets, saw ${refs.length}`);
+
+  for (const { owner, m } of refs) {
+    // Independent oracle: the bytes this URI occupies in the emitted file.
+    const inlined = Buffer.byteLength(m.dataUri, 'utf8');
+    assert.equal(
+      m.bytes, inlined,
+      `${owner}/${m.id}: §4 bytes must be the inlined cost, not the decoded payload`,
+    );
+    // And it must not be the decoded payload, or the two meanings have merged
+    // back together and this test would pass for the wrong reason.
+    const decoded = Math.floor((m.dataUri.slice(m.dataUri.indexOf(',') + 1).replace(/=+$/, '').length * 3) / 4);
+    assert.ok(inlined > decoded, `${owner}/${m.id}: an inlined cost is larger than the payload it encodes`);
+  }
+});
+
+test('ASSET_OVERSIZE grades the inlined cost, whatever the ref declares', async () => {
+  // §4 makes `bytes` required, so "no declared size" is not a state a valid
+  // proof can reach — which means the declaration must not be able to change the
+  // answer. Setting every one of them to 1 must change nothing at all.
+  const asBuilt = structuredClone(proof);
+  const misdeclared = structuredClone(proof);
+  for (const s of misdeclared.specimens) for (const m of s.media || []) m.bytes = 1;
+  for (const r of misdeclared.renditions) for (const m of r.media || []) m.bytes = 1;
+
+  const oversizeOf = async (p) => (await runPreflight(p, { clock: () => '2026-08-19T00:00:00.000Z' }))
+    .filter((f) => f.code === 'ASSET_OVERSIZE')
+    .map((f) => `${f.detail.mediaId}:${f.detail.bytes}`)
+    .sort();
+
+  assert.deepEqual(
+    await oversizeOf(misdeclared),
+    await oversizeOf(asBuilt),
+    'the declared size is a cross-check, not a source of truth',
+  );
+});
+
+test('a ref with nothing inlined falls back to what it declares', async () => {
+  // The one live path for the fallback: a `MediaRef` still pointing at the
+  // network, which has no inlined cost to measure. `NETWORK_REFERENCE` blocks it
+  // on its own account; `ASSET_OVERSIZE` should still be able to size it.
+  const remote = structuredClone(proof);
+  const media = remote.specimens.flatMap((s) => s.media || [])[0];
+  media.dataUri = 'https://cdn.example.com/hero.png';
+  media.bytes = 9_000_000;
+
+  const findings_ = await runPreflight(remote, { clock: () => '2026-08-19T00:00:00.000Z' });
+  const finding = findings_.find((f) => f.code === 'ASSET_OVERSIZE' && f.detail.mediaId === media.id);
+  assert.ok(finding, 'a nine-megabyte remote asset is still an oversize asset');
+  assert.equal(finding.detail.bytes, 9_000_000);
+  assert.equal(finding.detail.declaredBytes, null, 'nothing to cross-check against');
+  assert.ok(findings_.some((f) => f.code === 'NETWORK_REFERENCE'), 'and it is blocked for being remote');
+});
+
+test('a declared size the payload contradicts is reported, not believed', async () => {
+  const lying = structuredClone(proof);
+  const media = lying.specimens.flatMap((s) => s.media || [])[0];
+  assert.ok(media, 'the corpus must carry at least one asset');
+  const truth = Buffer.byteLength(media.dataUri, 'utf8');
+  media.bytes = 40_000_000;      // a declaration nine media files would not reach
+  media.intrinsic = { w: 4000, h: 3000 };   // trip the rule on the §8 edge cap
+
+  const findings_ = await runPreflight(lying, { clock: () => '2026-08-19T00:00:00.000Z' });
+  const finding = findings_.find((f) => f.code === 'ASSET_OVERSIZE' && f.detail.mediaId === media.id);
+  assert.ok(finding, 'the oversize edge must still be caught');
+  assert.equal(finding.detail.bytes, truth, 'the rule grades what the asset carries');
+  assert.equal(finding.detail.declaredBytes, 40_000_000, 'and says what the model claimed instead');
+});

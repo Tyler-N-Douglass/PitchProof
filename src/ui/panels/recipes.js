@@ -282,8 +282,21 @@ function renderRenditions(app, proof) {
 }
 
 /**
+ * L7's one sentence about what a valid promotion record proves.
+ * @param {any} app
+ * @returns {string|null}
+ */
+function promotionLimit(app) {
+  // Guarded the way `layout.js` guards `services.missing`: an injected adapter
+  // in a test predates this method, and a missing sentence must not take the
+  // panel down with it.
+  return app.services.promotionRecordLimit ? app.services.promotionRecordLimit() : null;
+}
+
+/**
  * @param {any} app
  * @param {any} rendition
+ * @returns {import('../../core/vdom.js').VNode}
  */
 function renderRenditionDetail(app, rendition) {
   const copy = PROVENANCE_COPY[rendition.provenance] || PROVENANCE_COPY.illustrative;
@@ -309,12 +322,21 @@ function renderRenditionDetail(app, rendition) {
       hint: 'Where this came from, in a sentence. The promotion record is stored separately and editing this cannot destroy it.',
     }),
     record
-      ? pairs(
-        pair('Promoted by', record.by || '—'),
-        pair('Promoted at', formatDateTime(record.at)),
-        pair('Promoted from', humanize(record.from || '')),
-        pair('Record', record.signatureValid ? badge('verifies against itself', 'ok') : badge('does not verify', 'bad')),
-      )
+      ? h('div', null,
+        pairs(
+          pair('Promoted by', record.by || '—'),
+          pair('Promoted at', formatDateTime(record.at)),
+          pair('Promoted from', humanize(record.from || '')),
+          pair('Record', record.signatureValid ? badge('verifies against itself', 'ok') : badge('does not verify', 'bad')),
+        ),
+        // "Verifies against itself" is accurate and, on its own, easy to read as
+        // "we know who did this". The sentence that says what it actually
+        // proves comes from L7 (`PROMOTION_RECORD_LIMIT`) rather than being
+        // paraphrased here, so there is one description of the guarantee in the
+        // repo instead of two that can drift apart (CRITIQUE-1 F23).
+        promotionLimit(app)
+          ? h('p', { class: 'st-note' }, promotionLimit(app))
+          : null)
       : null,
     budget
       ? pairs(

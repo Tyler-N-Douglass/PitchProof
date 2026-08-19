@@ -234,7 +234,15 @@ them. The gate supplies L10's own, builds the context `runPreflight` builds, and
 runs every rule. `test/emit/gate.test.mjs` asserts the gate and `runPreflight`
 produce identical findings, so the seam costs no fidelity.
 
-**What we would propose instead.** One line in `src/validate/lane-emit.js`:
+**Resolved.** L11 made the change and went further: `lane-emit.js` now imports
+`emit/scan.js` and `emit/provenance.js` directly, the cycle is gone, and
+`src/emit/gate.js` is a single call to `runPreflight` — the context
+reconstruction and about a hundred lines with it. The deep import in
+`lane-emit.js` is now load-bearing rather than lazy, since routing it back
+through `emit/index.js` would close the cycle again; the conformance test
+carries it as a named exception and fails if the exception stops being used.
+
+The original proposal, for the record:
 
 ```js
 // instead of:  export { scanForNetworkReferences, assertProvenance } from '../emit/index.js';
@@ -277,10 +285,13 @@ about the *rules* rather than about which promotion reader was in scope, and
 `test/emit/gate.test.mjs` separately asserts that a rendition promoted through
 L7 is not reported as unpromoted.
 
-**What we would propose instead.** Delete the reader in
-`src/validate/provenance.js` and re-export L7's, the way `lane-brand.js` and
-`lane-scene.js` already re-export L4's and L8's. One format, one reader, and
-`resolveDeps` needs no default for it.
+**Resolved.** L11 deleted its reader and now bridges to L7's through
+`src/validate/lane-recipe.js`, and asserts preflight's default result is
+deep-equal to the result with L7's reader injected. The injection in
+`test/emit/gate.test.mjs` was removed with it. L11 also found that the old
+reader accepted a plain English sentence anyone could type into `notes` — the
+forgery L7's digest exists to defeat — so this was a safety fix rather than
+tidying.
 
 ---
 
@@ -299,7 +310,9 @@ now carries its `kind: 'svg'` logo as inline markup — which §7 prefers anyway
 ("Prefer inline SVG"), so the fixture is more realistic for the change. The
 divergence is recorded rather than worked around.
 
-**What we would propose instead.** Accept either payload for either `kind`, and
-raise the finding only when `data` is neither markup nor a parseable data URI.
-The `kind` field then describes the asset rather than constraining how it was
-delivered.
+**Resolved.** L11 accepts either payload for either `kind`, per §4 as written,
+and added two refinements: a URI declaring `image/svg+xml` that decodes to
+nothing is still reported, and a data URI of another MIME type on an `svg` logo
+is accepted, because that is a mislabelled `kind` rather than a missing asset
+and §4 gives no code for it — recorded as a non-dispute rather than smuggled in
+under a severity-1 code.

@@ -812,3 +812,70 @@ count, a non-zero cost, the "ships anyway" and "delete it" halves of the message
 and the auto-fix; a hollow branch is asserted to be billed zero; and
 `branchShipCost` is asserted to exclude media the spine also shows.
 
+---
+
+## L11-D24 — `mediaBytes` measures one quantity, and the data URI is it
+
+**Defect:** the tail of L6's F19, relayed by the integrator.
+
+**Unsettled by:** nothing, once L6 fixed §4's meaning. What was unsettled before
+is why nobody noticed: `MediaRef.bytes` was documented as a number of bytes
+without saying *which* bytes, and two readings coexisted.
+
+**What was wrong.** `MediaRef.bytes` now means the **inlined** cost —
+`utf8Length(dataUri)`, base64's 4/3 expansion and the `data:` preamble included
+— not the decoded payload. `mediaBytes` had three branches:
+
+1. the declared `media.bytes`,
+2. else `parseDataUri(dataUri).bytes`,
+3. else `dataUri.length * 0.75`.
+
+Branch 1 changed meaning under L6's fix; 2 and 3 did not. So a ref that declared
+its size was graded on the inlined cost and a ref that did not was graded on the
+decoded payload — 34% smaller — and `ASSET_OVERSIZE`, the rule that exists to
+catch an asset over §13's per-asset limit, applied one limit to two quantities.
+
+**Decision — the class, not the instance.** The integrator asked whether the
+fallback could *be* the primary path. It can, so it is. `mediaBytes` is one
+expression over one quantity: if `dataUri` is a data URI, the answer is
+`utf8Length(dataUri)`, full stop. The declaration is consulted only when there is
+nothing inlined to measure — a ref still pointing at the network, which
+`NETWORK_REFERENCE` blocks on its own account. §4 makes `bytes` required, so
+"no declared size" is not a state a valid proof can reach; a test asserts that
+setting every declared size to `1` changes no `ASSET_OVERSIZE` finding, which is
+the property that matters: the declaration cannot move the answer.
+
+**Two consequences I had to fix rather than leave.**
+
+- **`BASE64_EXPANSION` is deleted.** Two call sites multiplied `mediaBytes(...)`
+  by 4/3 — correct while the function returned the decoded payload, and a 33%
+  *over*-count the moment it returned the inlined cost. That is the same defect
+  in the other direction, and one of the two sites was `branchShipCost`, which I
+  had written earlier in this same pass against the old meaning. The constant is
+  gone rather than left with a warning comment, because a constant that must
+  never be applied is how the double-count comes back.
+- **The disagreement is now visible.** `ASSET_OVERSIZE`'s detail carries
+  `declaredBytes`, non-null only when the ref declares a size its payload
+  contradicts. §4 has no finding code for "the model misdescribes an asset" and I
+  am not going to smuggle one into a severity-2 rule, but the seller should not be
+  shown a number the model silently disagrees with. Filed as a non-dispute.
+
+**The fixtures were part of the defect.** `test/fixtures/validate/defects.mjs`
+built its oversize and over-budget cases by *declaring* 9MB and 3MB against a
+118-byte PNG, and declared `bytes: 68` — the decoded payload — on the clean
+proof's hero image. That is a proof that cannot exist: L6 mints `bytes` from the
+URI at capture and nothing else writes a `MediaRef`. Those fixtures are why the
+two branches could disagree for as long as they did — every test drove branch 1
+only. They now carry payloads of the size they claim, via `pngOfInlinedBytes`,
+and the clean proof's declaration is derived from its URI instead of typed.
+
+**Regression.** In `test/validate/corpus-proof.test.mjs`, driven by
+`buildCorpusProof()`'s real assets with the oracle computed in the test from each
+data URI rather than from the code under test: every corpus ref's declared
+`bytes` equals its inlined length *and* is strictly greater than its decoded
+payload, so the test fails if the two meanings ever merge back together;
+`ASSET_OVERSIZE` is invariant under the declaration; and a ref with nothing
+inlined falls back to the declaration while `NETWORK_REFERENCE` blocks it.
+`test/validate/rules.test.mjs` computes the expected megabyte figure in the
+oversize message from the fixture's own payload.
+

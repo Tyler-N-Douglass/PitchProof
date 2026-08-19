@@ -163,3 +163,76 @@ consuming lane** — L6 consumes L3, L7 consumes L6, L8 consumes L4/L5, L10 and
 L11 consume L8/L9 — and each of them could carry the same twenty-line test. That
 is the integrator's call, not this lane's, but F14 is unlikely to be the only
 instance of it.
+
+---
+
+## D-L12-7 — Should the emit gate let a seller sign off the studio's own starting brand?
+
+**Severity: product judgement; raised, not taken. Built as written.**
+
+A brand-new project ships with four colour roles (`#FFFFFF`, `#111318`,
+`#1F3A93`, `#FFFFFF`) and one face (`system-ui`) from `model.emptyBrand`, all at
+0% confidence. They exist so the Brand panel has something to render and so a
+proof is previewable before an extraction.
+
+They are also, until someone extracts or types over them, **not the prospect's
+brand**. Under §7 they sit below the confidence floor, which means they appear
+as an emit blocker — and the blocker is released by one checkbox. A seller who
+ticks it emits an artifact wearing PitchProof's navy and `system-ui` while §15
+says "the artifact wears the prospect's brand".
+
+This pass fixed the *wording* (L12-18): the blocker is now `BRAND_DEFAULTS`, it
+says nothing has been extracted and nothing entered, and the checkbox says what
+ticking it accepts. The group is still reviewable, on the ground that a person
+looking at four hex values and accepting them is making a real judgement about a
+real claim, which is what distinguishes this from L12-15's "reviewing an empty
+set is not a review".
+
+**The stronger option, for the integrator.** Refuse review of a group that is
+still exactly `emptyBrand`'s value — `setBrandReviewed` already refuses an empty
+group, and `brandGroupIsStarterDefault` is exported and tested, so the change is
+one clause. The effect is that a new project cannot emit until the brand has been
+extracted or at least one field entered by hand, which §1.2's definition of done
+requires anyway ("Extract their brand system"). The reason this lane did not just
+do it: it closes the emit on a fresh project on §18 grounds the spec states about
+the artifact rather than about the gate, and a gate that gets stricter is the
+integrator's call rather than one panel's.
+
+**Not worked around.** Nothing in `src/ui/**` assumes either answer;
+`brandGroupIsStarterDefault` is a predicate, and the three call sites read it
+rather than branching on a copy of it.
+
+---
+
+## D-L12-8 — `PROMOTION_RECORD_LIMIT` is the right thing to show and is not in `API.md` Part 3
+
+**Severity: none; noted for the record, same shape as D-L12-4.**
+
+CRITIQUE-1 F23 found `promotionSignature` to be an unkeyed `shortHash` with
+`formatPromotionRecord` exported, so a valid promotion record can be computed by
+anyone holding the repo. §1.1 forbids a backend and accounts, so no key scheme
+can do better — any key would ship inside the artifact the forger already has.
+The digest is tamper-evidence against corruption and partial edits; it is not
+proof of who promoted anything. L7 accepted the finding and exported
+`PROMOTION_RECORD_LIMIT`, one canonical sentence saying exactly that.
+
+`API.md` Part 3 declares nine surfaces for L7 and this is not among them. The
+studio consumes it anyway — `services.promotionRecordLimit()` returns it verbatim
+and the Recipes panel renders it beneath the "verifies against itself" badge —
+because the alternative is the studio writing a second description of the same
+guarantee, which is the exact mechanism by which `services.promotionRecord`'s own
+comment came to claim the record "cannot be hand-forged" and stay wrong for a
+pass.
+
+If the integrator prefers the studio to stay strictly on the declared set, the
+fix is to promote `PROMOTION_RECORD_LIMIT` into `API.md` Part 3 — which is what
+it already is in practice, since L7's module header names it as "the sentence to
+show". `test/ui/empty-state-honesty.test.mjs` asserts the studio returns L7's
+string identically, so a paraphrase reappearing fails.
+
+**Worth stating for whoever reads F23 next:** the digest is not the weakest link
+in the provenance chain. Setting `provenance: 'client-supplied'` suppresses the
+illustrative label with no record at all — one word rather than six fields and a
+hash — and that is a deliberate, labelled act by the operator, which is the model
+§9 chose. The correction F23 asks for is a wording correction, not a security
+one.

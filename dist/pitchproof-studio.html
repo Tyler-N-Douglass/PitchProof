@@ -33338,8 +33338,8 @@ function applyReplacements(proof, byPayload) {
   const media = (list) => (list || []).map((m) => {
     const hit = byPayload.get(m.dataUri);
     if (!hit) return m;
-    const decoded = parseDataUri(hit.dataUri);
-    return { ...m, dataUri: hit.dataUri, intrinsic: { w: hit.width, h: hit.height }, bytes: decoded ? decoded.bytes : m.bytes };
+
+    return { ...m, dataUri: hit.dataUri, intrinsic: { w: hit.width, h: hit.height }, bytes: hit.bytes };
   });
   return {
     ...proof,
@@ -34370,8 +34370,6 @@ const ASSET_OVERSIZE_FLOOR_BYTES = 1_000_000;
 
 const MODEL_COMPRESSION_ESTIMATE = 0.30;
 
-const BASE64_EXPANSION = 4 / 3;
-
 function allScenes(proof) {
 
   const out = [];
@@ -34399,10 +34397,18 @@ function allMedia(proof) {
 }
 
 function mediaBytes(media) {
+  if (!media) return 0;
+  const uri = typeof media.dataUri === 'string' ? media.dataUri : '';
+  if (uri.startsWith('data:')) return utf8Length(uri);
   if (Number.isFinite(media.bytes) && media.bytes > 0) return media.bytes;
-  const parsed = typeof media.dataUri === 'string' ? parseDataUri(media.dataUri) : null;
-  if (parsed && Number.isFinite(parsed.bytes)) return parsed.bytes;
-  return typeof media.dataUri === 'string' ? Math.floor(media.dataUri.length * 0.75) : 0;
+  return utf8Length(uri);
+}
+
+function declaredBytesMismatch(media) {
+  if (!media || !Number.isFinite(media.bytes) || media.bytes <= 0) return null;
+  const uri = typeof media.dataUri === 'string' ? media.dataUri : '';
+  if (!uri.startsWith('data:')) return null;
+  return media.bytes === utf8Length(uri) ? null : media.bytes;
 }
 
 function safeParseDataUri(uri) {
@@ -34572,7 +34578,7 @@ const assetOversize = {
       const overEdge = edge > MAX_MEDIA_EDGE_PX;
       if (!overBytes && !overEdge) continue;
       const reasons = [];
-      if (overBytes) reasons.push(`${(bytes / 1e6).toFixed(2)}MB is ${((bytes / maxBytes) * 100).toFixed(1)}% of the ${(maxBytes / 1e6).toFixed(0)}MB budget`);
+      if (overBytes) reasons.push(`${(bytes / 1e6).toFixed(2)}MB inlined is ${((bytes / maxBytes) * 100).toFixed(1)}% of the ${(maxBytes / 1e6).toFixed(0)}MB budget`);
       if (overEdge) reasons.push(`its ${edge}px long edge exceeds the ${MAX_MEDIA_EDGE_PX}px capture cap in §8`);
       out.push(makeFinding({
         code: 'ASSET_OVERSIZE',
@@ -34583,6 +34589,8 @@ const assetOversize = {
         detail: {
           mediaId: media.id, bytes, limitBytes: Math.round(limit), edgePx: edge,
           ownerKind: entry.ownerKind, ownerId: entry.ownerId, quality,
+
+          declaredBytes: declaredBytesMismatch(media),
         },
       }));
     }
@@ -34679,7 +34687,7 @@ function branchShipCost(proof, branch) {
   let media = 0;
   for (const id of exclusive) {
     const owner = owners.get(id);
-    for (const m of (owner && owner.media) || []) media += mediaBytes(m) * BASE64_EXPANSION;
+    for (const m of (owner && owner.media) || []) media += mediaBytes(m);
   }
 
   return {
@@ -35138,7 +35146,7 @@ const sizeBudgetExceeded = {
     const canRecompress = QUALITY_STEPS.indexOf(quality) > 0;
 
     let degradable = 0;
-    for (const entry of allMedia(proof)) degradable += mediaBytes(entry.media) * BASE64_EXPANSION;
+    for (const entry of allMedia(proof)) degradable += mediaBytes(entry.media);
 
     let logoBytes = 0;
     for (const logo of (proof.brand && proof.brand.logos) || []) logoBytes += utf8Length(String(logo.data || ''));
@@ -35213,7 +35221,6 @@ __exports["MAX_MEDIA_EDGE_PX"] = MAX_MEDIA_EDGE_PX;
 __exports["ASSET_OVERSIZE_BUDGET_RATIO"] = ASSET_OVERSIZE_BUDGET_RATIO;
 __exports["ASSET_OVERSIZE_FLOOR_BYTES"] = ASSET_OVERSIZE_FLOOR_BYTES;
 __exports["MODEL_COMPRESSION_ESTIMATE"] = MODEL_COMPRESSION_ESTIMATE;
-__exports["BASE64_EXPANSION"] = BASE64_EXPANSION;
 __exports["allScenes"] = allScenes;
 __exports["logoPayloadUsable"] = logoPayloadUsable;
 __exports["daysBetween"] = daysBetween;
@@ -35886,102 +35893,21 @@ __exports["reviewReachable"] = __require("validate/provenance.js").reviewReachab
 };
 __modules["emit/gate.js"] = function (__exports, __require) {
 
-const { BREAKPOINTS } = __require("core/contracts.js");
-const { elementId } = __require("core/ids.js");
-const { collectByAttr } = __require("core/vdom.js");
-const { REVEAL_ATTR } = __require("runtime/beats.js");
-const { RULES, sortFindings } = __require("validate/index.js");
-const { measureScene } = __require("scene/index.js");
-const { branchCoverage } = __require("branch/index.js");
-const { contrastRatio } = __require("brand/color.js");
-const { scanForNetworkReferences } = __require("emit/scan.js");
-const { assertProvenance } = __require("emit/provenance.js");
-const { hasPromotionRecord } = __require("emit/promotion.js");
+const { runPreflight, RULES } = __require("validate/index.js");
 
 const MEASURED_BY_EMIT = new Set(['SIZE_BUDGET_EXCEEDED']);
 
-function layoutContextFor(runtime, scene) {
-  const ctx = runtime.layoutContext(scene);
-  return { ...ctx, el: (path) => elementId(scene.id, path) };
-}
-
-function measureDeck(deck, runtime, breakpoints) {
-
-  const out = [];
-
-  const seen = new Set();
-  const sequences = [deck.spine, ...[...deck.sequences.values()].filter((s) => s.kind === 'branch')];
-  for (const sequence of sequences) {
-    for (const scene of sequence.scenes) {
-      if (seen.has(scene.id)) continue;
-      seen.add(scene.id);
-      const ctx = layoutContextFor(runtime, scene);
-      for (const breakpoint of breakpoints) {
-        const measurement = measureScene(scene, ctx, breakpoint.id);
-        if (!measurement) continue;
-        out.push({
-          sceneId: measurement.sceneId || scene.id,
-          breakpoint: measurement.breakpoint || breakpoint.id,
-          boxes: measurement.boxes || [],
-        });
-      }
-    }
-  }
-  return out;
-}
-
-function renderedElementIds(deck, render) {
-
-  const out = new Map();
-  if (typeof render !== 'function') return out;
-  for (const scene of deck.sceneById.values()) {
-    let ids;
-    try {
-      ids = collectByAttr(render(scene), REVEAL_ATTR).map((el) => el.a[REVEAL_ATTR]).filter(Boolean);
-    } catch {
-
-      continue;
-    }
-    if (ids.length === 0) continue;
-    out.set(scene.id, new Set(ids));
-  }
-  return out;
-}
-
-function gateDeps() {
-  return {
-    contrastRatio,
-    measureScene,
-    branchCoverage,
-    scanForNetworkReferences,
-    assertProvenance,
-    hasPromotionRecord,
-  };
-}
-
-function runEmitGate(args) {
-  const breakpoints = args.breakpoints && args.breakpoints.length ? args.breakpoints : BREAKPOINTS.slice();
-  const ctx = {
-    renderScene: args.renderScene,
-    proof: args.proof,
-    deck: args.deck,
-    breakpoints,
-    measurements: measureDeck(args.deck, args.runtime, breakpoints),
-    renderedElementIds: renderedElementIds(args.deck, args.renderScene),
-    nowIso: args.nowIso,
+async function runEmitGate(args) {
+  const findings = await runPreflight(args.proof, {
+    breakpoints: args.breakpoints,
+    clock: args.clock,
     runtimeJs: args.runtimeJs,
     runtimeCss: args.runtimeCss,
     html: args.html,
     css: args.css,
-    deps: gateDeps(),
-  };
-
-  const findings = [];
-  for (const rule of RULES) {
-    if (MEASURED_BY_EMIT.has(rule.code)) continue;
-    findings.push(...rule.run(ctx));
-  }
-  return sortFindings(findings);
+    renderScene: args.renderScene,
+  });
+  return findings.filter((f) => !MEASURED_BY_EMIT.has(f.code));
 }
 
 function gatedCodes() {
@@ -35989,10 +35915,6 @@ function gatedCodes() {
 }
 
 __exports["MEASURED_BY_EMIT"] = MEASURED_BY_EMIT;
-__exports["layoutContextFor"] = layoutContextFor;
-__exports["measureDeck"] = measureDeck;
-__exports["renderedElementIds"] = renderedElementIds;
-__exports["gateDeps"] = gateDeps;
 __exports["runEmitGate"] = runEmitGate;
 __exports["gatedCodes"] = gatedCodes;
 };
@@ -36088,19 +36010,15 @@ async function emit(proof, options, deps) {
 
   const findings = [];
 
-  let nowIso = null;
-  try { nowIso = clock(); } catch { nowIso = null; }
   try {
-    findings.push(...runEmitGate({
+    findings.push(...await runEmitGate({
       proof: reconstructed,
-      deck: built.runtime.deck,
-      runtime: built.runtime,
       renderScene,
       html,
       css: finalCss,
       runtimeJs,
       runtimeCss,
-      nowIso: typeof nowIso === 'string' ? nowIso : null,
+      clock,
     }));
   } catch (error) {
     return err(
@@ -36146,12 +36064,7 @@ async function emit(proof, options, deps) {
   };
 
   if (blocking.length) {
-    const lines = blocking.map((f, i) => `  ${i + 1}. [${f.code}] ${f.message}${locusSuffix(f.locus)}`);
-    return err(
-      `emit refused: ${blocking.length} severity-1 finding(s) block this artifact. `
-      + 'There is no override flag (§14).\n' + lines.join('\n'),
-      result,
-    );
+    return err(describeRefusal(blocking), result);
   }
 
   return ok(result);
@@ -36229,6 +36142,49 @@ function staleCaptureFindings(proof, clock) {
   return out;
 }
 
+function describeRefusal(blocking) {
+
+  const groups = new Map();
+  for (const finding of blocking) {
+    const key = `${finding.code}\u0000${finding.message}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { finding, count: 0, scenes: new Set() };
+      groups.set(key, group);
+    }
+    group.count += 1;
+    if (finding.locus && finding.locus.sceneId) group.scenes.add(String(finding.locus.sceneId));
+  }
+
+  const byCode = {};
+
+  const allScenes = new Set();
+  for (const f of blocking) {
+    byCode[f.code] = (byCode[f.code] || 0) + 1;
+    if (f.locus && f.locus.sceneId) allScenes.add(String(f.locus.sceneId));
+  }
+  const codeSummary = Object.keys(byCode).sort().map((c) => `${byCode[c]} × ${c}`).join(', ');
+  const where = allScenes.size === 0 ? ''
+    : allScenes.size <= 4 ? ` in ${allScenes.size === 1 ? 'scene' : 'scenes'} ${[...allScenes].sort().join(', ')}`
+      : ` across ${allScenes.size} scenes`;
+
+  const distinct = [...groups.values()];
+  const shown = distinct.slice(0, 20);
+  const lines = shown.map((group, i) => {
+    const times = group.count > 1 ? ` ×${group.count}` : '';
+    return `  ${i + 1}. [${group.finding.code}${times}] ${group.finding.message}${locusSuffix(group.finding.locus)}`;
+  });
+  if (distinct.length > shown.length) {
+    lines.push(`  … and ${distinct.length - shown.length} further distinct finding(s) of the same kind.`);
+  }
+
+  const head = distinct.length === blocking.length
+    ? `emit refused: ${blocking.length} severity-1 finding(s) block this artifact`
+    : `emit refused: ${blocking.length} severity-1 finding(s), ${distinct.length} distinct, block this artifact`;
+
+  return `${head} — ${codeSummary}${where}. There is no override flag (§14).\n${lines.join('\n')}`;
+}
+
 function locusSuffix(locus) {
   const parts = [];
   if (locus.sceneId) parts.push(`scene ${locus.sceneId}`);
@@ -36246,6 +36202,7 @@ __exports["stripPresenterNotes"] = stripPresenterNotes;
 __exports["layoutsMissingFor"] = layoutsMissingFor;
 __exports["buildDocument"] = buildDocument;
 __exports["staleCaptureFindings"] = staleCaptureFindings;
+__exports["describeRefusal"] = describeRefusal;
 };
 __modules["emit/index.js"] = function (__exports, __require) {
 
@@ -36254,13 +36211,10 @@ __exports["buildDocument"] = __require("emit/emit.js").buildDocument;
 __exports["layoutsMissingFor"] = __require("emit/emit.js").layoutsMissingFor;
 __exports["staleCaptureFindings"] = __require("emit/emit.js").staleCaptureFindings;
 __exports["stripPresenterNotes"] = __require("emit/emit.js").stripPresenterNotes;
+__exports["describeRefusal"] = __require("emit/emit.js").describeRefusal;
 __exports["STALE_CAPTURE_DAYS"] = __require("emit/emit.js").STALE_CAPTURE_DAYS;
 __exports["runEmitGate"] = __require("emit/gate.js").runEmitGate;
-__exports["gateDeps"] = __require("emit/gate.js").gateDeps;
 __exports["gatedCodes"] = __require("emit/gate.js").gatedCodes;
-__exports["measureDeck"] = __require("emit/gate.js").measureDeck;
-__exports["renderedElementIds"] = __require("emit/gate.js").renderedElementIds;
-__exports["layoutContextFor"] = __require("emit/gate.js").layoutContextFor;
 __exports["MEASURED_BY_EMIT"] = __require("emit/gate.js").MEASURED_BY_EMIT;
 __exports["scanForNetworkReferences"] = __require("emit/scan.js").scanForNetworkReferences;
 __exports["scanModelAssets"] = __require("emit/scan.js").scanModelAssets;
@@ -36680,6 +36634,11 @@ function makeServices(env) {
     promotionRecord(rendition) {
       if (!recipeLane) return null;
       try { return recipeLane.readPromotionRecord(rendition); } catch { return null; }
+    },
+
+    promotionRecordLimit() {
+      if (!recipeLane) return null;
+      try { return recipeLane.PROMOTION_RECORD_LIMIT || null; } catch { return null; }
     },
 
     visibleNotes(rendition) {
@@ -40625,6 +40584,11 @@ function renderRenditions(app, proof) {
   selected ? renderRenditionDetail(app, selected) : null);
 }
 
+function promotionLimit(app) {
+
+  return app.services.promotionRecordLimit ? app.services.promotionRecordLimit() : null;
+}
+
 function renderRenditionDetail(app, rendition) {
   const copy = PROVENANCE_COPY[rendition.provenance] || PROVENANCE_COPY.illustrative;
   const promoted = rendition.provenance === 'verified-by-user';
@@ -40649,12 +40613,17 @@ function renderRenditionDetail(app, rendition) {
       hint: 'Where this came from, in a sentence. The promotion record is stored separately and editing this cannot destroy it.',
     }),
     record
-      ? pairs(
-        pair('Promoted by', record.by || '—'),
-        pair('Promoted at', formatDateTime(record.at)),
-        pair('Promoted from', humanize(record.from || '')),
-        pair('Record', record.signatureValid ? badge('verifies against itself', 'ok') : badge('does not verify', 'bad')),
-      )
+      ? h('div', null,
+        pairs(
+          pair('Promoted by', record.by || '—'),
+          pair('Promoted at', formatDateTime(record.at)),
+          pair('Promoted from', humanize(record.from || '')),
+          pair('Record', record.signatureValid ? badge('verifies against itself', 'ok') : badge('does not verify', 'bad')),
+        ),
+
+        promotionLimit(app)
+          ? h('p', { class: 'st-note' }, promotionLimit(app))
+          : null)
       : null,
     budget
       ? pairs(

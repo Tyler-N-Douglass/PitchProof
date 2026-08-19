@@ -542,15 +542,46 @@ export function makeServices(env) {
 
     /**
      * The promotion record standing against a rendition, decoded. L7 stores it
-     * as a signed token inside `notes` so it survives an export and cannot be
-     * hand-forged; the studio has to decode it to show a person who promoted
-     * what, and when (§9).
+     * as a digest-stamped token inside `notes` so it survives an export and so
+     * a partly-edited record stops counting; the studio has to decode it to
+     * show a person who promoted what, and when (§9).
+     *
+     * **`signatureValid` is tamper-evidence, not authenticity.** The digest is
+     * `shortHash({v, by, at, of, from})` — unkeyed, and `formatPromotionRecord`
+     * is exported — so anyone holding the repo can compute a valid one
+     * (CRITIQUE-1 F23). There is no better option available: §1.1 forbids a
+     * backend and accounts, and any key would have to ship inside the artifact
+     * the forger already has. What a valid digest proves is that the line has
+     * not been corrupted or half-edited; it does not prove that the person
+     * named promoted anything. It is not the weakest link either — setting
+     * `provenance: 'client-supplied'` suppresses the illustrative label with no
+     * record at all, in one word rather than six fields and a hash.
+     *
+     * `promotionRecordLimit()` is the sentence to put in front of a person; it
+     * comes from L7 rather than from here, so there is exactly one description
+     * of this guarantee in the repo.
+     *
      * @param {any} rendition
      * @returns {{by: string, at: string, from: string, signatureValid: boolean}|null}
      */
     promotionRecord(rendition) {
       if (!recipeLane) return null;
       try { return recipeLane.readPromotionRecord(rendition); } catch { return null; }
+    },
+
+    /**
+     * L7's one sentence about what a valid promotion record does and does not
+     * prove, shown verbatim beside the outcome it qualifies.
+     *
+     * Taken from the lane rather than written here on purpose: two descriptions
+     * of one guarantee is how this adapter's own comment came to claim more for
+     * the digest than it delivers, for a whole pass. Returns `null` only if the
+     * lane is absent, in which case there is no record to qualify either.
+     * @returns {string|null}
+     */
+    promotionRecordLimit() {
+      if (!recipeLane) return null;
+      try { return recipeLane.PROMOTION_RECORD_LIMIT || null; } catch { return null; }
     },
 
     /**

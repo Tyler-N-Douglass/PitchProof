@@ -358,6 +358,10 @@ export function fakeServices(options = {}) {
       const match = String((rendition && rendition.notes) || '').match(/promoted by (.+?) at (\S+)/);
       return match ? { by: match[1], at: match[2], from: 'illustrative', signatureValid: true } : null;
     },
+    // The real adapter returns L7's `PROMOTION_RECORD_LIMIT` verbatim. The fake
+    // returns a stand-in of the same shape rather than importing the lane, so a
+    // test that means to check L7's actual wording has to use real services.
+    promotionRecordLimit: () => 'A promotion record is checked against itself, not against an authority.',
     visibleNotes: (rendition) => String((rendition && rendition.notes) || '').split('\n').filter((l) => !/^promoted by /.test(l)).join('\n'),
     composeNotes: (rendition, prose) => {
       const records = String((rendition && rendition.notes) || '').split('\n').filter((l) => /^promoted by /.test(l)).join('\n');

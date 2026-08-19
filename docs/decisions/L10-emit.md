@@ -468,27 +468,26 @@ about provenance — "enforce this in the emitter, not just in the UI" — appli
 here word for word: a `.pitchproof.html` handed to a client must not depend on
 which program produced it.
 
-**Why not simply call `runPreflight`.** It is a module cycle the bundler refuses
-(D3):
+**How.** One call to `runPreflight`, with the artifact's own rendered scenes,
+its final stylesheet and the document about to be written.
 
-```
-emit/emit.js → validate/index.js → validate/preflight.js
-             → validate/lane-emit.js → emit/index.js → emit/emit.js
-```
+It was not always. The first version rebuilt preflight's context by hand —
+measuring the deck, collecting rendered element ids, assembling the cross-lane
+dependency object — because `validate/lane-emit.js` re-exported L10's scanner
+through `emit/index.js`, and a direct call was a module cycle the bundler
+refuses (D3). That workaround cost about a hundred lines and, on its first run,
+a real defect: it forgot `renderedElementIds`, so half of `BEAT_EMPTY` was
+silently inert. L10-D8 proposed the fix, L11 made it, and the workaround went
+with the cycle. One sweep, one implementation, no second context that can drift
+from the first.
 
-The dependency between the two lanes is genuinely mutual: preflight needs L10's
-scanner and provenance checker, which `validate/lane-emit.js` re-exports.
-`validate/rules.js` is the half with no back-edge — it takes both through
-`ctx.deps` rather than importing them — so an emitter that supplies its own can
-run the whole rule set. `docs/disputes/L10-emit.md` (L10-D8) records the one-line
-change to `lane-emit.js` that would remove the cycle for good.
-
-**What keeps the two from drifting.** `test/emit/gate.test.mjs` runs the gate and
-`runPreflight` over the same proof and asserts the finding lists are equal,
-severity for severity and message for message, on a clean proof and on a failing
-one. That test found a real gap on its first run: the gate was not building
-`renderedElementIds`, so half of `BEAT_EMPTY` — the half that catches a beat
-revealing an id the layout does not render — was silently inert.
+**What the tests prove now.** Rule-for-rule equivalence became true by
+construction the moment the gate became a single call, so asserting it would
+prove nothing. `test/emit/gate.test.mjs` asserts the two things that are *not*
+by construction: that `emit()` wires the artifact's own `html`, `css` and
+`renderScene` into the sweep — each checked through a finding that can only
+arise if that argument arrived — and that it filters exactly the one code it
+answers itself.
 
 **Two things the emitter still answers itself**, because the rules cannot:
 
@@ -500,6 +499,42 @@ revealing an id the layout does not render — was silently inert.
   the time the rule reads `proof.emitOptions` the evidence of the request is
   gone. L11's rule skips L10's copy of that finding precisely so there is one of
   it, and only the emitter still knows it was asked for.
+
+---
+
+## E28 — A degraded `MediaRef` reports its inlined cost
+
+**Unsettled by:** §4 declares `MediaRef.bytes` without saying whether it counts
+the decoded payload or the inlined data URI.
+
+**Decision.** It is the inlined cost, `utf8Length(dataUri)`, which is L6's
+settled meaning, and `applyReplacements` writes that after degrading an asset —
+`hit.bytes`, which `degradeAsset` already measures that way.
+
+**Why.** The first version wrote `parseDataUri(uri).bytes`, the decoded size,
+which is about 25% smaller than the inlined cost. Nothing at emit time read it —
+the budgeter measures its own — so nothing broke. But a seller looking at a
+degraded asset in the studio would see a size a third short for the one asset
+the product had just told them it shrank, which is the opposite of §13's "report
+exactly what was degraded and by how much".
+
+---
+
+## E29 — An unreachable branch is reported, never dropped
+
+**Unsettled by:** §11 raises `BRANCH_UNREACHABLE` for a branch with no anchor and
+no jump-index entry, and does not say whether the emitter should carry it into
+the artifact.
+
+**Decision.** The emitter carries it. `BRANCH_UNREACHABLE` stays severity 2 and
+the artifact ships with the branch in it, unreachable.
+
+**Why.** L11 argued the case and it is right: an emitter that silently deletes
+authored content is the worse failure. The seller gets a file missing an answer
+they thought they had prepared, with nothing on screen telling them so — and
+§13 requires the emitter to report even a recompression, so deleting whole
+scenes deserves at least that much. Recorded here because it is the emitter that
+would have done the deleting.
 
 ---
 
@@ -548,6 +583,37 @@ down to 45% of the full artifact): median error 9.4%, worst 21.5%, and every
 line but one within 10% — against a previous median of 1200% and 13 of 32 lines
 within 10%. `test/emit/budget.test.mjs` asserts a median at or below 25% and a
 worst case at or below 100%, so the model cannot silently regress.
+
+---
+
+## E27 — The refusal collapses identical defects
+
+**Unsettled by:** §14 requires the emit to be refused and gives no guidance on
+how the caller is told.
+
+**Decision.** Blocking findings with the same code and the same message are
+collapsed into one entry carrying a count, the refusal opens with the shape of
+the problem — how many findings, of which codes, in which scenes — and every
+*distinct* defect is still stated in full.
+
+**Why.** A five-rendition `splitBeforeAfter` scene produces eleven blocking
+findings that are three distinct defects: the same body text is measured in
+several cells and reported once per cell. Eleven near-identical paragraphs do
+not tell a seller whether they have three problems or eleven, and the natural
+conclusion — that the tool is broken — is the wrong one. Collapsing is not
+hiding: a defect that occurs once appears once, and nothing is dropped. The cap
+at twenty distinct entries reports how many were elided rather than trimming
+silently.
+
+**What this does not fix, and whose it is.** L11's individual overflow message
+is good — it names the box, the breakpoint, the overage, the substituted face,
+the unbreakable run and two remedies with numbers. What no message says is the
+*cause*: that the scene has five renditions and `splitBeforeAfter` gives each of
+them 101px at `md`. The seller's real remedy is fewer renditions or another
+layout, and every message points at the text instead, which in this case is the
+prospect's own compound noun and cannot be shortened. Naming the column count
+needs the layout's own knowledge, so it belongs in L8's measurement or L11's
+message, not in the emitter — recorded here and raised with the integrator.
 
 ---
 

@@ -16,14 +16,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emit, runEmitGate, gatedCodes, MEASURED_BY_EMIT, buildDocument } from '../../src/emit/index.js';
+import { emit, gatedCodes, MEASURED_BY_EMIT, buildDocument, describeRefusal } from '../../src/emit/index.js';
 import { runPreflight } from '../../src/validate/index.js';
 import { FINDING_CODES, normalizeEmitOptions } from '../../src/core/contracts.js';
 import { compileFallbackTheme } from '../../src/emit/theme.js';
-import { hasPromotionRecord } from '../../src/emit/promotion.js';
 import { registerTestLayouts } from '../fixtures/emit/layouts.mjs';
 import { runtimeBundle, FIXED_CLOCK } from '../fixtures/emit/runtime-bundle.mjs';
-import { emitProof } from '../fixtures/emit/proofs.mjs';
+import { emitProof, rendition } from '../fixtures/emit/proofs.mjs';
+import { contentId, elementId } from '../../src/core/ids.js';
 
 const { js: runtimeJs, css: runtimeCss } = runtimeBundle();
 const deps = { runtimeJs, runtimeCss, clock: FIXED_CLOCK };
@@ -85,7 +85,11 @@ test('the gate covers every §4 finding code except the one emit measures itself
   );
 });
 
-test('emit and runPreflight agree, finding for finding', async () => {
+test("emit reports the sweep's findings, minus the one code it measures itself", async () => {
+  // The gate is one call to `runPreflight`, so rule-for-rule equivalence is
+  // true by construction and asserting it would prove nothing. What is *not*
+  // by construction is `emit()` wiring the artifact's own document, stylesheet
+  // and scenes into that call, and filtering only the code it answers itself.
   registerTestLayouts();
   const proof = emitProof({ imageEdge: 24 });
   const emitOptions = normalizeEmitOptions(proof.emitOptions);
@@ -93,31 +97,17 @@ test('emit and runPreflight agree, finding for finding', async () => {
   const finalCss = [runtimeCss, themeCss].join('\n\n');
   const built = buildDocument({ ...proof, emitOptions }, { runtimeJs, runtimeCss, themeCss, userCss: '', fontCss: '' });
 
-  const gateFindings = runEmitGate({
-    proof: built.reconstructed,
-    deck: built.runtime.deck,
-    runtime: built.runtime,
-    renderScene: built.renderScene,
-    html: built.html,
-    css: finalCss,
-    runtimeJs,
-    runtimeCss,
-    nowIso: FIXED_CLOCK(),
-  });
-
-  const preflightFindings = await runPreflight(built.reconstructed, {
+  const swept = await runPreflight(built.reconstructed, {
     clock: FIXED_CLOCK,
     runtimeJs,
     runtimeCss,
     html: built.html,
     css: finalCss,
     renderScene: built.renderScene,
-    // L7 owns the promotion-record format, so both sides must read it with L7's
-    // reader. `runPreflight` defaults to `src/validate/provenance.js`'s own,
-    // which does not recognise a record `promoteProvenance` wrote — reported to
-    // the integrator. Injecting here keeps this test about the *rules*.
-    hasPromotionRecord,
   });
+
+  const emitted = await emit(proof, {}, deps);
+  assert.equal(emitted.ok, true, emitted.ok ? '' : emitted.error);
 
   /** @param {any[]} findings @returns {string[]} */
   const signature = (findings) => findings
@@ -125,15 +115,36 @@ test('emit and runPreflight agree, finding for finding', async () => {
     .map((f) => `${f.severity} ${f.code} ${f.message}`)
     .sort();
 
-  assert.deepEqual(
-    signature(gateFindings),
-    signature(preflightFindings),
-    'the emitter and the rehearsal sweep must enforce the same law from the same rules',
-  );
-  assert.ok(gateFindings.length > 0, 'the fixture must actually exercise some rules');
+  assert.deepEqual(signature(emitted.value.findings), signature(swept));
+  assert.ok(swept.length > 0, 'the fixture must actually exercise some rules');
 });
 
-test('emit and runPreflight agree on a proof that fails', async () => {
+test('the sweep sees the artifact\'s own stylesheet, document and scenes', async () => {
+  // Three findings that can only arise if the corresponding argument reached
+  // `runPreflight`. Dropping any one of them from the gate would be silent —
+  // the emit would still succeed, having checked less than it claimed.
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 24 });
+
+  // `css`: a label styled away is invisible to anything reading only the model.
+  const styled = await emit(proof, {}, { ...deps, userCss: '.pp-provenance{opacity:0}' });
+  assert.equal(styled.ok, false, 'a label hidden by the final stylesheet must refuse the emit');
+  assert.ok(styled.detail.findings.some((f) => f.code === 'PROVENANCE_UNLABELED' && /opacity:0/.test(f.message)));
+
+  // `renderScene`: the label lives in the rendered subtree, not in the model.
+  registerTestLayouts({ omitLabel: true });
+  const unlabelled = await emit(proof, {}, deps);
+  assert.equal(unlabelled.ok, false, 'a label missing from the rendered scene must refuse the emit');
+  assert.ok(unlabelled.detail.findings.some((f) => f.code === 'PROVENANCE_UNLABELED'));
+
+  // `html`: a live link in the pre-rendered opening beat is in the document.
+  registerTestLayouts({ ctaHref: 'https://northwind.example/contact' });
+  const linked = await emit(proof, {}, deps);
+  assert.equal(linked.ok, false, 'a live link in the document must refuse the emit');
+  assert.ok(linked.detail.findings.some((f) => f.code === 'NETWORK_REFERENCE' && /rendered document/.test(f.message)));
+});
+
+test('emit and the studio gate refuse the same proof', async () => {
   registerTestLayouts();
   const proof = withBrokenBodyContrast(emitProof({ imageEdge: 24 }));
   const emitOptions = normalizeEmitOptions(proof.emitOptions);
@@ -141,26 +152,19 @@ test('emit and runPreflight agree on a proof that fails', async () => {
   const finalCss = [runtimeCss, themeCss].join('\n\n');
   const built = buildDocument({ ...proof, emitOptions }, { runtimeJs, runtimeCss, themeCss, userCss: '', fontCss: '' });
 
-  const gateBlocking = runEmitGate({
-    proof: built.reconstructed,
-    deck: built.runtime.deck,
-    runtime: built.runtime,
-    renderScene: built.renderScene,
-    html: built.html,
-    css: finalCss,
-    runtimeJs,
-    runtimeCss,
-    nowIso: FIXED_CLOCK(),
-  }).filter((f) => f.severity === 1);
-
-  const preflightBlocking = (await runPreflight(built.reconstructed, {
-    clock: FIXED_CLOCK, runtimeJs, runtimeCss, html: built.html, css: finalCss, renderScene: built.renderScene, hasPromotionRecord,
+  const sweptBlocking = (await runPreflight(built.reconstructed, {
+    clock: FIXED_CLOCK, runtimeJs, runtimeCss, html: built.html, css: finalCss, renderScene: built.renderScene,
   })).filter((f) => f.severity === 1 && !MEASURED_BY_EMIT.has(f.code));
 
-  assert.ok(gateBlocking.length > 0);
+  const emitted = await emit(proof, {}, deps);
+  assert.equal(emitted.ok, false);
+  const emitBlocking = emitted.detail.findings.filter((f) => f.severity === 1 && !MEASURED_BY_EMIT.has(f.code));
+
+  assert.ok(sweptBlocking.length > 0);
   assert.deepEqual(
-    gateBlocking.map((f) => `${f.code} ${f.message}`).sort(),
-    preflightBlocking.map((f) => `${f.code} ${f.message}`).sort(),
+    emitBlocking.map((f) => `${f.code} ${f.message}`).sort(),
+    sweptBlocking.map((f) => `${f.code} ${f.message}`).sort(),
+    'a proof the studio refuses and a proof the emitter refuses must be the same proof',
   );
 });
 
@@ -211,7 +215,7 @@ test('a rendition promoted through L7 is not reported as unpromoted', async () =
   const proof = emitProof({ imageEdge: 24 });
   const promoted = proof.renditions.find((r) => r.provenance === 'verified-by-user');
   assert.ok(promoted, 'the fixture must carry a promoted rendition');
-  assert.equal(hasPromotionRecord(promoted), true);
+  assert.match(promoted.notes, /\[\[pp-promotion:/, 'the promotion must be on the record, not in prose');
 
   const result = await emit(proof, {}, deps);
   assert.equal(result.ok, true, result.ok ? '' : result.error);
@@ -220,4 +224,68 @@ test('a rendition promoted through L7 is not reported as unpromoted', async () =
     0,
     'a properly promoted rendition must not be reported as unpromoted',
   );
+});
+
+
+test('the refusal collapses identical defects and states the shape of the problem', async () => {
+  // A five-rendition splitBeforeAfter scene produces eleven blocking findings
+  // that are three distinct defects: the same body text measured in several
+  // cells. Eleven near-identical paragraphs do not tell a seller whether they
+  // have three problems or eleven.
+  const base = emitProof({ imageEdge: 24 });
+  const specimen = base.specimens[0];
+  const extra = [4, 5, 6].map((i) => rendition(contentId('rendition', `crowd${i}`), specimen.id, 'client-supplied', { label: `Market ${i}` }));
+  const crowded = {
+    ...base,
+    renditions: [...base.renditions, ...extra],
+    spine: base.spine.map((s, i) => {
+      if (i !== 1) return s;
+      const ids = [...s.renditionIds, ...extra.map((r) => r.id)];
+      return {
+        ...s,
+        renditionIds: ids,
+        beats: ids.map((_, k) => ({ id: `${s.id}_b${k}`, reveals: [elementId(s.id, `after/${k}`)], presenterNote: null, dwellHintMs: null })),
+      };
+    }),
+  };
+
+  const { registerAllLayouts } = await import('../../src/scene/index.js');
+  const { resetLayouts } = await import('../../src/runtime/layouts.js');
+  resetLayouts();
+  registerAllLayouts();
+
+  const result = await emit(crowded, {}, deps);
+  assert.equal(result.ok, false, 'a scene with no room for its text must refuse');
+
+  const blocking = result.detail.findings.filter((f) => f.severity === 1);
+  const distinct = new Set(blocking.map((f) => `${f.code} ${f.message}`));
+  assert.ok(blocking.length > distinct.size, 'the fixture must actually produce repeated defects');
+
+  // Every distinct defect is still named in full - collapsing is not hiding.
+  for (const message of new Set(blocking.map((f) => f.message))) {
+    assert.ok(result.error.includes(message), 'a distinct defect was dropped from the refusal');
+  }
+  // And it is stated once, with a count, not once per occurrence.
+  const first = blocking[0].message;
+  const occurrences = result.error.split(first).length - 1;
+  assert.equal(occurrences, 1, 'a repeated defect must appear once in the refusal, with a count');
+  assert.match(result.error, /\d+ severity-1 finding\(s\), \d+ distinct/);
+  assert.match(result.error, /TEXT_OVERFLOW/);
+  assert.match(result.error, /in scene sc_spine_1\./);
+  assert.match(result.error, /no override flag/);
+});
+
+test('a refusal with no repetition reads exactly as before', () => {
+  const one = {
+    id: 'fd_1', severity: 1, code: 'NETWORK_REFERENCE', message: 'a beacon', locus: { sceneId: 'sc_1' }, autoFixAvailable: false,
+  };
+  const two = {
+    id: 'fd_2', severity: 1, code: 'PROVENANCE_UNLABELED', message: 'no label', locus: { sceneId: 'sc_2' }, autoFixAvailable: false,
+  };
+  const text = describeRefusal([one, two]);
+  assert.match(text, /2 severity-1 finding\(s\) block this artifact/);
+  assert.ok(!/distinct/.test(text), 'nothing repeated, so nothing to count');
+  assert.match(text, /1 . NETWORK_REFERENCE, 1 . PROVENANCE_UNLABELED/);
+  assert.match(text, /in scenes sc_1, sc_2\./);
+  assert.ok(text.includes('a beacon') && text.includes('no label'));
 });

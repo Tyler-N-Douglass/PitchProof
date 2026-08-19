@@ -217,7 +217,12 @@ test('ASSET_OVERSIZE quotes both the byte share and the §8 capture cap', async 
   const findings = await preflight(defectProof('ASSET_OVERSIZE'));
   const finding = findings.find((f) => f.code === 'ASSET_OVERSIZE');
   assert.equal(finding.severity, 2);
-  assert.match(finding.message, /9\.00MB/);
+  // Oracle: the inlined length of the payload the fixture actually carries,
+  // computed here from the data URI rather than from the code under test.
+  const media = defectProof('ASSET_OVERSIZE').specimens[0].media[0];
+  const inlined = Buffer.byteLength(media.dataUri, 'utf8');
+  assert.equal(finding.detail.bytes, inlined, 'the rule must grade the inlined cost, not a declared number');
+  assert.match(finding.message, new RegExp(`${(inlined / 1e6).toFixed(2)}MB inlined`));
   assert.match(finding.message, /2400px capture cap/);
   assert.equal(finding.detail.edgePx, 4000);
 });

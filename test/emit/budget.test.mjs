@@ -344,3 +344,33 @@ test('predictions land within a quarter of the measurement on real images', () =
     assert.ok(Math.max(...errors) <= 1.0, `worst prediction error ${(Math.max(...errors) * 100).toFixed(1)}% at ${fraction}`);
   }
 });
+
+test('a degraded MediaRef reports its inlined cost, not its decoded payload', () => {
+  // L6's F19 fix: `MediaRef.bytes` means `utf8Length(dataUri)`. Writing the
+  // decoded size back after degrading would leave the one asset the product
+  // just told the seller it shrank showing a number a third too small.
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 180 });
+  const result = budgetAssets(proof, Math.round(assetTotal(proof) * 0.35), { renderScene: sceneRenderer(proof) });
+  assert.ok(result.plan.length > 0);
+
+  const degraded = new Set(result.plan.flatMap((l) => l.assetIds));
+  const refs = [
+    ...result.proof.specimens.flatMap((s) => s.media || []),
+    ...result.proof.renditions.flatMap((r) => r.media || []),
+  ].filter((m) => degraded.has(m.id));
+  assert.ok(refs.length > 0, 'the fixture must degrade at least one MediaRef');
+
+  for (const ref of refs) {
+    assert.equal(ref.bytes, utf8Length(ref.dataUri), `${ref.id}: bytes must be the inlined cost`);
+    const line = result.plan.find((l) => l.assetIds.includes(ref.id));
+    assert.equal(ref.bytes, line.afterBytes, `${ref.id}: the model and the report must agree`);
+  }
+});
+
+test('an untouched MediaRef keeps the meaning it arrived with', () => {
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 32 });
+  const result = budgetAssets(proof, 50_000_000, { renderScene: sceneRenderer(proof) });
+  assert.equal(result.proof, proof, 'nothing was degraded, so nothing was rewritten');
+});

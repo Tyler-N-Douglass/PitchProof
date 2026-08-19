@@ -153,19 +153,15 @@ export async function emit(proof, options, deps) {
   // is about to ship. These are L11's rule objects, not a second copy of them,
   // so the emitter and the rehearsal sweep cannot disagree — see `emit/gate.js`
   // for why this is not simply a call to `runPreflight`.
-  let nowIso = null;
-  try { nowIso = clock(); } catch { nowIso = null; }
   try {
-    findings.push(...runEmitGate({
+    findings.push(...await runEmitGate({
       proof: reconstructed,
-      deck: built.runtime.deck,
-      runtime: built.runtime,
       renderScene,
       html,
       css: finalCss,
       runtimeJs,
       runtimeCss,
-      nowIso: typeof nowIso === 'string' ? nowIso : null,
+      clock,
     }));
   } catch (error) {
     return err(
@@ -221,12 +217,7 @@ export async function emit(proof, options, deps) {
   };
 
   if (blocking.length) {
-    const lines = blocking.map((f, i) => `  ${i + 1}. [${f.code}] ${f.message}${locusSuffix(f.locus)}`);
-    return err(
-      `emit refused: ${blocking.length} severity-1 finding(s) block this artifact. `
-      + 'There is no override flag (§14).\n' + lines.join('\n'),
-      result,
-    );
+    return err(describeRefusal(blocking), result);
   }
 
   return ok(result);
@@ -333,6 +324,69 @@ export function staleCaptureFindings(proof, clock) {
     });
   }
   return out;
+}
+
+/**
+ * The refusal a seller reads.
+ *
+ * §14 requires the emit to be refused and the caller to be told why; how it is
+ * told is the emitter's product surface, and the first version of it was a wall
+ * of near-identical paragraphs. A five-rendition `splitBeforeAfter` scene
+ * produced **eleven** blocking findings that were **three** distinct defects,
+ * each stated three or four times because the same body text is measured in
+ * several cells. A seller scrolling that cannot tell whether they have three
+ * problems or eleven, and the natural conclusion — that the tool is broken — is
+ * the wrong one.
+ *
+ * So identical defects are collapsed with a count, the distinct ones are all
+ * kept, and the refusal opens with the shape of the problem: how many, of what,
+ * and where. Nothing is hidden; a defect that appears once still appears once.
+ *
+ * @param {import('../core/contracts.d.ts').Finding[]} blocking
+ * @returns {string}
+ */
+export function describeRefusal(blocking) {
+  /** @type {Map<string, {finding: any, count: number, scenes: Set<string>}>} */
+  const groups = new Map();
+  for (const finding of blocking) {
+    const key = `${finding.code}\u0000${finding.message}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { finding, count: 0, scenes: new Set() };
+      groups.set(key, group);
+    }
+    group.count += 1;
+    if (finding.locus && finding.locus.sceneId) group.scenes.add(String(finding.locus.sceneId));
+  }
+
+  /** @type {Record<string, number>} */
+  const byCode = {};
+  /** @type {Set<string>} */
+  const allScenes = new Set();
+  for (const f of blocking) {
+    byCode[f.code] = (byCode[f.code] || 0) + 1;
+    if (f.locus && f.locus.sceneId) allScenes.add(String(f.locus.sceneId));
+  }
+  const codeSummary = Object.keys(byCode).sort().map((c) => `${byCode[c]} × ${c}`).join(', ');
+  const where = allScenes.size === 0 ? ''
+    : allScenes.size <= 4 ? ` in ${allScenes.size === 1 ? 'scene' : 'scenes'} ${[...allScenes].sort().join(', ')}`
+      : ` across ${allScenes.size} scenes`;
+
+  const distinct = [...groups.values()];
+  const shown = distinct.slice(0, 20);
+  const lines = shown.map((group, i) => {
+    const times = group.count > 1 ? ` ×${group.count}` : '';
+    return `  ${i + 1}. [${group.finding.code}${times}] ${group.finding.message}${locusSuffix(group.finding.locus)}`;
+  });
+  if (distinct.length > shown.length) {
+    lines.push(`  … and ${distinct.length - shown.length} further distinct finding(s) of the same kind.`);
+  }
+
+  const head = distinct.length === blocking.length
+    ? `emit refused: ${blocking.length} severity-1 finding(s) block this artifact`
+    : `emit refused: ${blocking.length} severity-1 finding(s), ${distinct.length} distinct, block this artifact`;
+
+  return `${head} — ${codeSummary}${where}. There is no override flag (§14).\n${lines.join('\n')}`;
 }
 
 /**

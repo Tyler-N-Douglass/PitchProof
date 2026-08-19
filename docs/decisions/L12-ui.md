@@ -334,3 +334,129 @@ typed), and `scanForNetworkReferences` + `assertProvenance` (§18.4, re-run over
 the emitted bytes for the moment somebody in the room asks how you know). The
 rest are declined in writing, mostly because they are reached through a
 one-call entry point the lane itself provides.
+
+---
+
+## L12-17 — An empty collection is never reported as a missing capability
+
+**Unsettled by:** §18 makes honesty an enforced code path in the *artifact*.
+Nothing says the same rule binds the studio's own copy, and §15 does not say
+what an empty panel should read like.
+
+**Decision.** Every empty state, hint, placeholder and disabled-control reason
+in `src/ui/**` states the true cause. Three cases that were being collapsed are
+now kept apart wherever they can occur:
+
+| cause | what it is | who fixes it |
+|---|---|---|
+| the lane did not load | a build defect | the integrator |
+| the collection is empty | a new project | the seller, by adding one |
+| the collection was measured and came out poor | a result | the seller, by reviewing it |
+
+`test/ui/empty-state-honesty.test.mjs` holds the line: it renders every panel,
+the inspector and the shell in four states over the **real** lane adapter and
+fails on any painted string matching a phrase that asserts absence — `not
+wired`, `into this build`, `not implemented`, `coming soon`, `TODO`, `stub` and
+sixteen more. It asserts against the VNode tree, collecting text nodes, raw
+markup and the four attributes that paint (`title`, `placeholder`, `aria-label`,
+`alt`), so a phrase in a comment or in a string no panel returns does not trip
+it and a phrase that reaches the screen cannot hide. It first asserts
+`services.missing()` is empty, so a lane that genuinely goes missing fails with
+its own name rather than making a true sentence look like a lie.
+
+**Why.** §18 is a section about a tool not overstating or misstating what it
+knows, and the studio misstating its own capability is the worst version of it —
+it is aimed at the person deciding whether to trust the product. CRITIQUE-1 F22
+is the whole argument in one string: with zero branches the jump-index hint read
+"The branch lane builds this index; it is **not wired into this build**". The
+lane was wired. There were no branches. A seller who reads that reasonably
+concludes the jump index does not work and stops using the interaction §11 names
+as the product's headline. The phrase-scanning test exists because one such
+string is a category rather than an incident, and the positive assertions beside
+it exist because a phrase test on its own is passed by deleting the sentence,
+which trades a false empty state for a blank one.
+
+---
+
+## L12-18 — 0% confidence on an untouched brand reads as unmeasured, not as a failed extraction
+
+**Unsettled by:** §7 requires low-confidence fields to be held for review. It
+does not distinguish "extraction ran and could not tell" from "nothing has been
+extracted", and `model.emptyBrand` gives a new project four colour roles and one
+face so the panel has something to render.
+
+**Decision.** `brandGroupIsStarterDefault(brand, group)` compares a group against
+`emptyBrand()` and against `manualOverrides`. A group that is still exactly what
+a new project ships with raises `BRAND_DEFAULTS` rather than `BRAND_UNREVIEWED`,
+with a message that says nothing has been extracted and nothing entered; the
+Brand panel lists those groups separately from genuinely low-confidence ones, and
+`brandIsUntouched` puts one sentence above the five 0% bars saying that 0% here
+means *not measured*.
+
+The group stays reviewable. The checkbox's hint says what ticking it accepts:
+"These are still the studio's starting values, so ticking this accepts them as
+the brand the artifact will wear."
+
+**Why.** Five confidence bars at 0% look like a broken extractor, and the blocker
+made it worse by saying the roles "came out 0% confident" and asking for them to
+be checked "against the source" — a measurement that never ran, against a source
+that does not exist (`brand.sourceUrl` is `null`). That is the F22 defect in a
+different panel: an empty collection described as a broken system, and a
+disabled-control reason naming the wrong cause.
+
+Keeping the group **reviewable** is the judgement call, and it is where this
+parts company with L12-15. F15's rule was that reviewing an empty set is not a
+review because there is no claim there to accept. Here there *is* a claim on
+screen — four hex values and a font stack — and accepting it is a real act with
+real consequences, so a person is entitled to make it. What they were not being
+told is *what* they were accepting. They are now. The stronger option — refusing
+sign-off until something has been extracted or entered — is defensible on §18
+grounds, since an artifact wearing PitchProof's navy while claiming to be the
+prospect's brand is exactly what §15 forbids; it is recorded in
+`docs/disputes/L12-ui.md` as D-L12-7 rather than taken unilaterally, because it
+closes the emit on a new project and that is the integrator's call.
+
+---
+
+## L12-19 — Two descriptions of one guarantee is how a guarantee drifts
+
+**Unsettled by:** nothing; found by L7 auditing F23 and handed to this lane.
+
+**Decision.** `services.promotionRecord`'s doc comment described L7's token as
+one that "cannot be hand-forged". It can: `promotionSignature` is
+`shortHash({v, by, at, of, from}, 16)`, unkeyed, and `formatPromotionRecord` is
+exported. The comment now says what the digest actually is — tamper-evidence
+against corruption and partial edits, not authenticity — and why no better thing
+is available (§1.1 forbids a backend and accounts, so any key would ship inside
+the artifact the forger already holds), and notes that the digest is not the
+weakest link anyway, since `provenance: 'client-supplied'` suppresses the
+illustrative label in one word with no record at all.
+
+The sentence a *person* sees comes from L7's exported `PROMOTION_RECORD_LIMIT`,
+rendered verbatim beneath the "verifies against itself" badge in the Recipes
+panel. The studio does not paraphrase it.
+
+**Why.** "Verifies against itself" is accurate and, alone, easy to read as "we
+know who did this" — so the limit belongs next to the outcome it qualifies. And
+the reason to take L7's string rather than write one is in the finding itself:
+two descriptions of one guarantee is precisely how this adapter's comment came
+to claim more than the digest delivers and stay that way for a pass.
+`PROMOTION_RECORD_LIMIT` is a lane extension rather than an `API.md` Part 3
+surface, which is recorded as D-L12-8.
+
+---
+
+## L12-20 — An unread measurement is not a refused measurement
+
+**Unsettled by:** §16 requires a storage-pressure warning at 80% of the estimated
+quota. It does not say what to show before the estimate has been read.
+
+**Decision.** `app.ui.pressure` carries `measured: boolean`, set only by a real
+`store.pressure()` reading. Before the first reading the Project panel and the
+status bar say "reading the quota"; after one that returned no quota they say
+"this browser would not report a quota" / "no quota reported".
+
+**Why.** The old string asserted a fact about the browser — that it "will not
+report a quota" — on first paint, before the browser had been asked. It happens
+to be a small lie, and it is the same lie as F22: a state the tool has not
+reached yet, reported as a capability the tool does not have.

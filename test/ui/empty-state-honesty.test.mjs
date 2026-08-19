@@ -333,3 +333,39 @@ test('an empty state names the thing that is empty and the way out of it', async
   assert.match(panelText('rehearse'), /No sweep has been run/i);
   assert.match(panelText('emit'), /has not been computed yet/i);
 });
+
+// ----------------------------------------------------------------- F23 -----
+
+/**
+ * The same discipline applied to a comment rather than to a rendered string.
+ *
+ * `services.promotionRecord` documented L7's token as one that "cannot be
+ * hand-forged". It can: `promotionSignature` is `shortHash({v, by, at, of,
+ * from}, 16)` — unkeyed — and `formatPromotionRecord` is exported, so anyone
+ * holding the repo can compute a valid digest. There is no better option
+ * available (§1.1 forbids a backend and accounts, so any key would ship inside
+ * the artifact the forger already has), which is exactly why the wording has to
+ * be right: the guarantee is tamper-evidence, not authenticity.
+ *
+ * A doc comment does not reach the screen, so the phrase sweep above cannot see
+ * it and is not stretched to try. This asserts the source directly, which is
+ * the appropriate instrument for a claim that lives in the source.
+ */
+test('F23: the adapter does not claim a promotion record cannot be forged', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const src = readFileSync(fileURLToPath(new URL('../../src/ui/services.js', import.meta.url)), 'utf8');
+  assert.doesNotMatch(src, /cannot be (hand-)?forged/i, 'the digest is unkeyed and the formatter is exported');
+  assert.match(src, /tamper-evidence, not authenticity/i, 'and the adapter says what it actually is');
+});
+
+test('F23: the studio shows L7’s sentence about the limit rather than paraphrasing it', async () => {
+  const { PROMOTION_RECORD_LIMIT } = await import('../../src/recipe/index.js');
+  const app = await studio();
+  assert.equal(
+    app.services.promotionRecordLimit(),
+    PROMOTION_RECORD_LIMIT,
+    'one description of one guarantee, owned by the lane that provides it',
+  );
+  assert.match(PROMOTION_RECORD_LIMIT, /does not prove/i, 'and it is the honest half of the sentence');
+});

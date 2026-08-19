@@ -63,9 +63,6 @@ export const ASSET_OVERSIZE_FLOOR_BYTES = 1_000_000;
  */
 export const MODEL_COMPRESSION_ESTIMATE = 0.30;
 
-/** Base64 expansion for media, which D6 keeps outside the compressed payload. */
-export const BASE64_EXPANSION = 4 / 3;
-
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -98,12 +95,50 @@ function allMedia(proof) {
   return out;
 }
 
-/** Byte size of a media reference: its declared size, or the size of its data URI. */
+/**
+ * What a media reference costs the artifact: the **inlined** size of its data
+ * URI, base64 expansion and `data:` preamble included.
+ *
+ * One quantity, measured one way (L11-D24). This used to be three: a declared
+ * `MediaRef.bytes`, else `parseDataUri().bytes`, else 3/4 of the URI's length —
+ * and the first meant something different from the other two, so a ref that
+ * declared its size was graded against a different number from one that did not.
+ * Nothing noticed until §4's `bytes` was redefined as the inlined cost (L6's F19)
+ * and the primary path silently changed meaning while the fallbacks did not.
+ *
+ * So the data URI *is* the measurement, and a declared `bytes` is a cross-check
+ * rather than a source of truth — `ASSET_OVERSIZE` reports both when they differ,
+ * so a model whose declaration has drifted says so instead of being believed.
+ * The declaration is used only when there is nothing inlined to measure: a ref
+ * still pointing at the network (which `NETWORK_REFERENCE` blocks on its own
+ * account) or one with no payload at all.
+ *
+ * Because the result is already expanded, **nothing downstream may multiply it
+ * by a base64 factor again.** That constant no longer exists here, so the
+ * temptation cannot be acted on.
+ *
+ * @param {import('../core/contracts.d.ts').MediaRef} media
+ * @returns {number} bytes the artifact pays for this asset
+ */
 function mediaBytes(media) {
+  if (!media) return 0;
+  const uri = typeof media.dataUri === 'string' ? media.dataUri : '';
+  if (uri.startsWith('data:')) return utf8Length(uri);
   if (Number.isFinite(media.bytes) && media.bytes > 0) return media.bytes;
-  const parsed = typeof media.dataUri === 'string' ? parseDataUri(media.dataUri) : null;
-  if (parsed && Number.isFinite(parsed.bytes)) return parsed.bytes;
-  return typeof media.dataUri === 'string' ? Math.floor(media.dataUri.length * 0.75) : 0;
+  return utf8Length(uri);
+}
+
+/**
+ * The size a `MediaRef` claims, when it claims one that disagrees with what it
+ * actually carries. `null` when it agrees, or when there is nothing to compare.
+ * @param {import('../core/contracts.d.ts').MediaRef} media
+ * @returns {number|null}
+ */
+function declaredBytesMismatch(media) {
+  if (!media || !Number.isFinite(media.bytes) || media.bytes <= 0) return null;
+  const uri = typeof media.dataUri === 'string' ? media.dataUri : '';
+  if (!uri.startsWith('data:')) return null;
+  return media.bytes === utf8Length(uri) ? null : media.bytes;
 }
 
 /** `parseDataUri`, but a malformed percent-escape is "not a data URI" rather than a throw. */
@@ -314,7 +349,7 @@ const assetOversize = {
       const overEdge = edge > MAX_MEDIA_EDGE_PX;
       if (!overBytes && !overEdge) continue;
       const reasons = [];
-      if (overBytes) reasons.push(`${(bytes / 1e6).toFixed(2)}MB is ${((bytes / maxBytes) * 100).toFixed(1)}% of the ${(maxBytes / 1e6).toFixed(0)}MB budget`);
+      if (overBytes) reasons.push(`${(bytes / 1e6).toFixed(2)}MB inlined is ${((bytes / maxBytes) * 100).toFixed(1)}% of the ${(maxBytes / 1e6).toFixed(0)}MB budget`);
       if (overEdge) reasons.push(`its ${edge}px long edge exceeds the ${MAX_MEDIA_EDGE_PX}px capture cap in §8`);
       out.push(makeFinding({
         code: 'ASSET_OVERSIZE',
@@ -325,6 +360,10 @@ const assetOversize = {
         detail: {
           mediaId: media.id, bytes, limitBytes: Math.round(limit), edgePx: edge,
           ownerKind: entry.ownerKind, ownerId: entry.ownerId, quality,
+          // Non-null when the ref declares a size that is not what it carries.
+          // Not a finding of its own — §4 has no code for it — but the seller
+          // should not be shown a number the model disagrees with in silence.
+          declaredBytes: declaredBytesMismatch(media),
         },
       }));
     }
@@ -451,7 +490,7 @@ export function branchShipCost(proof, branch) {
   let media = 0;
   for (const id of exclusive) {
     const owner = owners.get(id);
-    for (const m of (owner && owner.media) || []) media += mediaBytes(m) * BASE64_EXPANSION;
+    for (const m of (owner && owner.media) || []) media += mediaBytes(m);
   }
 
   return {
@@ -982,7 +1021,7 @@ const sizeBudgetExceeded = {
     const canRecompress = QUALITY_STEPS.indexOf(quality) > 0;
 
     let degradable = 0;
-    for (const entry of allMedia(proof)) degradable += mediaBytes(entry.media) * BASE64_EXPANSION;
+    for (const entry of allMedia(proof)) degradable += mediaBytes(entry.media);
 
     let logoBytes = 0;
     for (const logo of (proof.brand && proof.brand.logos) || []) logoBytes += utf8Length(String(logo.data || ''));
