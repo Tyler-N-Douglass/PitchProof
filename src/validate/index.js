@@ -15,7 +15,7 @@
 export { runPreflight, summarize, resolveBreakpoints, resolveDeps, measureDeck, readClock } from './preflight.js';
 export { RULES, ruleFor, STALE_CAPTURE_DAYS, MAX_MEDIA_EDGE_PX } from './rules.js';
 export {
-  detectOverflow, detectBoxOverflow, layOutBox, resolveBoxFace, availableFamilies,
+  detectOverflow, detectBoxOverflow, boxKey, boxOrdinals, layOutBox, resolveBoxFace, availableFamilies,
   classifyExcess, faceResolutions, fittingFontSizePx, fittingCharCount, truncationMode, advanceDeltaOf,
   OVERFLOW_CLIP_RATIO, OVERFLOW_CLIP_MIN_PX, OVERFLOW_NOISE_RATIO, OVERFLOW_NOISE_PX,
   TEXT_OVERFLOW_MODES, DEFAULT_TEXT_OVERFLOW,
