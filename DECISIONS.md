@@ -723,3 +723,69 @@ defect: the content half of that rule fingerprints over `beats[].reveals`, and
 reveals are derived from the scene id, so two scenes identical in every visible
 way always fingerprint differently. The content check has never been able to fire
 for anything the id check did not already catch. Routed to L11.
+
+---
+
+## D30 — A starter default is neither reviewable nor blocking
+
+*L12's dispute D-L12-7, decided by the integrator.*
+
+L12 asked whether §7's review gate should refuse sign-off on the studio's own
+starting brand. A new project ships four colour roles and one face from
+`emptyBrand()` at 0% confidence; before L12's pass the gate reported them as
+`BRAND_UNREVIEWED` and told the seller the roles "came out 0% confident, check
+them against the source" — a measurement that never ran, against a `sourceUrl`
+that is `null`. L12 built `brandGroupIsStarterDefault()` and reported
+`BRAND_DEFAULTS` instead, and exported the predicate so the stronger option — a
+group nobody may sign off on — is one clause away.
+
+**Keep it as built. Do not take the stronger option.**
+
+The reasoning is F15's, applied one step further out. L12 already made an *empty*
+group un-reviewable: there is nothing there to look at, so a signature over it
+means nothing, and the gate says `BRAND_EMPTY` rather than pretending a review is
+outstanding. A starter default is the same case wearing content — content nobody
+chose, extracted from nothing, asserting nothing about the prospect. Signing it
+is signing a blank page that has a colour on it.
+
+But making it *un-signable* would close the emit on a fresh project, and that is
+the wrong trade for a reason worth stating: **a proof with no brand is a
+legitimate proof.** It wears the neutral palette, and the neutral palette is
+honest — it does not claim to be anyone's. §18's law is about a tool not
+overstating what it knows, and a deck that says "no brand was extracted" satisfies
+it completely. The thing §18 forbids is a deck wearing a *guessed* brand, and
+that is a different failure with a different remedy.
+
+So the three states are now distinct and each says what is true: **empty** (no
+content — `BRAND_EMPTY`, unsignable), **starter default** (content nobody chose —
+`BRAND_DEFAULTS`, unsignable-but-unblocking), **extracted or entered**
+(`BRAND_UNREVIEWED` until a human looks, then reviewable). The gate blocks only
+the third, which is the only one where a human's attention adds information.
+
+The dispute stays open in `docs/disputes/L12-ui.md` as written, because L12's
+argument for the stronger option is sound on its own terms and a v2 that made
+brand extraction mandatory before emit would be entitled to it.
+
+## D31 — Where the fixture line falls
+
+Three lanes edited a fixture outside their declared `test/<lane>/**` this round
+and each flagged it rather than doing it quietly: L11 changed
+`test/fixtures/validate/defects.mjs`, L12 changed
+`test/fixtures/ui/studio-fixture.mjs`, and both are imported only by their own
+lane's tests.
+
+That is the right line and it is now written down: **a fixture under
+`test/fixtures/<lane>/` belongs to that lane**, whoever the directory is named
+for, provided nothing outside the lane imports it. `test/fixtures/corpus/` and
+`test/fixtures/emit/proofs.mjs` are the exceptions — they are the integrator's,
+because more than one lane drives them and a change to either moves several
+lanes' ground truth at once.
+
+L11's edit is the one that shows why the line matters.
+`test/fixtures/validate/defects.mjs` built its `ASSET_OVERSIZE` case by
+*declaring* 9MB against a 118-byte PNG. That is a proof that cannot exist, and it
+is precisely why the two branches of `mediaBytes` could measure different
+quantities for a whole build without a test noticing: every test drove the
+declared branch and none drove the payload. **A fixture that asserts an
+impossible state is not a shortcut, it is a hole in the corpus**, and the lane
+that owns the rule is the one positioned to see it.
