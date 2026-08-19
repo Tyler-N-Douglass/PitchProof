@@ -520,6 +520,81 @@ export function makeServices(env) {
     },
 
     /**
+     * The images a capture could not bring back, as the seller has to see them.
+     *
+     * §6's paste route has markup and no bytes, so L6 holds a `media` block
+     * whose `ref` names nothing out of the block stream rather than emitting a
+     * reference the artifact would render as a broken image (its D-L6-21, for
+     * CRITIQUE-3 P6). That is the right call, and it moved the failure: the
+     * emit now succeeds and the deck ships without the pictures. Until this
+     * call existed nothing in `src/ui/**` read the record, so nothing said so.
+     *
+     * Two sources, merged, because either alone under-reports:
+     *
+     *   - `specimen.mediaOmitted` — the entries L6 held back, each with the
+     *     caption and the position it will go back to.
+     *   - `unresolvedMediaRefs(specimen)` — the lane's own authoritative list,
+     *     which also catches a `media` block still standing in the stream whose
+     *     `ref` resolves to nothing (a hand edit, or an older capture). Those
+     *     have no entry, so they get one marked `restorable: false`: the studio
+     *     can name them but cannot put them back in a position it does not know.
+     *
+     * @param {any} specimen
+     * @returns {{id: string|null, ref: string, caption: string|null, position: number|null, origin: string|null, reason: string|null, restorable: boolean}[]}
+     */
+    omittedMedia(specimen) {
+      if (!specimen) return [];
+      const entries = Array.isArray(specimen.mediaOmitted) ? specimen.mediaOmitted : [];
+      /** @type {any[]} */
+      const out = entries.map((e) => ({
+        id: e.id || null,
+        ref: String(e.ref),
+        caption: e.caption === undefined ? null : e.caption,
+        position: Number.isInteger(e.position) ? e.position : null,
+        origin: e.origin || null,
+        reason: e.reason || null,
+        restorable: true,
+      }));
+      let refs = [];
+      if (specimenLane) {
+        try { refs = specimenLane.unresolvedMediaRefs(specimen) || []; } catch { refs = []; }
+      }
+      const named = new Set(out.map((e) => e.ref));
+      for (const ref of refs) {
+        if (named.has(ref)) continue;
+        out.push({ id: null, ref: String(ref), caption: null, position: null, origin: null, reason: 'reference-unresolved', restorable: false });
+      }
+      return out;
+    },
+
+    /**
+     * Put one omitted image back, now that the seller has the file.
+     *
+     * The `proof` argument is CRITIQUE-3 P1's discipline applied to a second
+     * minting site: this captures a new `MediaRef`, so it mints an id, so it
+     * has to see what the project already uses.
+     *
+     * @param {any} specimen
+     * @param {any} target    an entry from `omittedMedia`, its id, or its ref
+     * @param {{name: string, bytes: Uint8Array, mime: string, alt?: string|null}} supply
+     * @param {{seed: string, proof: any, imageQuality?: number}} options
+     * @returns {any}
+     */
+    restoreOmittedMedia(specimen, target, supply, options) {
+      if (!specimenLane) return laneErr('specimen');
+      if (!options || !options.proof) return err(missingProof('restoreOmittedMedia'));
+      try {
+        return ok(specimenLane.restoreOmittedMedia(specimen, target, supply, {
+          imageQuality: options.imageQuality === undefined ? 0.85 : options.imageQuality,
+          idMinter: minterFor(options.seed, {
+            taken: usedIds(options.proof),
+            salt: { restore: String(target && target.ref ? target.ref : target), of: specimen.id, name: supply ? supply.name : null },
+          }),
+        }));
+      } catch (e) { return err(`That image could not be put back: ${message(e)}`, e); }
+    },
+
+    /**
      * The raw-HTML fallback blocks, empty unless the specimen was opted in.
      * @param {any} specimen
      * @returns {{blocks: any[], allowed: boolean, reason: string}}

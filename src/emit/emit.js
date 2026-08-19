@@ -43,7 +43,9 @@ import { inlineRuntime } from './document.js';
 import { compileFallbackTheme, compileFontFaces } from './theme.js';
 import { scanForNetworkReferences, scanModelAssets, scanForeignScripts, EMITTED_SCRIPTS } from './scan.js';
 import { allScenesOf, labelOptionFinding } from './provenance.js';
-import { budgetAssets, collectAssets, dedupeAssets, assetFootprint, sizeBudgetFinding } from './budget.js';
+import {
+  budgetAssets, collectAssets, dedupeAssets, assetFootprint, sizeBudgetFinding, describeFixedCost,
+} from './budget.js';
 import { runEmitGate } from './gate.js';
 
 /** §6: a specimen older than this at emit time is stale. */

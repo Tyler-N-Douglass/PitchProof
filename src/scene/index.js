@@ -12,7 +12,7 @@
 
 export { registerAllLayouts, LAYOUT_FUNCTIONS, layoutFunction } from './layouts/all.js';
 export { sceneTemplates, buildScene, collectGroups, presenterNote, mediaMap } from './plan.js';
-export { measureScene, collectTextBoxes, renderSceneTree, normalizeContext, plainText, textOverflowOf, insetLength, trackWidth as declaredTrackWidth, BRAND_BORDER_INSET } from './measure.js';
+export { measureScene, collectTextBoxes, renderSceneTree, normalizeContext, plainText, textOverflowOf, fitReason, insetLength, trackWidth as declaredTrackWidth, BRAND_BORDER_INSET } from './measure.js';
 export {
   PROVENANCE_LABEL_CLASS, PROVENANCE_LABEL_TEXT, needsProvenanceLabel, provenanceLabel,
   PROVENANCE_LEDGER_CLASS, labelledRenditionIds, unlabelledRenditions, withProvenanceLedger,

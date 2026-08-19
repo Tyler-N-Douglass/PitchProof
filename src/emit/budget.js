@@ -1001,65 +1001,55 @@ export function budgetAssets(proof, maxBytes, options = {}) {
   };
 
   // The lossless pass. Nothing here costs a pixel, so it happens whatever the
-  // budget is, and it is the anchor every later prediction is measured from.
+  // budget is, and it is the first point on every asset's measured curve.
   const lossless = measure(1);
   if (lossless.total <= budget) return settled(...planFrom(lossless), 1);
 
-  let lo = 0;
-  let hi = 1;
-  /** @type {{q: number, total: number, chosen: Map<string, any>}|null} */
-  let fitting = null;
-
-  // If even the floor is predicted not to fit, check the floor once and stop:
-  // there is nothing between here and there worth the client's pixels.
-  if (predictTotal(0) > budget) {
-    const floor = measure(0);
-    if (floor.total > budget) {
-      /** @type {{assetId: string, bytes: number, reason: string}[]} */
-      const blocked = [];
-      for (const a of assets) {
-        if (floor.chosen.get(a.dataUri)) continue;
-        const parsed = parseDataUri(a.dataUri);
-        blocked.push({
-          assetId: a.assetId,
-          bytes: costOf(a.dataUri, a.bytes),
-          reason: `${parsed ? parsed.mime : 'unknown'} cannot be re-encoded any smaller by the in-repo codec; supply a host resampler (deps.resample) or capture it smaller`,
-        });
-      }
-      return unreachable(
-        `even with every asset at ${Math.round(SCALE_FLOOR * 100)}% of its linear size the artifact is ${reserve + floor.total} bytes, `
-        + `still over the ${ceiling}-byte budget, so nothing was degraded`,
-        blocked,
-      );
+  // The floor, measured rather than predicted. Two things come out of it: an
+  // exact answer to "can this budget be met at all", and the second point on
+  // every curve, which is what makes the search that follows read this
+  // proof's own images instead of a model of images in general.
+  const floor = measure(0);
+  if (floor.total > budget) {
+    /** @type {{assetId: string, bytes: number, reason: string}[]} */
+    const blocked = [];
+    for (const a of assets) {
+      if (floor.chosen.get(a.dataUri)) continue;
+      const parsed = parseDataUri(a.dataUri);
+      blocked.push({
+        assetId: a.assetId,
+        bytes: costOf(a.dataUri, a.bytes),
+        reason: `${parsed ? parsed.mime : 'unknown'} cannot be re-encoded any smaller by the in-repo codec; supply a host resampler (deps.resample) or capture it smaller`,
+      });
     }
-    fitting = floor;
-    lo = 0;
+    return unreachable(
+      `even with every asset at ${Math.round(SCALE_FLOOR * 100)}% of its linear size the artifact would be ${reserve + floor.total} bytes, `
+      + `still ${reserve + floor.total - ceiling} over the ${ceiling}-byte budget, so nothing was degraded`,
+      blocked,
+    );
   }
 
+  // Between the two ends, bisect on the dial. The candidate comes from the
+  // measured curves — cheap, and accurate once both ends are known — and the
+  // bracket is only ever moved by a measurement, so the answer the emitter
+  // ships is one it has actually weighed.
+  let lo = 0;
+  let hi = 1;
+  let fitting = floor;
   const tolerance = (chosenTotal) => Math.max(1024, Math.round(0.02 * (startTotal - chosenTotal)));
 
-  for (let probe = 0; probe < MEASURED_PROBES && hi - lo > SCALE_QUANTUM; probe++) {
-    if (fitting && budget - fitting.total <= tolerance(fitting.total)) break;
+  for (let probe = 0; probe < MEASURED_PROBES; probe++) {
+    if (budget - fitting.total <= tolerance(fitting.total)) break;
+    if (hi - lo <= SCALE_QUANTUM) break;
     let q = solve(lo, hi);
     if (!(q > lo) || !(q < hi)) q = (lo + hi) / 2;
     const probed = measure(q);
     if (probed.total <= budget) {
-      if (!fitting || probed.total > fitting.total) fitting = probed;
+      if (probed.total > fitting.total) fitting = probed;
       lo = q;
     } else {
       hi = q;
     }
-  }
-
-  if (!fitting) {
-    const floor = measure(0);
-    if (floor.total > budget) {
-      return unreachable(
-        `even with every asset at ${Math.round(SCALE_FLOOR * 100)}% of its linear size the artifact is ${reserve + floor.total} bytes, `
-        + `still over the ${ceiling}-byte budget, so nothing was degraded`,
-      );
-    }
-    fitting = floor;
   }
 
   return settled(...planFrom(fitting), fitting.q);
@@ -1108,6 +1098,57 @@ export function budgetAssets(proof, maxBytes, options = {}) {
     plan.sort((a, b) => a.rank - b.rank);
     return [plan, replacements, chosen.total];
   }
+}
+
+/**
+ * The measured point nearest a scale.
+ * @param {{scale: number, bytes: number}[]} points  ascending by scale
+ * @param {number} scale
+ * @returns {{scale: number, bytes: number}}
+ */
+export function nearest(points, scale) {
+  let best = points[0];
+  for (const p of points) if (Math.abs(p.scale - scale) < Math.abs(best.scale - scale)) best = p;
+  return best;
+}
+
+/**
+ * The two measured points to read a scale between: the pair that brackets it
+ * when there is one, otherwise the two nearest, which extrapolates along the
+ * same curve rather than along a guess.
+ * @param {{scale: number, bytes: number}[]} points  ascending by scale
+ * @param {number} scale
+ * @returns {[{scale: number, bytes: number}, {scale: number, bytes: number}]}
+ */
+export function nearestPair(points, scale) {
+  for (let i = 1; i < points.length; i++) {
+    if (points[i - 1].scale <= scale && scale <= points[i].scale) return [points[i - 1], points[i]];
+  }
+  return scale < points[0].scale
+    ? [points[0], points[1]]
+    : [points[points.length - 2], points[points.length - 1]];
+}
+
+/**
+ * Read a byte count off a picture's own measured curve.
+ *
+ * Emitted bytes against linear scale is very close to a power law for a given
+ * image — `bytes ≈ k·scaleᵝ` — with β somewhere between 1 and 2 depending on
+ * how much detail the resampler destroys. Two measurements fix both constants,
+ * so this is a straight line in log-log space between them. It is the same idea
+ * as `predictEmittedBytes` — predict from a measurement of *this* image, never
+ * from a formula about images — with the exponent measured instead of assumed.
+ *
+ * @param {{scale: number, bytes: number}} a
+ * @param {{scale: number, bytes: number}} b
+ * @param {number} scale
+ * @returns {number}
+ */
+export function logInterpolate(a, b, scale) {
+  if (!(a.scale > 0) || !(b.scale > 0) || !(a.bytes > 0) || !(b.bytes > 0)) return NaN;
+  if (a.scale === b.scale) return a.bytes;
+  const t = (Math.log(scale) - Math.log(a.scale)) / (Math.log(b.scale) - Math.log(a.scale));
+  return Math.exp(Math.log(a.bytes) + t * (Math.log(b.bytes) - Math.log(a.bytes)));
 }
 
 /**

@@ -37,16 +37,33 @@
  *     can come apart on their own — a run whose newlines and runs of spaces the
  *     browser keeps and the model collapses is reported short, in the one
  *     direction §22.2 forbids, for exactly the content most likely to be wide.
- *  3. An element the stylesheet sizes to its own words — the `inline-flex`
- *     provenance pill and the `inline-block` CTA, and nothing else — declares
- *     `data-pp-fit`, and is checked as a *bound* rather than an equality: the
- *     model reports the room the element has, the browser never renders it
- *     wider than that room, and the room itself is the parent's box less the
- *     element's own gutters. §22.2's direction rule is why it is a bound: where
- *     the two can honestly differ, the model must claim *less* room than the
- *     page has, never more, so the error falls towards a warning that is not
- *     needed rather than a truncation nobody sees. The inventory is asserted,
- *     so growing it is a decision rather than an accident.
+ *  3. An element whose own box is not the extent at which its content is lost
+ *     declares `data-pp-fit`, and is checked as a *bound* rather than an
+ *     equality: the model reports the room the element has, the browser never
+ *     renders it wider than that room, and the room itself is the parent's box
+ *     less the element's own gutters. §22.2's direction rule is why it is a
+ *     bound: where the two can honestly differ, the model must claim *less*
+ *     room than the page has, never more, so the error falls towards a warning
+ *     that is not needed rather than a truncation nobody sees. The inventory is
+ *     asserted per reason, so growing it is a decision rather than an accident.
+ *  3b. There are two reasons, and the second one is a claim about the
+ *     *stylesheet* rather than about a width, so it gets its own check.
+ *     `data-pp-fit="spill"` says the box is a gutter reserved for a mark: the
+ *     sheet paints nothing at its edge and clips nothing there, so a mark wider
+ *     than the gutter — "18." in a 16px list-marker column — is drawn in full
+ *     in space the design already leaves empty. That is why the mark is
+ *     reported as fitting rather than as overflowing, and it is the kind of
+ *     claim that becomes a blind spot the moment it is taken on trust: the run
+ *     stays in the measured population, and this file asserts in Chromium that
+ *     nothing between it and the stage clips it and that its ink stays inside
+ *     the room the model reports. The declaration fails on the run it stops
+ *     being true, which is the whole difference between measuring a decoration
+ *     and excusing one.
+ *  3c. An element the stylesheet gives a fixed number of line boxes declares
+ *     `data-pp-lines`, and the height the model measures it against is checked
+ *     against Chromium's `clientHeight` as an equality. `badgeNumber` was being
+ *     measured against its slot's 536px rather than its own 40px line, so no
+ *     height check on the role could fire at any content (DEFERRED.md).
  *
  * Nothing here is measured against the model. The ground truth is Chromium's
  * layout of the same tree the artifact paints, under the same two stylesheets
@@ -65,9 +82,10 @@ import { layoutText } from '../../src/core/text-metrics.js';
 import { toHtml } from '../../src/core/vdom.js';
 import { compileTheme } from '../../src/brand/theme.js';
 import {
-  buildScene, renderSceneTree, measureScene, boxGeometry, SLOTS, TYPE_ROLES,
+  buildScene, renderSceneTree, measureScene, boxGeometry, declaredTrackWidth,
+  SLOTS, TYPE_ROLES,
 } from '../../src/scene/index.js';
-import { layoutCases, contextFor, brandFixture } from '../fixtures/scene/content.mjs';
+import { layoutCases, contextFor, brandFixture, specimen } from '../fixtures/scene/content.mjs';
 
 const SCENES_CSS = readFileSync(new URL('../../src/scene/scenes.css', import.meta.url).pathname, 'utf8');
 const RUNTIME_CSS = readFileSync(new URL('../../src/runtime/runtime.css', import.meta.url).pathname, 'utf8');
@@ -115,6 +133,60 @@ after(async () => {
 });
 
 /**
+ * A commissioning checklist long enough that its ordinals reach two digits.
+ *
+ * The shared fixture's only list is a five-item unordered one, whose marker is a
+ * bullet 4px wide in a 14px column — so it exercises the marker track without
+ * ever exercising a marker that *exceeds* it, which is the case
+ * `data-pp-fit="spill"` is a claim about. Declared here rather than in
+ * `test/fixtures/scene/content.mjs` because it is this file's own probe: the
+ * other tests over that fixture have no business changing shape because this one
+ * needs an eighteenth list item.
+ * @returns {object}
+ */
+function orderedListCase() {
+  const steps = [
+    'Isolate the drive at the local disconnect and lock it off',
+    'Confirm the gearbox flange matches the drawing revision on the order',
+    'Torque the four mounting bolts to 90 Nm in a diagonal sequence',
+    'Fit the bearing cartridge and seat it by hand before tightening',
+    'Land the Modbus TCP pair on terminals 7 and 8, screen to earth',
+    'Set the ambient limit to match the hall, not the nameplate default',
+    'Run the autotune at a 2.5 Nm ramp increment with a 600 second timeout',
+    'Record the tune result against the line number in the service log',
+    'Check the dry contact opens on a simulated over-temperature',
+    'Verify the sealed housing carries no witness marks from transit',
+    'Confirm the spares depot code on the label matches the region',
+    'Restore power and watch the first ten minutes of continuous duty',
+    'Log the standing current at operating temperature',
+    'Re-torque the mounting bolts after the first thermal cycle',
+    'Hand the tune record to the maintenance lead for counter-signature',
+    'File the commissioning sheet against the asset number',
+    'Schedule the ninety-day condition-monitoring review',
+    'Return the lock-off tag to the panel and close the permit',
+  ];
+  const base = specimen();
+  return {
+    layout: 'splitBeforeAfter',
+    specimen: {
+      ...base,
+      blocks: [
+        { type: 'heading', level: 2, text: 'Commissioning sequence' },
+        { type: 'list', ordered: true, items: steps },
+      ],
+    },
+    renditions: [],
+    headline: 'Their commissioning checklist, as captured',
+    subhead: 'Eighteen ordered steps, so the marker column has to carry two digits.',
+  };
+}
+
+/** Every layout case this file lays out, shared fixture plus this file's probe. */
+function pageCases() {
+  return [...layoutCases(), orderedListCase()];
+}
+
+/**
  * One page carrying every layout case, in the same wrappers the runtime paints
  * into (`.pp-stage` → `.pp-stage-scene` → `.pp-scene`) so `--pp-stage-pad` and
  * the scroll container are the artifact's, not this test's.
@@ -130,7 +202,7 @@ function buildPage() {
   const theme = compileTheme(brandFixture());
   /** @type {{id: string, testCase: any, ctx: any}[]} */
   const scenes = [];
-  const stages = layoutCases().map((testCase) => {
+  const stages = pageCases().map((testCase) => {
     const scene = buildScene(testCase);
     const ctx = contextFor(scene, { specimen: testCase.specimen, renditions: testCase.renditions });
     scenes.push({ id: scene.id, testCase, ctx });
@@ -179,14 +251,55 @@ async function readScene(sceneId) {
       svg: isSvg(el),
     }));
 
+    /**
+     * The nearest box that would actually cut this run: itself or an ancestor
+     * up to the stage whose `overflow` is not `visible`, or which truncates with
+     * a clamp or an ellipsis. `null` where nothing between the run and the stage
+     * clips at all.
+     */
+    const clipper = (el) => {
+      for (let node = el; node && node !== document.body; node = node.parentElement) {
+        const cs = getComputedStyle(node);
+        const clamp = cs.webkitLineClamp || cs.getPropertyValue('-webkit-line-clamp');
+        if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible'
+          || (clamp && clamp !== 'none') || cs.textOverflow === 'ellipsis') {
+          const r = node.getBoundingClientRect();
+          return {
+            self: node === el,
+            tag: node.tagName.toLowerCase(),
+            cls: typeof node.className === 'string' ? node.className : '',
+            left: r.left + node.clientLeft,
+            top: r.top + node.clientTop,
+            right: r.left + node.clientLeft + node.clientWidth,
+            bottom: r.top + node.clientTop + node.clientHeight,
+          };
+        }
+      }
+      return null;
+    };
+
     const runs = [...root.querySelectorAll('[data-pp-tx]')].map((el) => {
       const parent = el.parentElement;
       const cs = getComputedStyle(el);
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const ink = range.getBoundingClientRect();
       return {
         role: el.getAttribute('data-pp-tx'),
         text: (el.textContent || '').trim(),
         fit: el.getAttribute('data-pp-fit'),
+        lines: el.getAttribute('data-pp-lines'),
+        track: el.getAttribute('data-pp-width'),
         width: contentWidth(el),
+        // The content-box height, the number a `data-pp-lines` declaration is.
+        height: el.clientHeight - num(cs.paddingTop) - num(cs.paddingBottom),
+        // Where the glyphs actually land, which is not the element's box when
+        // the element's box is a gutter the glyphs are allowed to leave.
+        ink: {
+          left: ink.left, top: ink.top, right: ink.right, bottom: ink.bottom,
+          width: Math.round(ink.width * 100) / 100,
+        },
+        clip: clipper(el),
         // For a fitted element: the room its parent gives it, less its own
         // gutters. This is the number the model claims, and the number a longer
         // label would fill.
@@ -258,6 +371,8 @@ test('every text container measureScene reports is the container Chromium draws'
   /** @type {string[]} */
   const overclaimed = [];
   let checked = 0;
+  /** @type {Set<string>} */
+  const lineBoxes = new Set();
 
   for (const bp of BREAKPOINTS) {
     page = await browser.newPage({ viewport: { width: bp.width, height: bp.height }, deviceScaleFactor: 1 });
@@ -283,6 +398,17 @@ test('every text container measureScene reports is the container Chromium draws'
         if (run.svg || SVG_ROLES.has(run.role)) continue;
         checked++;
         covered.add(run.role);
+
+        // A declared line count is the box the height axis is checked against,
+        // so it is checked against the browser as an equality — the same
+        // contract the width of every unfitted box is held to.
+        if (run.lines) {
+          lineBoxes.add(run.role);
+          const heightDelta = model.containerHeightPx - run.height;
+          if (Math.abs(heightDelta) > TOLERANCE_PX) {
+            wrong.push(`${bp.id} ${id} ${run.role}: model gives it ${model.containerHeightPx.toFixed(2)}px of height for ${run.lines} line(s), Chromium draws ${run.height} — "${run.text.slice(0, 32)}"`);
+          }
+        }
 
         if (run.fit) {
           // A fitted box: the model reports the room, the browser renders the
@@ -318,6 +444,10 @@ test('every text container measureScene reports is the container Chromium draws'
   for (const role of ['headline', 'subhead', 'panelTitle', 'panelMeta', 'body', 'listItem', 'noteLabel', 'stepLabel', 'provenance']) {
     assert.ok(covered.has(role), `no ${role} run was checked`);
   }
+  // And the role the declaration was added for. A height the model states and
+  // never lays a page out against is the hole this closes, not a fix for it.
+  assert.deepEqual([...lineBoxes].sort(), ['badgeNumber'],
+    'the set of text boxes declaring their own line count changed');
 });
 
 /**
@@ -555,8 +685,8 @@ test('the inventory of content-sized text boxes is exactly the declared one', as
   if (!available) return t.skip('Chromium unavailable');
   const { html, scenes } = buildPage();
 
-  /** @type {Map<string, {role: string, width: number, model: number}[]>} */
-  const fitted = new Map();
+  /** @type {{role: string, fit: string, width: number, model: number}[]} */
+  const fitted = [];
 
   for (const bp of BREAKPOINTS) {
     page = await browser.newPage({ viewport: { width: bp.width, height: bp.height }, deviceScaleFactor: 1 });
@@ -567,29 +697,112 @@ test('the inventory of content-sized text boxes is exactly the declared one', as
       for (let i = 0; i < runs.length; i++) {
         const run = runs[i];
         if (!run.fit || run.svg || SVG_ROLES.has(run.role)) continue;
-        const list = fitted.get(run.role) || [];
-        list.push({ role: run.role, width: run.width, model: measurement.boxes[i].containerWidthPx });
-        fitted.set(run.role, list);
+        fitted.push({ role: run.role, fit: run.fit, width: run.width, model: measurement.boxes[i].containerWidthPx });
       }
     }
     await page.close();
     page = null;
   }
 
-  // Two, and they are the two the stylesheet sizes to their own words: the
-  // `inline-flex` provenance pill and the `inline-block` CTA. Every other text
-  // box in the deck is checked as an equality by the test above, and the reason
-  // this list is asserted rather than merely reported is that each entry is a
-  // container the model can only *bound* — a place where §22.2's error has to
-  // be made to fall the safe way by hand. Growing the list is a decision.
-  assert.deepEqual([...fitted.keys()].sort(), ['cta', 'provenance'],
+  // Every other text box in the deck is checked as an equality by the test
+  // above, and the reason these lists are asserted rather than merely reported
+  // is that each entry is a container the model can only *bound* — a place where
+  // §22.2's error has to be made to fall the safe way by hand. Growing either
+  // list is a decision. They are asserted separately because the two reasons are
+  // different claims and neither should be able to admit a box under the other's
+  // name.
+  //
+  //   shrink — the two shapes the stylesheet sizes to their own words: the
+  //            `inline-flex` provenance pill and the `inline-block` CTA.
+  //   spill  — the one gutter a mark is allowed to leave: the list-marker
+  //            column. Its no-clip half is asserted in the test below.
+  const byReason = (want) => [...new Set(fitted.filter((f) => f.fit === want).map((f) => f.role))].sort();
+  assert.deepEqual(byReason('shrink'), ['cta', 'provenance'],
     'the set of content-sized text boxes changed');
+  assert.deepEqual(byReason('spill'), ['deco'],
+    'the set of text boxes allowed to spill out of their own box changed');
+  assert.deepEqual([...new Set(fitted.map((f) => f.fit))].sort(), ['shrink', 'spill'],
+    'a box declared a fit reason this file does not check');
 
-  for (const [role, seen] of fitted) {
+  for (const role of byReason('shrink')) {
+    const seen = fitted.filter((f) => f.role === role);
     assert.ok(seen.length >= BREAKPOINTS.length, `${role} was only rendered ${seen.length} times`);
     // At least one of them has to actually be narrower than its room, or the
     // shape is not content-sized at all and the declaration is stale.
     assert.ok(seen.some((x) => x.model - x.width > TOLERANCE_PX),
       `${role} filled its container everywhere it was drawn; it is not a fitted box any more`);
   }
+});
+
+test('a mark that spills its gutter is never cut, and never leaves the room the model claims', async (t) => {
+  if (!available) return t.skip('Chromium unavailable');
+  const { html, scenes } = buildPage();
+
+  /** @type {string[]} */
+  const cut = [];
+  /** @type {string[]} */
+  const escaped = [];
+  /** @type {string[]} */
+  const wrongTrack = [];
+  let checked = 0;
+  let spilling = 0;
+
+  for (const bp of BREAKPOINTS) {
+    page = await browser.newPage({ viewport: { width: bp.width, height: bp.height }, deviceScaleFactor: 1 });
+    await page.setContent(html, { waitUntil: 'load' });
+
+    for (const { id, testCase, ctx } of scenes) {
+      const measurement = measureScene(buildScene({ ...testCase, id }), ctx, bp.id);
+      const { runs } = await readScene(id);
+      for (let i = 0; i < runs.length; i++) {
+        const run = runs[i];
+        if (run.fit !== 'spill' || run.svg || SVG_ROLES.has(run.role)) continue;
+        const model = measurement.boxes[i];
+        const where = `${bp.id} ${id} ${run.role} "${run.text}"`;
+        checked++;
+
+        // 1. The gutter itself is still the gutter the token declares. Taking
+        //    the mark's box out of the detector's arithmetic must not take the
+        //    stylesheet's number out of this file's — that number is exactly
+        //    what CRITIQUE-2's C1 was about.
+        assert.ok(run.track, `${where}: a spilling mark with no declared track`);
+        const track = declaredTrackWidth(run.track, bp.id, run.width);
+        if (Math.abs(track - run.width) > TOLERANCE_PX) {
+          wrongTrack.push(`${where}: token "${run.track}" is ${track}px, Chromium draws the mark's box ${run.width}px`);
+        }
+
+        // 2. Nothing cuts it. Not the element — it must not clip its own mark —
+        //    and where an ancestor does clip, the ink has to sit inside it.
+        //    This is the whole licence for reporting the mark as fitting, and
+        //    it is checked rather than assumed.
+        if (run.clip && run.clip.self) {
+          cut.push(`${where}: the mark's own box clips (${run.clip.cls})`);
+        } else if (run.clip
+          && (run.ink.left < run.clip.left - TOLERANCE_PX || run.ink.right > run.clip.right + TOLERANCE_PX
+            || run.ink.top < run.clip.top - TOLERANCE_PX || run.ink.bottom > run.clip.bottom + TOLERANCE_PX)) {
+          cut.push(`${where}: ink [${run.ink.left.toFixed(1)}..${run.ink.right.toFixed(1)}] leaves the clipping ${run.clip.cls} [${run.clip.left.toFixed(1)}..${run.clip.right.toFixed(1)}]`);
+        }
+
+        // 3. And it stays inside the room the model reported for it. A mark
+        //    that outgrew its room would be painting over the copy beside it,
+        //    which is not "nothing is lost" in any sense a client would accept.
+        if (run.ink.width - model.containerWidthPx > TOLERANCE_PX) {
+          escaped.push(`${where}: ink ${run.ink.width}px against ${model.containerWidthPx.toFixed(2)}px of room`);
+        }
+        if (run.ink.width - run.width > TOLERANCE_PX) spilling++;
+      }
+    }
+    await page.close();
+    page = null;
+  }
+
+  assert.deepEqual(wrongTrack, [], `a spilling mark's gutter is not the token it declares:\n  ${wrongTrack.join('\n  ')}`);
+  assert.deepEqual(cut, [], `a mark declared unclippable is cut:\n  ${cut.join('\n  ')}`);
+  assert.deepEqual(escaped, [], `a mark spilled past the room the model reports for it:\n  ${escaped.join('\n  ')}`);
+  assert.ok(checked > 100, `only ${checked} spilling marks were laid out; the fixture no longer renders lists`);
+  // The claim is about marks that *do* leave their box. A run of this test in
+  // which none of them did would pass while proving nothing, so the fixture is
+  // required to carry one — `orderedListCase()` exists for this.
+  assert.ok(spilling > 0,
+    'no mark was drawn wider than its own gutter, so this run did not exercise the case the declaration is about');
 });
