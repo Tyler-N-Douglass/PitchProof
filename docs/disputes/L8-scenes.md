@@ -220,3 +220,141 @@ than the metric model would pick).
 `core/text-metrics.js` as one function both lanes call — L11 already imports
 `resolveFace` from there, and only the "available families" rule and the
 declared-stack walk sit above it. Neither lane needs to own that.
+
+---
+
+## L8-D9 — `core/text-metrics.js` breaks lines after `/` and no browser does
+
+**Surface.** `BREAK_AFTER` in `src/core/text-metrics.js:532` — the set of
+characters after which `layoutText` may start a new line. It contains `'/'`.
+
+**Objection.** No browser breaks there. Measured directly in Chromium
+(`400 14px/1.35 Arial`, a 200px box):
+
+```
+"aaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbb"   Chromium 1 line   model 2
+"aaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbb"   Chromium 2 lines  model 2
+"aaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbb"   Chromium 1 line   model 1
+```
+
+UAX#14 gives `/` the class `SY`, which grants no break opportunity on its own;
+`-` is `HY`, which does. The model therefore has strictly *more* places to break
+than the page does, packs more text onto each line, and reports fewer lines than
+render. That is the one direction §22.2 forbids: it under-reports, so a clamped
+run that really loses a line is reported as fitting.
+
+**Measured cost.** Over the emitted corpus artifact, walked in Chromium at all
+three `BREAKPOINTS` viewports, every `[data-pp-tx]` box:
+
+```
+boxes Chromium genuinely cuts                    126
+detected, with BREAK_AFTER as it stands          114     recall 0.9048
+detected, with '/' removed from BREAK_AFTER      125     recall 0.9921
+```
+
+Every one of the twelve misses is a URL in a scene subhead or headline breaking
+after a slash in the model and not in the page. The single residual after the
+one-character change is a headline whose longest model line is 348.7px against a
+350px box — 0.4%, inside the residual `test/validate/overflow-browser.test.mjs`
+already measures and states.
+
+**Built as written.** `src/core/text-metrics.js` is not this lane's file and has
+not been touched. Every container `measureScene` reports is now the container
+Chromium draws (decision L8-27), so this is the whole of the remaining gap
+between L8's measurement and §17.4's number, and it is one character wide.
+
+**What would settle it.** Remove `'/'` from `BREAK_AFTER`. `test/core`'s golden
+cases would need re-baselining for any URL-bearing string, and
+`test/validate/overflow-browser.test.mjs` is the right place to assert the rule
+against Chromium rather than against a table — it already has the harness. The
+change should be made by whoever owns `src/core`, not smuggled in through a
+scene-lane container width: narrowing a reported container to compensate would
+buy the recall number and lose the property decision L8-27 exists to protect.
+
+---
+
+## L8-D10 — Two overflowing runs inside one revealable element collapse to one finding
+
+**Surface.** `detectBoxOverflow` in `src/validate/overflow.js`:
+
+```js
+const key = box.elementId || `${box.role || 'text'}#${where.index}`;
+```
+
+and `makeFinding({ … key: `${where.breakpoint}|${key}|width` })`, whose `id` is
+`contentId('finding', { code, locus, key })`. `sortFindings` keeps one finding
+per id.
+
+**Objection.** `elementId` is the nearest *revealable ancestor* — L8 stamps
+`data-pp-el` on the thing a beat reveals, which is a panel, a card, a step or a
+row, never a single run of text. Every text run inside one of those shares it. So
+two runs in the same panel that overflow on the same axis at the same breakpoint
+produce the same finding id, and one of them is discarded before anyone sees it.
+A panel header is exactly that shape: `panelTitle` and `panelMeta`, side by side,
+in one revealable cell.
+
+**Measured cost.** Running `detectBoxOverflow` over the corpus proof's own
+measurements and counting the findings `sortFindings` drops:
+
+```
+findings suppressed by finding-id collision:  19
+  md sc_a668c378d053   panelTitle + panelMeta  (width)   share elementId el_62ed2bfb1e
+  sm sc_cfbfda5271de   stepLabel  + bh3        (width)   share elementId el_ce7aa948f7
+  sm sc_28aa5e626746   stepLabel  + panelMeta  (width)   share elementId el_c20c25d4e0
+  …
+```
+
+Against the browser, that is the difference between what the detector *sees* and
+what the artifact *reports*: per-box recall 0.9048, per-finding recall 0.770,
+over the same run.
+
+**Built as written.** `MeasuredBox` already carries two fields that would
+disambiguate — `containerId` and `slot`, both L8 extensions — and the detector
+also has `where.index`. This lane did not change L11's key: reporting a null
+`elementId` to force the fallback would break the locus every downstream reader
+uses, and inventing a per-run `data-pp-el` would make each run individually
+revealable, which is a beat-plan change to fix a reporting bug.
+
+**What would settle it.** Include the run in the key rather than only its
+revealable ancestor — `${breakpoint}|${elementId ?? role}#${index}|${axis}` is
+enough, and `index` is already a parameter. The finding's `locus` and
+`detail.elementId` stay exactly as they are, so nothing downstream moves.
+
+---
+
+## L8-D11 — §4 has no way to say which way a block reads
+
+**Surface.** `ContentBlock` and `Rendition` in `src/core/contracts.d.ts`, above
+the FROZEN REGION END marker.
+
+**Objection.** §9.1 asks `locale-fanout` for "locale-appropriate structure, not
+just translated strings", and writing direction is the most basic structural
+fact a locale carries — it is what makes an ar-SA rendition *look* like an ar-SA
+page rather than an English page with Arabic-market metadata attached. §4 gives
+a block no field for it. The consequence CRITIQUE-2 C8 found is what always
+happens when a contract cannot express a fact the product needs: the fact gets
+smuggled through a field that can carry anything, in this case escaped HTML in a
+`raw` block, and the receiving lane then applies §8's rule about *captured*
+source to a rendition the tool produced itself.
+
+**Built as written.** The frozen shapes are untouched. `dir` and `lang` are read
+as optional extensions wherever a block or a rendition carries them
+(`src/scene/direction.js`), which is the shape L7 already writes them in
+(`withDirection` / `carryDirection` in `src/recipe/blocks.js`). Nothing is
+guessed: a block that declares neither renders exactly the markup it rendered
+before, byte for byte, which `test/scene/direction.test.mjs` asserts over every
+layout case.
+
+**What would settle it.** Two optional fields below the FROZEN REGION END
+marker, and one line in `API.md`'s §4 summary:
+
+```ts
+export interface BlockFlow { dir?: 'ltr' | 'rtl' | 'auto'; lang?: string; }
+// ContentBlock and Rendition may carry BlockFlow's fields.
+```
+
+They are optional, so no existing proof changes shape, and `validateProofShape`
+gains a check that `dir` is one of the three values rather than leaving each
+lane to decide what a malformed one means. Until then the fields are a
+convention two lanes hold in agreement and nothing enforces, which is the state
+this dispute exists to record.

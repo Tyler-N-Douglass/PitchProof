@@ -290,6 +290,21 @@ and the reservation of `"spine"` — belongs in the contract and in
 `validateProofShape`, where it would be refused at the door instead of reported
 fourteen rules later.
 
+> **Answered in part, by the integrator, and recorded rather than actioned.**
+> `validateProofShape` is not being changed in this pass, for a reason this lane
+> accepts: a shape check that refuses the proof would turn a *reportable* defect
+> into an *unopenable project*. `runPreflight` throws on a §4 violation (L11-D10)
+> and `importProjectJson` is gaining the same guard, so declaring uniqueness in
+> the contract today would mean a seller whose merged project file has one
+> duplicated id cannot open it at all — where they currently open it, see a
+> severity-1 finding naming both branches, and fix it in the studio. The sweep is
+> the right place to tell a seller about this one. What stands is the narrower
+> point: §4 does not *say* that `Scene.id` and `Branch.id` are unique within a
+> `Proof` or that `"spine"` is reserved, and a contract that leaves the deck's
+> only two id namespaces undeclared is why both collisions could be built and
+> shipped without a single lane noticing. A v2 should say it in prose even if
+> `validateProofShape` keeps letting it through.
+
 ---
 
 ## Non-disputes, recorded so the critic does not re-derive them

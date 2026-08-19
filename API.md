@@ -602,7 +602,8 @@ type SceneMeasurement = {
            style: TextStyle; containerWidthPx: number; containerHeightPx: number;
            whiteSpace?: string; overflowWrap?: string; maxLines?: number;
            textOverflow: 'clip'|'ellipsis';       // always present, derived from the CSS
-           fontStack?: string[]; containerId?: string; slot?: string }[];
+           fontStack?: string[]; containerId?: string; slot?: string;
+           fitsContent?: boolean }[];             // width is the room this box has, not the box it fills
 };
 ```
 
@@ -632,6 +633,47 @@ Boxes that stack in one column share a `containerId` (`splitCell:before`,
 `sideNote:notes`, `indexRow:index`, …), which is how L11 aggregates cumulative
 overflow across siblings. A box's *position* within its container is still
 unavailable — a documented gap (dispute 25), not a worked-around one.
+
+**`containerWidthPx` is the width Chromium draws, and that is a checked claim.**
+`test/scene/geometry-browser.test.mjs` lays every layout out in real Chromium at
+all three `BREAKPOINTS` viewports and fails when any measured container differs
+from the rendered box by more than a pixel of rounding. It was written because
+CRITIQUE-2's C1 found 980 of 2547 text boxes disagreeing with the model, the
+worst by 1259px, while every in-lane check passed: the stylesheet and the token
+table agreed with each other and neither had been compared to a browser.
+
+Two elements in the deck are sized by their own words rather than by their row —
+the `inline-flex` provenance pill and the `inline-block` CTA. For those,
+`containerWidthPx` is **the room the element has**, not the box it fills: what a
+longer label, or the same label in another brand's face, would need. The
+rendered box is never wider than the reported number, so §22.2's error falls
+towards a warning that is not needed rather than a truncation nobody sees. Those
+boxes report `fitsContent: true`, so the two meanings of `containerWidthPx` are
+told apart in the data rather than only in this paragraph, and the set is
+asserted in that test so it cannot grow by accident.
+
+**Optional `dir` / `lang` on a block or a rendition (CRITIQUE-2 C8).** §4's
+`ContentBlock` and `Rendition` carry no writing direction, and §9.1 asks
+`locale-fanout` for "locale-appropriate structure, not just translated strings".
+L7 writes the fact as optional extensions — `withDirection` / `carryDirection` in
+`src/recipe/blocks.js` — and L8 reads it:
+
+```ts
+// optional, on ContentBlock and on Rendition
+dir?: 'ltr' | 'rtl' | 'auto';
+lang?: string;      // BCP-47
+```
+
+A block's value wins over its rendition's, because a rendition mixes the
+source's language with the tool's own structural labels and no single tag is
+true of the whole of it. Absent or malformed values produce **no attribute**: a
+deck that declares nothing renders byte-identically to one built before the
+fields existed, and no direction is ever inferred from the text. A rendition's
+`label` and its `producedBy` line are the tool's words rather than the market's,
+so the two layouts that render only those (`contentsIndex`, `systemMap`) carry
+no direction — asserted in `test/scene/direction.test.mjs` rather than assumed.
+Promoting the fields into §4 below the FROZEN REGION END marker is dispute
+L8-D11.
 
 ### L9 Branches — `src/branch/index.js`
 

@@ -41,7 +41,7 @@ import { encodePayload, splitMedia, hoistFirstPaintMedia } from './model.js';
 import { ppRehydrateMedia } from './artifact-runtime.js';
 import { inlineRuntime } from './document.js';
 import { compileFallbackTheme, compileFontFaces } from './theme.js';
-import { scanForNetworkReferences, scanModelAssets } from './scan.js';
+import { scanForNetworkReferences, scanModelAssets, scanForeignScripts, EMITTED_SCRIPTS } from './scan.js';
 import { allScenesOf, labelOptionFinding } from './provenance.js';
 import { budgetAssets, collectAssets, dedupeAssets, assetFootprint, sizeBudgetFinding } from './budget.js';
 import { runEmitGate } from './gate.js';
@@ -187,16 +187,26 @@ export async function emit(proof, options, deps) {
     );
   }
 
+  // C16. The scanner reads inline script as code, so a network API named in it
+  // is caught wherever it hides — but only if it is named. `atob("V2ViU29ja2V0")`
+  // names nothing, and no list of decoders closes that off for good. What does
+  // close it off is refusing to carry script the emitter did not write: the
+  // document's executable code is the runtime bundle and the boot script, and a
+  // sixth script element is prospect content that has become code. See
+  // `scanForeignScripts` and decision E33.
+  findings.push(...scanForeignScripts(html, { allowed: EMITTED_SCRIPTS, where: 'document' }));
+
   // Scenes past the first are not in the document — they are rendered at
   // presentation time from the model payload. The gate scans the document, so
   // scanning only that would leave every later scene unchecked, which is most
   // of the proof.
   for (const { scene, branchId } of allScenesOf(reconstructed)) {
     const sceneHtml = toHtml(renderScene(scene));
-    findings.push(...scanForNetworkReferences(sceneHtml, {
-      where: `scene ${scene.id}`,
-      locus: branchId ? { sceneId: scene.id, branchId } : { sceneId: scene.id },
-    }));
+    const locus = branchId ? { sceneId: scene.id, branchId } : { sceneId: scene.id };
+    findings.push(...scanForNetworkReferences(sceneHtml, { where: `scene ${scene.id}`, locus }));
+    // No id is allowed here: a scene renders content, and content that renders a
+    // script element is content that runs.
+    findings.push(...scanForeignScripts(sceneHtml, { where: `scene ${scene.id}`, locus }));
   }
 
   // A network reference *inside* an asset that is properly inlined. The gate's
@@ -236,6 +246,11 @@ export async function emit(proof, options, deps) {
     // than against these three numbers. A caller that wants to know why an emit
     // degraded (or why it refused) reads this; §13 asks for the report to be
     // the real one, and a report whose arithmetic a caller cannot check is not.
+    //
+    // `budget.bytes` is the size the artifact reached even when the emit was
+    // refused, where the top-level `bytes` is zeroed — a seller told "over
+    // budget" needs to know by how much, and the refusal is precisely the case
+    // where the number matters most.
     budget: {
       maxBytes: emitOptions.maxBytes,
       bytes,

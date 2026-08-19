@@ -1030,13 +1030,13 @@ const duplicateScene = {
       const subject = group.length === 1 ? `Branch ${named} carries` : `${group.length} branches (${named}) carry`;
       // Reported as observed rather than predicted, when there is a deck to observe.
       const droppedByDeck = dropped.has(branchId);
-      const confirmed = droppedByDeck ? ' The deck built for this sweep has already dropped one of them.' : '';
+      const confirmed = droppedByDeck ? ' The deck built for this sweep confirms it: it dropped a sequence for this id.' : '';
       if (branchId === SPINE) {
         out.push(makeFinding({
           code: 'DUPLICATE_SCENE',
           locus: { branchId },
           key: `branch-id-spine:${branchId}`,
-          message: `${subject} the id "${SPINE}", which is the id the deck gives the spine itself. The deck holds one sequence per id, so the branch replaces the whole spine: the proof's own spine scenes never enter the artifact, and every return to the spine lands inside the branch instead. Give the branch its own id.${confirmed}`,
+          message: `${subject} the id "${SPINE}", which is the id the deck reserves for the spine itself. Two sequences cannot share one id, so the branch and the spine cannot both be in the deck — and whichever loses, a whole sequence of this proof is missing from the artifact while every key that names "${SPINE}", the presenter's return to the spine included, resolves to the other one. Give the branch its own id.${confirmed}`,
           detail: {
             branchId, kind: 'spine-collision', droppedByDeck,
             occurrences: group.length, objections: group.map((b) => b.objection || null),

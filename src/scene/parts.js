@@ -81,13 +81,15 @@ export function provenanceLabel(rendition, ctx) {
     // The pill's own gutters and rule, which are not the container's and were
     // not being subtracted from it.
     'data-pp-inset': String(PROVENANCE_LABEL_INSET_PX),
-    // `inline-flex`, so the pill is as wide as its words up to the room it has.
-    // The measurement reports the *room*, which is the number the detector needs
-    // and the number a longer label in another brand's face would fill; the
-    // rendered box is narrower whenever the words are short. Marked so
-    // test/scene/geometry-browser.test.mjs checks it as a fitted box — the
-    // browser width bounded by the model, not equal to it — rather than
-    // silently tolerating the one shape whose width is content-derived.
+    // `inline-flex`, so the pill is as wide as its words up to the room it has —
+    // §18.1's label has to read as a label, not as a full-width band. The
+    // measurement therefore reports the *room*, which is the number the detector
+    // needs and the number a longer label in another brand's face would fill;
+    // the rendered box is narrower whenever the words are short. Marked so
+    // `measureScene` reports `fitsContent` and
+    // test/scene/geometry-browser.test.mjs checks it as a bound — the browser
+    // width no wider than the model — rather than silently tolerating a text box
+    // whose width is content-derived.
     'data-pp-fit': 'shrink',
   }, PROVENANCE_LABEL_TEXT);
 }

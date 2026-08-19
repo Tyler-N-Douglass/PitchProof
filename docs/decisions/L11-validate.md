@@ -1008,9 +1008,15 @@ the deck* and inspects both id namespaces: scene ids, and the branch ids
 
 *The spine sentinel is in that namespace too.* `buildDeck` stores the spine under
 the id `"spine"`, and §4 puts no format constraint on `Branch.id`, so a branch
-that claims `"spine"` replaces the entire spine sequence — the same silent
-overwrite, one worse. Reported by the same rule, at the same severity, with its
-own message.
+that claims `"spine"` collides with the spine itself — the same silent overwrite,
+one worse. Reported by the same rule, at the same severity, with its own message.
+That message is deliberately **policy-neutral**: it says the two cannot both be
+in the deck and that whichever loses, a whole sequence is missing from the
+artifact while every key naming `"spine"` — the presenter's return included —
+resolves to the other one. It said "the branch replaces the whole spine" while
+that was what `buildDeck` did; describing a collision by naming today's casualty
+is how a finding goes stale the next time L2 changes its mind, which happened
+within the hour (below).
 
 **No auto-fix.** Renaming one of the two means re-pointing every anchor and
 every jump the seller wrote, and the model no longer records which branch each
@@ -1025,31 +1031,63 @@ subject of that sentence is the model. The two lists differ only when a branch i
 collides, and in that one case the rest of the pass now tells the truth while the
 blocking finding is outstanding.
 
-**What is still wrong in `src/runtime/deck.js`, reported rather than reached
-into.** Detecting the collision here is sufficient to close the defect as
-reported — the emit is refused at severity 1 with no override, so no artifact can
-ship with a duplicated branch id, and the sweep is sound in the meantime. The
-deck is still wrong in two smaller ways that are L2's to fix:
+**What was still wrong in `src/runtime/deck.js`, reported rather than reached
+into — and since fixed by L2.** Detecting the collision here is sufficient to
+close the defect as reported: the emit is refused at severity 1 with no override,
+so no artifact can ship with a duplicated branch id, and `sweepScenes` keeps the
+rest of the pass sound in the meantime. Two smaller things were L2's, and were
+reported upward rather than reached across the lane boundary:
 
-- **It is inconsistent with itself.** For scene ids it keeps the *first*
-  occurrence and says why in a comment — "the locator keeps the first occurrence
+- **The deck was inconsistent with itself.** For scene ids it kept the *first*
+  occurrence and said why in a comment — "the locator keeps the first occurrence
   so navigation stays deterministic while that finding is outstanding". For
-  branch ids, six lines above, the *last* write wins, silently. One collision
-  policy, applied twice, is the least the deck owes a reader.
-- **It is silent.** Nothing on the built `Deck` records that a sequence was
-  dropped, so every consumer — the studio preview, the rehearse walk, the branch
-  panel, the runtime — sees a proof that quietly lost a branch. The recommendation
-  is a `duplicateBranchIds` list on the deck rather than a throw:
-  `runPreflight` builds the deck *before* it runs the rules, so a `buildDeck` that
+  branch ids, six lines above, the *last* write won, silently. One collision
+  policy, applied twice in opposite directions.
+- **The deck was silent.** Nothing on the built `Deck` recorded that a sequence
+  had been dropped, so every consumer — the studio preview, the rehearse walk,
+  the branch panel, the runtime — saw a proof that had quietly lost a branch. The
+  recommendation was a list on the deck rather than a throw, because
+  `runPreflight` builds the deck *before* it runs the rules: a `buildDeck` that
   threw would replace this finding with an exception, and the seller would get a
-  crash where they now get a sentence telling them which two branches to rename.
+  crash where they now get a sentence naming the two branches to rename.
+
+L2 made both changes. `buildDeck` now keeps the **first** occurrence of a branch
+id — the scene-id policy, applied once — and records every collision, the
+reserved `"spine"` included, on `Deck.duplicateBranchIds` (`API.md` Part 3b).
+Two assertions in this lane's tests were pinned to the old behaviour and failed,
+which is what they were written to do; they now pin the new casualty and the new
+field. **The harm and the severity are unchanged** — one authored branch is still
+missing from the deck, the sweep still would not measure its scenes without
+`sweepScenes`, and the presenter's key still opens a branch that is not the one
+they meant. Only *which* branch is lost changed, which is exactly why the finding
+does not name it.
+
+**Reading `Deck.duplicateBranchIds`: yes, for one sentence, and never as a
+dependency.** The collision is a fact about `proof.branches`, so that is where
+the rule derives it — the finding fires for a caller who never built a deck, and
+a deck that reported an empty list cannot silence it. Both are asserted. What the
+field buys is a real difference in what can honestly be said: without it the
+finding predicts what a deck will do with the collision, and with it the finding
+*reports* that the deck built for this sweep has already dropped a sequence for
+that id. One appended sentence, plus `detail.droppedByDeck`, and nothing else in
+the rule consults it.
 
 **Regression.** `test/validate/branch.test.mjs`: the deck is asserted to have
-lost `sc_ap0` before preflight is called, so the test states the defect rather
-than only the fix; the finding's code, severity, locus, `detail.occurrences`,
+lost the shadowed branch's scene *before* preflight is called, so the test states
+the defect rather than only the fix — and that assertion is what caught L2's
+change of collision policy; the finding's code, severity, locus, `detail.occurrences`,
 objections and scene ids are pinned; `summarize().canEmit` is false; the
 collision is found in both declaration orders and the finding list is
 byte-identical across runs; three branches under one id produce one finding
 counted at three; a defect planted inside the shadowed branch's scene is still
 reported, which is the sweep-soundness half; the spine collision has its own
-test; and distinct ids raise nothing.
+test; the rule is run with no deck and with a deck that reports nothing, and
+fires at severity 1 in both; and distinct ids raise nothing. The sweep-soundness
+test reads the casualty off the deck rather than assuming which branch it is, so
+it keeps testing the property and not the policy.
+
+**A corpus plant followed.** The integrator added `DUPLICATE_BRANCH_ID` to
+`test/fixtures/corpus/proof.mjs` after this landed. It makes the severity
+argument better than the fixture does: the corpus hangs its nested branch off a
+scene *inside* the branch that gets shadowed, so one duplicated id strands a
+branch two levels away.

@@ -15,7 +15,7 @@
  * `test/emit/provenance.test.mjs` plants its attacks.
  */
 
-import { h } from '../../../src/core/vdom.js';
+import { h, raw } from '../../../src/core/vdom.js';
 import { registerLayout, resetLayouts } from '../../../src/runtime/layouts.js';
 import { SCENE_LAYOUTS } from '../../../src/core/contracts.js';
 import { requiresProvenanceLabel } from '../../../src/emit/promotion.js';
@@ -27,6 +27,8 @@ import { requiresProvenanceLabel } from '../../../src/emit/promotion.js';
  * @param {boolean} [options.labelEmptyText]   render a label with no text
  * @param {string} [options.ctaHref]           render a CTA anchor with this href
  * @param {boolean} [options.omitRenditionAttr] drop `data-pp-rendition`
+ * @param {boolean} [options.renderRawBlocks]  emit `raw` ContentBlocks as raw HTML,
+ *   which is the one way prospect-supplied markup can reach the document verbatim
  */
 export function makeLayout(options = {}) {
   /** @param {import('../../../src/runtime/layouts.js').LayoutContext} ctx */
@@ -40,6 +42,7 @@ export function makeLayout(options = {}) {
       block.type === 'paragraph' ? h('p', null, block.text) : null,
       block.type === 'media' ? renderMedia(media.get(block.ref)) : null,
       block.type === 'cta' && options.ctaHref ? h('a', { href: options.ctaHref }, block.label) : null,
+      block.type === 'raw' && options.renderRawBlocks ? raw(block.html) : null,
     ));
 
     const after = renditions.map((rendition, i) => {

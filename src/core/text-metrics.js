@@ -528,8 +528,30 @@ export function measureText(text, style) {
   return w;
 }
 
-/** Characters after which a line may break even without a space. */
-const BREAK_AFTER = new Set(['-', '‐', '‒', '–', '—', '/', '​', '­']);
+/**
+ * Characters after which a line may break even without a space.
+ *
+ * **`/` is deliberately not in this set**, though it looks like it belongs.
+ * UAX#14 gives it line-break class `SY`, which does not create a break
+ * opportunity, and Chromium agrees: `aaaaaaaaaa/bbbbbbbbbb` in a 12ch box is one
+ * line, while the same string with any character below is two. Measured
+ * directly, not reasoned about — `test/core/text-metrics-breaks.test.mjs` asks
+ * the engine.
+ *
+ * Having it here was the largest single cause of §17.4's overflow recall sitting
+ * at 0.90 instead of 0.98 (CRITIQUE-2 C1, L8-D9). An extra break opportunity
+ * lets the model pack more onto a line than the browser will, so it reports
+ * *fewer* lines than render — under-reporting, which is the one direction §22.2
+ * forbids: the mistake must fall toward flagging an overflow that is not there,
+ * never toward missing one that is. Removing it took L8's browser-measured
+ * recall over the emitted corpus artifact from 0.9048 to 0.9921.
+ *
+ * A URL is what makes this tempting, and a URL is exactly where it does damage:
+ * `www.northwind-industrial.example/insights/fouling-margins/` is one
+ * unbreakable run to a browser, and a model that thinks it can break it at every
+ * slash concludes a container holds it when it does not.
+ */
+const BREAK_AFTER = new Set(['-', '‐', '‒', '–', '—', '​', '­']);
 
 /**
  * Split text into break-opportunity segments. Each segment carries the text

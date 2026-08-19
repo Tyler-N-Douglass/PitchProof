@@ -740,9 +740,15 @@ talk about.
 every slot, within Chromium's integer rounding. Text containers: **75 of 2547
 disagree, and all 75 are the one shape below.** Browser-measured recall over the
 emitted corpus artifact rose from **0.653** (the critic's number; 0.672 on my
-own harness, which matches per box rather than per role) to **0.906**, with
-zero false positives — see L8-D9 for the whole of the remaining gap, which is
-one character in a module this lane does not own.
+own harness, which matches per box rather than per role) to **0.9048**, with
+**zero false positives** — 114 of the 126 boxes Chromium genuinely cuts. See
+L8-D9 for the whole of the remaining gap: it is one character in a module this
+lane does not own, and removing it takes the same run to **0.9921**.
+
+The two boxes the critic screenshotted are gone rather than merely reported.
+`sc_853b7f0ca59f`'s German headline had 152px at `sm` and now has the stage's
+full 350; `sc_437d80e0181d`'s ledger name had a five-pixel box for 121px of text
+and now has 328. Both fit, in Chromium, with the model agreeing to the pixel.
 
 **Why the assertion is the geometry and not the recall.** A recall number is a
 fact about one corpus's sentences: rewrite a headline and it moves. "Every

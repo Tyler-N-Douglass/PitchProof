@@ -19,6 +19,8 @@
  *   data-pp-inset="a,b"     subtract these geometry tokens (or literal px) from the width
  *   data-pp-width="<t>"     this element's inner width *is* this token (or px)
  *   data-pp-max="<t>"       a `max-width` the stylesheet caps this element with
+ *   data-pp-fit             this element is as wide as its words; the reported
+ *                           width is the room it has, and is a bound
  *
  * The last two exist because the first three could only ever *narrow* a box by
  * a declared amount, and two shapes in the stylesheet are not that: a fixed
@@ -76,6 +78,7 @@ import { layoutFunction } from './layouts/all.js';
  * @property {string[]} [fontStack]           extension: the stack `style.family` heads
  * @property {string} [containerId]           extension: boxes sharing one container
  * @property {string} [slot]                  extension: the geometry slot's name
+ * @property {boolean} [fitsContent]          extension: `containerWidthPx` is the room this box has, not the box it fills
  */
 
 /**
@@ -257,6 +260,14 @@ export function collectTextBoxes(node, env) {
         box.fontStack = resolved.fontStack;
         box.containerId = next.containerId;
         box.slot = next.slot;
+        // The two shapes the stylesheet sizes to their own words — the
+        // `inline-flex` provenance pill and the `inline-block` CTA. For those,
+        // `containerWidthPx` is the room the element has rather than the box it
+        // fills: what a longer label, or the same label in a brand face with
+        // wider advances, would need. Reported so a reader of the measurement
+        // can tell the two meanings apart; every other box is an equality
+        // `test/scene/geometry-browser.test.mjs` checks against Chromium.
+        if (attrs['data-pp-fit']) box.fitsContent = true;
         boxes.push(box);
       }
       // A text role never nests inside another; the coverage test asserts it,

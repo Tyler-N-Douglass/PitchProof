@@ -624,7 +624,7 @@ html, body {
     --pp-sc-stack-rail-w: 36px;
     --pp-sc-stack-step-gap: 12px;
     --pp-sc-step-meta-gap: 12px;
-    --pp-sc-step-meta-w: 200px;
+    --pp-sc-step-meta-w: 240px;
     --pp-sc-step-pad: 16px;
     --pp-sc-subhead-max-w: 620px;
     --pp-sc-fs-attribution: 14px;
@@ -701,7 +701,7 @@ html, body {
     --pp-sc-stack-rail-w: 40px;
     --pp-sc-stack-step-gap: 16px;
     --pp-sc-step-meta-gap: 14px;
-    --pp-sc-step-meta-w: 240px;
+    --pp-sc-step-meta-w: 320px;
     --pp-sc-step-pad: 18px;
     --pp-sc-subhead-max-w: 760px;
     --pp-sc-fs-attribution: 15px;

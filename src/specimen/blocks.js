@@ -14,10 +14,13 @@
  *   - whitespace collapsed, `<br>` kept as a paragraph break where it separates
  *     sentences and dropped where it is a line wrap inside one;
  *   - presentational spans unwrapped;
- *   - empty blocks dropped.
+ *   - empty blocks dropped;
+ *   - a `<pre>`'s text is carried as a paragraph whose whitespace is
+ *     significant (`pre: true`), never as `raw` — D-L6-20. Nothing in this
+ *     module builds markup; `raw` blocks come only from `rawFallbackBlocks`,
+ *     behind §8's per-specimen opt-in.
  */
 
-import { escapeText } from '../core/vdom.js';
 import {
   attrOf, childrenOf, identityString, isElement, isText, normalizeSpace,
   NON_RENDERED, PRESENTATIONAL, tagOf, textOf,
@@ -371,9 +374,10 @@ export function blocksWithTrace(root, options = {}) {
       }
       case 'pre': {
         // Preformatted text is the one place where losing whitespace loses
-        // meaning, so it is carried as `raw` rather than flattened.
+        // meaning. It is carried as a paragraph whose text is significant
+        // whitespace (`pre: true`), never as `raw` — see D-L6-20.
         const text = rawTextOf(node);
-        if (normalizeSpace(text)) emit({ type: 'raw', html: `<pre>${escapeText(text)}</pre>` }, node);
+        if (normalizeSpace(text)) emit(/** @type {any} */({ type: 'paragraph', text, pre: true }), node);
         return;
       }
       case 'a': case 'button': {
@@ -403,7 +407,22 @@ export function blocksWithTrace(root, options = {}) {
   return blocks;
 }
 
-/** @param {any} node @returns {string} */
+/**
+ * The text of a `<pre>`, with its line structure intact.
+ *
+ * "Raw" here means *unnormalized whitespace*, not *unparsed markup*: every
+ * element is descended through and discarded, non-rendered elements are
+ * skipped, `<br>` becomes a newline, and what comes back is text nodes only —
+ * which the parser has already decoded, so `&lt;` is a `<` character and not an
+ * entity. Nothing a layout could execute or has to distrust survives, which is
+ * why the block this feeds is a paragraph and not `raw` (D-L6-20).
+ *
+ * The leading newline HTML drops after `<pre>` is dropped and trailing
+ * whitespace is trimmed; indentation the author wrote is kept, because it is
+ * the author's (§18.3).
+ *
+ * @param {any} node @returns {string}
+ */
 function rawTextOf(node) {
   /** @type {string[]} */
   const parts = [];

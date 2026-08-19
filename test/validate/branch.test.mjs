@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildDeck } from '../../src/runtime/deck.js';
-import { runPreflight, autoFixes } from '../../src/validate/index.js';
+import { runPreflight, autoFixes, ruleFor } from '../../src/validate/index.js';
 import { branchCoverage } from '../../src/validate/lane-branch.js';
 import { branchShipCost } from '../../src/validate/rules.js';
 import { sweepScenes } from '../../src/validate/preflight.js';
@@ -354,12 +354,17 @@ test('two branches claiming one id is a blocking finding, not a silent overwrite
   const proof = duplicateBranchProof();
 
   // The defect itself, asserted against the deck so this test fails loudly if
-  // L2 ever changes what it does with the collision.
+  // L2 ever changes what it does with the collision — which is what it did:
+  // `buildDeck` now keeps the **first** occurrence, the policy it already
+  // applied to scene ids, and records the casualty on `Deck.duplicateBranchIds`
+  // (API.md Part 3b). Which branch is lost changed; that one is lost did not.
   const deck = buildDeck(proof);
-  assert.equal(deck.sequences.get('bn_approvals').scenes[0].id, 'sc_quotes0',
-    'the later branch has taken the id');
-  assert.equal(deck.sceneById.has('sc_ap0'), false,
-    'and the earlier branch is in the proof but in no deck — one authored branch, gone');
+  assert.equal(deck.sequences.get('bn_approvals').scenes[0].id, 'sc_ap0',
+    'the first declaration keeps the id');
+  assert.equal(deck.sceneById.has('sc_quotes0'), false,
+    'and the later branch is in the proof but in no deck — one authored branch, gone');
+  assert.deepEqual(deck.duplicateBranchIds, ['bn_approvals'],
+    'and the deck says so, rather than dropping a sequence in silence');
   assert.deepEqual(declaredCoverage(deck), { unreachable: [], noReturn: [] },
     'coverage walks the deck, so it cannot see the branch that is missing from it');
 
@@ -379,6 +384,9 @@ test('two branches claiming one id is a blocking finding, not a silent overwrite
   assert.match(dup.message, /claimed by 2 branches/);
   assert.match(dup.message, /Our approvals process would never allow this/);
   assert.match(dup.message, /the client sees the other answer/);
+  assert.equal(dup.detail.droppedByDeck, true);
+  assert.match(dup.message, /already dropped|dropped a sequence for this id/,
+    'with a deck in hand the finding reports the loss as observed, not predicted');
   assert.equal(dup.autoFixAvailable, false, 'which branch to rename is the seller\'s call');
 
   // The old symptom is gone: the anchor names an id that is in the proof, so
@@ -400,6 +408,26 @@ test('the id collision is found in the model, not in the deck that already lost 
   assert.equal(JSON.stringify(first), JSON.stringify(await preflight(duplicateBranchProof())));
 });
 
+test('the collision is a fact about the proof, so the rule finds it with no deck at all', () => {
+  // `Deck.duplicateBranchIds` is read when it is there and depended on never:
+  // the rule derives the collision from `proof.branches`, so it cannot be
+  // silenced by a deck that fails to report one, and it still fires for a caller
+  // that runs the rule without building a deck.
+  const proof = duplicateBranchProof();
+  const findings = ruleFor('DUPLICATE_SCENE').run({ proof });
+  const dup = findings.find((f) => f.detail.kind === 'branch-id');
+  assert.ok(dup, 'no deck, and the duplicate is still found');
+  assert.equal(dup.severity, 1);
+  assert.equal(dup.detail.droppedByDeck, false);
+  assert.doesNotMatch(dup.message, /dropped a sequence/,
+    'and nothing is claimed about a deck that was never built');
+
+  // A deck that reported nothing does not soften it either.
+  const silent = { ...buildDeck(proof), duplicateBranchIds: [] };
+  const again = ruleFor('DUPLICATE_SCENE').run({ proof, deck: silent });
+  assert.ok(again.some((f) => f.detail.kind === 'branch-id' && f.severity === 1));
+});
+
 test('three branches under one id are reported once, and counted', async () => {
   const proof = duplicateBranchProof();
   proof.branches.push({
@@ -418,12 +446,17 @@ test('three branches under one id are reported once, and counted', async () => {
 
 test('the sweep still measures the scenes of the branch the deck dropped', async () => {
   const proof = duplicateBranchProof();
-  const lost = proof.branches[0];
-  assert.equal(lost.scenes[0].id, 'sc_ap0');
+  const deck = buildDeck(proof);
+  // Whichever branch the deck's collision policy drops is the one this has to
+  // hold for, so the casualty is read off the deck rather than assumed.
+  const lost = proof.branches.find((b) => !(b.scenes || []).every((sc) => deck.sceneById.has(sc.id)));
+  assert.ok(lost, 'the premise of this test is that a branch left the deck');
+  const lostSceneId = lost.scenes[0].id;
+  assert.equal(lostSceneId, 'sc_quotes0');
 
   // Every scene the model declares is walked, deck or no deck. Otherwise the
   // sweep reports "nothing else is wrong" about scenes it never looked at.
-  assert.ok(sweepScenes(proof, buildDeck(proof)).some((s) => s.id === 'sc_ap0'),
+  assert.ok(sweepScenes(proof, deck).some((s) => s.id === lostSceneId),
     'the shadowed branch\'s scene must still be walked');
 
   // Drive it end to end: a defect planted in the shadowed scene must still be
@@ -431,12 +464,12 @@ test('the sweep still measures the scenes of the branch the deck dropped', async
   // reads the deck, so preflight was silent about all of it.
   lost.scenes[0].beats[lost.scenes[0].beats.length - 1].reveals = ['el_planted_nothing_reveals_this'];
   const findings = await preflight(proof);
-  const beat = findings.find((f) => f.code === 'BEAT_EMPTY' && f.locus.sceneId === 'sc_ap0');
+  const beat = findings.find((f) => f.code === 'BEAT_EMPTY' && f.locus.sceneId === lostSceneId);
   assert.ok(beat, 'a defect inside the shadowed branch must still be found');
   assert.ok(findings.some((f) => f.code === 'DUPLICATE_SCENE'), 'and the collision is still reported');
 });
 
-test('a branch that claims the deck\'s own spine id replaces the spine, and is refused', async () => {
+test('a branch that claims the deck\'s own spine id cannot be a sequence, and is refused', async () => {
   const proof = copy(cleanProof());
   proof.branches.push({
     id: 'spine',
@@ -447,17 +480,25 @@ test('a branch that claims the deck\'s own spine id replaces the spine, and is r
   });
   withRenderedReveals(proof);
 
+  // The spine now survives the collision — `buildDeck` keeps the first
+  // occupant of an id and the spine is set before any branch — and the impostor
+  // is dropped and recorded. Either way one authored sequence is missing from
+  // the artifact, which is what the finding is about.
   const deck = buildDeck(proof);
-  assert.deepEqual(deck.sequences.get('spine').scenes.map((s) => s.id), ['sc_pilot0'],
-    'the branch has taken the sequence the spine is indexed under');
+  assert.deepEqual(deck.sequences.get('spine').scenes.map((s) => s.id), proof.spine.map((s) => s.id),
+    'the spine keeps the id the deck reserves for it');
+  assert.equal(deck.sceneById.has('sc_pilot0'), false, 'and the branch that claimed it is in no deck');
+  assert.deepEqual(deck.duplicateBranchIds, ['spine']);
 
   const findings = await preflight(proof);
   const dup = findings.find((f) => f.code === 'DUPLICATE_SCENE');
-  assert.ok(dup, 'a branch that displaces the spine must not be silent');
+  assert.ok(dup, 'a branch that collides with the spine must not be silent');
   assert.equal(dup.severity, 1);
   assert.equal(dup.detail.kind, 'spine-collision');
+  assert.equal(dup.detail.droppedByDeck, true);
   assert.equal(dup.locus.branchId, 'spine');
-  assert.match(dup.message, /replaces the whole spine/);
+  assert.match(dup.message, /reserves for the spine itself/);
+  assert.match(dup.message, /missing from the artifact/);
   assert.equal(summarize(findings).canEmit, false);
 });
 

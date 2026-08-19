@@ -26,9 +26,10 @@ export { emit, buildDocument, layoutsMissingFor, staleCaptureFindings, stripPres
 export { runEmitGate, gatedCodes, MEASURED_BY_EMIT } from './gate.js';
 
 export {
-  scanForNetworkReferences, scanModelAssets, scanCss, scanJs, scanAbsoluteUrls, scanNestedDataUri,
+  scanForNetworkReferences, scanModelAssets, scanForeignScripts, scanCss, scanJs,
+  scanAbsoluteUrls, scanNestedDataUri,
   classifyUrl, isW3cNamespace, parseSrcset, networkFinding,
-  W3C_NAMESPACES, URL_ALLOWLIST, URL_ATTRS, SRCSET_ATTRS, TEXT_ATTRS, JS_NETWORK_TOKENS,
+  W3C_NAMESPACES, URL_ALLOWLIST, URL_ATTRS, SRCSET_ATTRS, TEXT_ATTRS, JS_NETWORK_TOKENS, EMITTED_SCRIPTS,
 } from './scan.js';
 
 export {

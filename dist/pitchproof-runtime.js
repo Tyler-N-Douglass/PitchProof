@@ -288,7 +288,9 @@ function buildDeck(proof) {
   };
   sequences.set(SPINE, spine);
 
+  const duplicateBranchIds = [];
   for (const branch of proof.branches || []) {
+    if (sequences.has(branch.id)) { duplicateBranchIds.push(branch.id); continue; }
     sequences.set(branch.id, {
       id: branch.id,
       kind: 'branch',
@@ -323,7 +325,7 @@ function buildDeck(proof) {
     })),
   });
 
-  return { sequences, spine, sceneLocator, anchorsByScene, sceneById, proof, fingerprint };
+  return { sequences, spine, sceneLocator, anchorsByScene, sceneById, proof, duplicateBranchIds, fingerprint };
 }
 
 function sequenceOf(deck, sequenceId) {
@@ -3562,6 +3564,7 @@ __exports["stack"] = stack;
 __modules["scene/layouts/full-bleed.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
+const { flowAttrs, flowOf } = __require("scene/direction.js");
 const { provenanceLabel, emptyState, specimenTitle, renditionLabel, withProvenanceLedger } = __require("scene/parts.js");
 
 function fullBleed(ctx) {
@@ -3607,8 +3610,14 @@ function fullBleed(ctx) {
   scene.subhead
     ? h('p', { class: 'pp-bleed-sub', 'data-pp-tx': 'displaySub', 'data-pp-clamp': '3' }, scene.subhead)
     : null,
+
   pick.caption
-    ? h('p', { class: 'pp-bleed-caption', 'data-pp-tx': 'caption', 'data-pp-clamp': '2' }, pick.caption)
+    ? h('p', {
+      class: 'pp-bleed-caption',
+      'data-pp-tx': 'caption',
+      'data-pp-clamp': '2',
+      ...flowAttrs(flowOf(pick.rendition || ctx.specimen)),
+    }, pick.caption)
     : null,
     !scene.headline && !scene.subhead && !pick.caption && !pick.source
       ? emptyState('This scene has no headline yet.')
@@ -4451,7 +4460,7 @@ const GEOM = {
     'head-gap': 24,
     'head-extra-w': 260,
     'head-col-gap': 16,
-    'step-meta-w': 200,
+    'step-meta-w': 240,
     'step-meta-gap': 12,
     'ledger-label-w': 320,
     'ledger-label-gap': 10,
@@ -4495,7 +4504,7 @@ const GEOM = {
     'head-gap': 28,
     'head-extra-w': 320,
     'head-col-gap': 20,
-    'step-meta-w': 240,
+    'step-meta-w': 320,
     'step-meta-gap': 14,
     'ledger-label-w': 340,
     'ledger-label-gap': 12,
@@ -5667,6 +5676,8 @@ function collectTextBoxes(node, env) {
         box.fontStack = resolved.fontStack;
         box.containerId = next.containerId;
         box.slot = next.slot;
+
+        if (attrs['data-pp-fit']) box.fitsContent = true;
         boxes.push(box);
       }
 
@@ -5960,6 +5971,9 @@ __exports["renderSceneTree"] = __require("scene/measure.js").renderSceneTree;
 __exports["normalizeContext"] = __require("scene/measure.js").normalizeContext;
 __exports["plainText"] = __require("scene/measure.js").plainText;
 __exports["textOverflowOf"] = __require("scene/measure.js").textOverflowOf;
+__exports["insetLength"] = __require("scene/measure.js").insetLength;
+__exports["declaredTrackWidth"] = __require("scene/measure.js").trackWidth;
+__exports["BRAND_BORDER_INSET"] = __require("scene/measure.js").BRAND_BORDER_INSET;
 __exports["PROVENANCE_LABEL_CLASS"] = __require("scene/parts.js").PROVENANCE_LABEL_CLASS;
 __exports["PROVENANCE_LABEL_TEXT"] = __require("scene/parts.js").PROVENANCE_LABEL_TEXT;
 __exports["needsProvenanceLabel"] = __require("scene/parts.js").needsProvenanceLabel;
@@ -5971,6 +5985,7 @@ __exports["withProvenanceLedger"] = __require("scene/parts.js").withProvenanceLe
 __exports["presentableNotes"] = __require("scene/parts.js").presentableNotes;
 __exports["displayUrl"] = __require("scene/parts.js").displayUrl;
 __exports["URL_LABEL_BUDGET"] = __require("scene/parts.js").URL_LABEL_BUDGET;
+__exports["PROVENANCE_LABEL_INSET_PX"] = __require("scene/parts.js").PROVENANCE_LABEL_INSET_PX;
 __exports["stageBox"] = __require("scene/geometry.js").stageBox;
 __exports["boxGeometry"] = __require("scene/geometry.js").boxGeometry;
 __exports["breakpointId"] = __require("scene/geometry.js").breakpointId;
@@ -5982,6 +5997,7 @@ __exports["trackWidth"] = __require("scene/geometry.js").trackWidth;
 __exports["ledgerAllowance"] = __require("scene/geometry.js").ledgerAllowance;
 __exports["MAP_DESIGN"] = __require("scene/geometry.js").MAP_DESIGN;
 __exports["PANEL_BORDER_PX"] = __require("scene/geometry.js").PANEL_BORDER_PX;
+__exports["NOTE_RULE_PX"] = __require("scene/geometry.js").NOTE_RULE_PX;
 __exports["SLOTS"] = __require("scene/geometry.js").SLOTS;
 __exports["sceneVars"] = __require("scene/tokens.js").sceneVars;
 __exports["GEOM"] = __require("scene/tokens.js").GEOM;
@@ -6008,7 +6024,14 @@ __exports["logoFor"] = __require("scene/brand-access.js").logoFor;
 __exports["neutralBrand"] = __require("scene/brand-access.js").neutralBrand;
 __exports["availableFamilies"] = __require("scene/brand-access.js").availableFamilies;
 __exports["renderedFamily"] = __require("scene/brand-access.js").renderedFamily;
+__exports["borderWidthFor"] = __require("scene/brand-access.js").borderWidthFor;
 __exports["DEFAULT_STACKS"] = __require("scene/brand-access.js").DEFAULT_STACKS;
+__exports["flowOf"] = __require("scene/direction.js").flowOf;
+__exports["flowAttrs"] = __require("scene/direction.js").flowAttrs;
+__exports["resolveFlow"] = __require("scene/direction.js").resolveFlow;
+__exports["firstFlow"] = __require("scene/direction.js").firstFlow;
+__exports["isRtl"] = __require("scene/direction.js").isRtl;
+__exports["DIRECTIONS"] = __require("scene/direction.js").DIRECTIONS;
 __exports["splitBeforeAfter"] = __require("scene/layouts/split-before-after.js").splitBeforeAfter;
 __exports["fanOut"] = __require("scene/layouts/fan-out.js").fanOut;
 __exports["stack"] = __require("scene/layouts/stack.js").stack;

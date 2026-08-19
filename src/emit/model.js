@@ -153,9 +153,12 @@ export function splitMedia(proof) {
  *
  * Deliberate limits:
  *
- *   - **Only the first element to carry a payload lends it.** Two `<img>` tags
- *     showing the same picture both need a real `src`; the second copy is a
- *     cost the markup genuinely has, and `assetFootprint` charges it.
+ *   - **Only the first element to carry a payload lends it, and it lends one.**
+ *     Two `<img>` tags showing the same picture both need a real `src`; the
+ *     second copy is a cost the markup genuinely has, and `assetFootprint`
+ *     charges it. `data-pp-m` holds one table index, so an element carrying two
+ *     payloads — `poster` and `src` on the same `<video>` — lends the first and
+ *     pays for the second.
  *   - **Nothing inside `<svg>`.** See `HOISTABLE_ATTRS`.
  *   - **Nothing inside a `raw` node.** Its content is an opaque HTML string;
  *     the emitter does not know what element the payload sits on, so it does

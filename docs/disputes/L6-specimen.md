@@ -220,3 +220,43 @@ The comment is the whole of the objection. `bytes` is the number a seller is
 shown next to an image in a product whose defining constraint is total size; the
 contract should say, in the contract, that it is the size the image contributes.
 
+
+---
+
+## 7. `ContentBlock` has no preformatted variant, and `raw` was standing in for one
+
+**Lane:** L6 · **Contract:** §4 `ContentBlock`
+
+**Objection.** The union has one member for text whose shape carries meaning:
+none. A `<pre>` is on every documentation page, every API reference and most
+technical product pages in the §17.5 corpus, and its whitespace *is* its
+content. With no variant for it, the only member that could hold the line
+structure was `raw` — and `raw` means "the prospect's captured markup", which a
+layout is right to distrust, flatten and caption as source. So the frozen union
+pushed a lane into labelling the client's own code sample as page scaffolding,
+and into tripping `NETWORK_REFERENCE` on every URL inside it (CRITIQUE-2 C8,
+third instance; D-L6-20).
+
+**What the lane built.** The contract as written, plus the optional field
+`API.md` Part 3b declares: `{type: 'paragraph', text, pre: true}`. No member was
+renamed, retyped or removed, and a consumer that has never heard of `pre` reads
+a paragraph.
+
+**What a v2 contract should say.** Either the flag, promoted from Part 3b into
+§4 itself —
+
+```ts
+| { type: 'paragraph'; text: string; pre?: boolean }
+```
+
+— or, better, the variant the content actually is:
+
+```ts
+| { type: 'preformatted'; text: string; language?: string | null }
+```
+
+The flag is the additive form and is what shipped, because adding a member to
+the union would break every exhaustive `switch` across four lanes. But the flag
+cannot carry what a `<pre class="language-sql">` knows about itself, and a
+layout that wanted to set a code sample properly would have to guess. A v2 union
+should carry the variant and let `paragraph` mean prose.

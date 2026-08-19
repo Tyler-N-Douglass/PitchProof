@@ -34,7 +34,7 @@ test('every emitted block satisfies the frozen ContentBlock contract', () => {
   out.forEach((b, i) => validateBlock(b, `blocks[${i}]`, errs));
   assert.deepEqual(errs, []);
   assert.deepEqual(out.map((b) => b.type),
-    ['heading', 'paragraph', 'list', 'list', 'quote', 'table', 'cta', 'raw']);
+    ['heading', 'paragraph', 'list', 'list', 'quote', 'table', 'cta', 'paragraph']);
 });
 
 test('heading hierarchy is preserved exactly, skips included', () => {
@@ -156,11 +156,102 @@ test('blockquote attribution comes from <cite> or <footer>, and leaves the quote
   assert.deepEqual(bare, [{ type: 'quote', text: 'Just the words.' }]);
 });
 
-test('preformatted text keeps its shape as a raw block', () => {
+test('D-L6-20 preformatted text is a paragraph whose whitespace is significant, never `raw`', () => {
   const out = blocks('<pre><code>a = 1\n  b = 2</code></pre>');
   assert.equal(out.length, 1);
-  assert.equal(out[0].type, 'raw');
-  assert.ok(out[0].html.includes('a = 1\n  b = 2'), 'newlines and indentation survive');
+  assert.deepEqual(out[0], { type: 'paragraph', text: 'a = 1\n  b = 2', pre: true });
+});
+
+test('D-L6-20 a captured `<pre>` carries text only — every tag gone, every entity decoded', () => {
+  // A documentation page showing an embed snippet: the `<pre>` contains an
+  // element the reader is meant to copy, written as entities in the source.
+  const out = blocks(
+    '<pre><code>&lt;script src="https://cdn.example/w.js"&gt;&lt;/script&gt;\n'
+    + '&lt;div id="w"&gt;&amp;nbsp;&lt;/div&gt;</code></pre>');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].type, 'paragraph');
+  assert.equal(out[0].pre, true);
+  assert.equal(out[0].html, undefined, 'no markup field on the block at all');
+  // The entities the page wrote are decoded exactly once: what the reader saw.
+  assert.equal(out[0].text,
+    '<script src="https://cdn.example/w.js"></script>\n<div id="w">&nbsp;</div>');
+  // And that is *text*: nothing here is a tag any consumer would parse.
+  const errs = [];
+  validateBlock(out[0], 'block', errs);
+  assert.deepEqual(errs, []);
+});
+
+test('D-L6-20 nested markup inside a `<pre>` is stripped the way `toBlocks` strips it elsewhere', () => {
+  const out = blocks(
+    '<pre><code><span class="kw">SELECT</span> id\n'
+    + '<span class="kw">FROM</span> orders<br><b>WHERE</b> id = 1'
+    + '<script>steal()</script><style>.x{}</style></code></pre>');
+  assert.deepEqual(out, [{
+    type: 'paragraph',
+    text: 'SELECT id\nFROM orders\nWHERE id = 1',
+    pre: true,
+  }]);
+});
+
+test('D-L6-20 a code sample is no longer a NETWORK_REFERENCE that blocks emit', async () => {
+  // §13/§18.4 scan `raw` blocks for network references, because a raw block is
+  // the one path by which captured markup reaches the artifact verbatim. A
+  // `<pre>` showing a snippet is not that path: the URLs in it are text the
+  // prospect wrote for a reader, and nothing fetches them. While the `<pre>`
+  // was a `raw` block they were severity-1 findings that stop the emit, and
+  // the remedy the finding named was "drop the raw block" — delete the
+  // prospect's own content.
+  const { externalRefsIn } = await import('../../src/validate/rules.js');
+  const samples = [
+    '<pre><code>&lt;script src="https://cdn.example/w.js"&gt;&lt;/script&gt;</code></pre>',
+    '<pre><code>const r = await fetch("/api/v1/quote");</code></pre>',
+    '<pre>.hero { background: url(/img/hero.png); }</pre>',
+  ];
+  for (const html of samples) {
+    const block = blocks(html)[0];
+    assert.equal(block.type, 'paragraph', html);
+    assert.equal(externalRefsIn(block.html || '').length, 0, html);
+  }
+});
+
+test('D-L6-20 end to end: the docs fixture\'s code sample reaches the deck as text, uncaptioned', async () => {
+  // The whole point, checked across the lane boundary rather than asserted:
+  // `docs.html` carries a real `<pre><code>` scripting sample. It must arrive
+  // in the rendered deck as the prospect's own legible content — not under
+  // L8's "Source markup, shown as text" caption, which is true of captured
+  // markup and was never true of this.
+  const { buildSpecimen } = await import('../../src/specimen/index.js');
+  const { renderBlocks } = await import('../../src/scene/blocks.js');
+  const { toHtml } = await import('../../src/core/vdom.js');
+  const { scanForNetworkReferences } = await import('../../src/emit/scan.js');
+  const { fixtureHtml } = await import('../fixtures/specimen/corpus.mjs');
+
+  const specimen = buildSpecimen({
+    html: fixtureHtml('docs.html'),
+    url: 'https://www.northwind-industrial.example/docs/autotune/',
+    capturedAt: '2026-01-14T09:00:00.000Z',
+    id: 'sp_docs_pre',
+  });
+  assert.equal(specimen.blocks.filter((b) => b.type === 'raw').length, 0,
+    'capture emits no raw block; §8 raw lives behind rawFallbackBlocks\' opt-in');
+  const sample = specimen.blocks.find((b) => b.type === 'paragraph' && b.pre);
+  assert.ok(sample, 'the scripting sample was captured');
+  assert.equal(sample.text,
+    'loop = studio.loop("FIC-201")\nloop.autotune(step=2.5, timeout=600)\nloop.commit()');
+
+  const html = renderBlocks(specimen.blocks, { media: new Map() }).map(toHtml).join('\n');
+  const escaped = sample.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  assert.ok(html.includes(escaped), 'the sample reaches the deck verbatim, line breaks included');
+  assert.ok(!html.includes('Source markup, shown as text'),
+    'the prospect\'s own code sample is not labelled as incidental page source');
+  assert.deepEqual(scanForNetworkReferences(html), [],
+    'and the deck carries no network reference because of it');
+});
+
+test('D-L6-20 whitespace that carries the meaning survives capture intact', () => {
+  const table = 'foulingFactor   0.0002   m2K/W\ntubeVelocity    1.8      m/s';
+  const out = blocks(`<pre>\n${table}\n</pre>`);
+  assert.equal(out[0].text, table, 'columns still line up; the leading newline HTML drops is dropped');
 });
 
 test('images resolve to captured media by src, by basename and through srcset', () => {

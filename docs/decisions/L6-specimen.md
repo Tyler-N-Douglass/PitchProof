@@ -469,3 +469,115 @@ the 4-characters-per-3-bytes arithmetic against the padding, and takes the
 length with `Buffer.byteLength` — so no `MediaRef` can pass by agreeing with the
 function that wrote it. Reverting `bytes` to the payload fails all three F19
 tests.
+
+---
+
+## D-L6-20 — A captured `<pre>` is a paragraph whose whitespace is significant, not a `raw` block (finding C8, third instance)
+
+**Unsettled by:** §8 says "never present raw HTML in a scene without a user
+opt-in per specimen" and §4's `ContentBlock` union has no preformatted variant.
+Reported into this lane by L7 as `D-L7-20`, which called the argument here
+"genuinely balanced" — unlike its own two instances, a `<pre>` on the prospect's
+page really is the prospect's markup, so `raw` was defensible.
+
+**Decision.** `blocksWithTrace` emits `{type: 'paragraph', text, pre: true}` for
+a `<pre>`, not `{type: 'raw', html: '<pre>…</pre>'}`. `pre` is the optional §4
+extension `API.md` Part 3b declares. After this change **nothing in this lane
+builds markup**: the only `raw` block L6 produces is the one
+`rawFallbackBlocks` returns, which is the untouched captured source, behind
+§8's per-specimen opt-in, with the identity of whoever opted in recorded on it.
+
+It converted, and the argument turned out not to be balanced. Three things
+decided it, in ascending order of how badly they hurt the seller.
+
+**1. There was never any captured markup in that block.** `rawTextOf` already
+walked the `<pre>`, discarded every element, skipped the non-rendered ones and
+turned `<br>` into a newline, so what it returned was text nodes only — which
+the parser had already decoded, so `&lt;` was a `<` character and not an
+entity. The `<pre>` wrapper and the re-escaping in `escapeText(text)` were
+**this module's markup, built after the prospect's was thrown away**. The block
+then travelled to a layout whose job was to strip markup off it and caption it
+as the prospect's source. The rule §8 states is about markup a layout must not
+trust; there was none here to distrust, and the object being labelled "source
+markup" was L6's own string template.
+
+**2. It was the one `raw` block in the system that bypassed §8's gate.** §8's
+two sentences are one mechanism: keep the untouched source, and never show it
+without a per-specimen opt-in. This lane implements that mechanism in
+`rawFallbackBlocks`, and the `<pre>` path went round it — a `raw` block landed
+in `specimen.blocks` unconditionally, opt-in or no opt-in, and reached a scene.
+It was safe only because L8 flattens every `raw` block defensively. A rule
+honoured by accident downstream is not honoured. Reading §8 as *requiring* that
+block makes §8 contradict itself.
+
+**3. It made the prospect's own code sample a severity-1 finding that blocks
+emit.** `NETWORK_REFERENCE` scans `raw` blocks — correctly, because a raw block
+is the one path by which captured markup reaches the artifact verbatim, and a
+tracking pixel could ride it. `externalRefsIn` matches a *string*, so it read
+the `<pre>`'s escaped text as though it were the markup around it. Three of
+four realistic samples tripped it:
+
+| A `<pre>` containing | matched | as |
+|---|---|---|
+| `&lt;script src="https://cdn…/w.js"&gt;` — an embed snippet | `https://cdn…/w.js` | `src=` attribute |
+| `const r = await fetch("/api/v1/quote")` | `fetch(` | network API |
+| `.hero { background: url(/img/hero.png) }` | `/img/hero.png` | CSS `url()` |
+
+None of them is a reference. Nothing fetches them; L8 renders the block as a
+text node and the emitter's own scanner tokenizes the document, so the escaped
+text is a text token and was never a hit there. But at the model level each was
+severity 1, and severity 1 stops the emit — so a technical page whose `<pre>`
+shows how to call an API could not be turned into a proof at all, and the
+remedy the finding printed was *"drop the raw block"*: delete the prospect's
+own content to unblock the build. That is the §18.3 wound this lane exists to
+avoid, arriving through a rule written to prevent it.
+
+**What the seller sees.** A `<pre>` on a real page is a code sample, a spec
+table or a configuration snippet — the prospect wrote it for their reader, and
+on a technical page it is often the most convincing material in the proof.
+Under the old shape it reached the deck with its whitespace collapsed by
+`stripTags`'s `\s+ → ' '`, so an aligned parameter table became one run-on line,
+and it arrived under the caption *"Source markup, shown as text"* — the tool
+telling the room that the client's deliberate content was incidental page
+scaffolding it had to defuse. Both of those are now gone, and the line
+structure survives capture exactly: `test/specimen/blocks.test.mjs` renders the
+`docs.html` fixture's scripting sample through L8 and finds it verbatim,
+newlines included, with no caption and no network finding.
+
+**What this does not fix, and whose it is.** `pre` degrades safely — a layout
+that has never heard of it renders a paragraph, which is what the `raw` block
+rendered as after `stripTags`, minus a caption that was untrue — so this change
+stands on its own. But the *visual* half is L8's: `src/scene/blocks.js` does not
+read `pre` yet, so `.pp-p` still lays the text out with `white-space: normal`
+and a proportional face, and the newlines that now survive into the artifact
+collapse when the browser paints them. Rendering a `pre` paragraph with
+`white-space: pre-wrap` and a monospace role, and reporting its wrapping to the
+overflow detector, is what turns "no longer mislabelled" into "legible".
+Reported to the integrator as a secondary ask, not a coupled one.
+
+**Why not fix the caption instead.** That was the alternative the brief named,
+and it is the wrong repair for two of the three reasons above: a kinder caption
+does not stop `NETWORK_REFERENCE` from blocking the emit, and it does not put
+the block back behind §8's opt-in. It would also have to be a *conditional*
+caption — L8 cannot tell a whole-page raw fallback from a synthesized `<pre>`
+wrapper by looking at the html — which means the distinction would live in a
+string-sniffing branch in another lane instead of in the block type, where it
+belongs. The caption is right about what a `raw` block is. The block was wrong.
+
+**Sweep of the rest of the category.** Every place this lane could emit `raw`
+was checked, not just the one L7 named. There are two, and after this change
+one: `rawFallbackBlocks` (`specimen.js`), which is the genuine article and stays
+exactly as it is. No other module in `src/specimen/**` constructs markup at
+all — `chrome.js`, `dom.js`, `kind.js`, `locale.js`, `media.js` and the image
+path deal in text, nodes and bytes. Importer-supplied blocks (`.docx`, PDF,
+image) arrive from L3 and carry no `raw` block either.
+
+**Testing.** `test/specimen/blocks.test.mjs` covers: the block shape and that
+it carries no `html` field; entity decoding through a real embed snippet
+(`&lt;script src=…&gt;` becomes text, exactly once); nested `<span>`, `<b>`,
+`<br>`, `<script>` and `<style>` inside a `<pre>` stripped the way `toBlocks`
+strips them everywhere else; the three `externalRefsIn` false positives above,
+each asserted to zero; column alignment surviving capture byte for byte; and
+the end-to-end path from `docs.html` through `buildSpecimen` and L8's
+`renderBlocks` to rendered HTML, asserted verbatim, uncaptioned, and clean
+under L10's `scanForNetworkReferences`.

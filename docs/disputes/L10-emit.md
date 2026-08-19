@@ -129,6 +129,15 @@ field.
 
 **What we would propose instead.** Add both as optional fields to `EmitResult`.
 
+**Since CRITIQUE-2 C2**, a third one is there for the same reason:
+`budget: {maxBytes, bytes, reserveBytes, assetBytes, copies}`. C2 was a report
+whose arithmetic did not describe the file — the reserve was inferred from the
+model rather than measured on the document, so it was wrong by the size of every
+asset the opening beat paints. The fix is a measurement
+(`reserveBytes + assetBytes === bytes`, always), and a measurement a caller
+cannot see is a measurement a caller has to trust. This should be an optional
+field on `EmitResult` too.
+
 ---
 
 ## L10-D5 — D10's allowlist makes an outbound link in the prospect's own content a severity-1 refusal
