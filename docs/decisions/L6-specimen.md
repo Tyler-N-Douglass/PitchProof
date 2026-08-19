@@ -379,7 +379,93 @@ change (§18.3).
 duplicates on the fixture corpus — five duplicate groups, 13,428 wasted bytes of
 20,142 — which both inflates the artifact and makes §13's degradation report
 double-count. On the corpus this collapses 12 `MediaRef`s to 3 distinct sets of
-bytes, saving 11,481 of 15,308 bytes. Deduping at capture is the cheaper path
+bytes, saving 15,510 of 20,680 inlined bytes (the figures are inlined bytes
+since D-L6-19; they were 11,481 of 15,308 when `bytes` meant the decoded
+payload). Deduping at capture is the cheaper path
 and also avoids redundant PNG encoding; the explicit pass exists because the
 studio imports pages on different days and the emitter must be able to fix a
 project it did not capture.
+
+---
+
+## D-L6-19 — `MediaRef.bytes` is what the asset costs the artifact, not the payload inside its data URI
+
+**Unsettled by:** §4 declares `bytes: number` on `MediaRef` with no unit and no
+referent. Three quantities have a claim on that name — the file the seller
+handed us, the binary payload after §8's downscale and recompress, and the
+length of the `dataUri` that payload is inlined as — and they differ by about a
+third.
+
+**Decision.** `bytes` is the inlined cost: `utf8Length(ref.dataUri)`. The other
+two keep their own optional fields, so nothing was lost and nothing has to be
+inferred:
+
+| Field | Measures |
+|---|---|
+| `sourceBytes` | the file as it arrived, before anything was done to it |
+| `decodedBytes` | the binary payload after downscale/recompress — what `parseDataUri().bytes` returns (new; this is what `bytes` used to hold) |
+| `bytes` (§4) | `utf8Length(dataUri)` — base64's 4/3 expansion and the `data:…;base64,` preamble included |
+
+`MediaLedger.bytesSaved`, `dedupeMedia`'s `bytesSaved` and each reported
+group's `bytes` are therefore inlined bytes too: the saving they report is the
+saving §13's budget sees.
+
+**Why.** The §20 critic (F19, severity 3) measured `md_4e16750af08d` declaring
+2,673 bytes against a 3,586-byte data URI — a uniform 34% understatement, since
+base64 is 4/3 of what it carries. On the corpus proof the six distinct assets
+declare 6,892 inlined bytes and carry 5,060 decoded: read the old way, every
+size was 36% short.
+
+Three reasons the inlined cost is the right meaning of the frozen field rather
+than a new one beside it:
+
+1. A `MediaRef` describes an **inlined** asset — §4's own comment on the
+   neighbouring field is "always inlined by emit time". The struct has no field
+   for the source at all, so the source cannot be what `bytes` is about.
+2. It was already not the seller's file. A 2600px PNG comes back downscaled and
+   re-encoded, and the old `bytes` was the re-encoded payload — the size of
+   something that exists nowhere except inside a base64 string. Reading `bytes`
+   as "the source" would have made `sourceBytes` a duplicate and left the only
+   quantity anyone spends unnamed.
+3. §13 spends one budget, in the bytes of one file. `budgetAssets` already
+   measures each asset as `utf8Length(dataUri)`; making `bytes` the same
+   measurement means the number a seller reads and the number the budgeter
+   enforces cannot drift, and that is now asserted from both ends.
+
+**Who was reading it.** Four consumers, all understated by a third, all now
+correct without a line changing outside this lane:
+
+- `src/ui/panels/specimens.js:124` and `src/ui/inspector.js:86` — the `Media`
+  row a seller reads, `n · <size>`, on the panel and the inspector.
+- `src/ui/panels/emit.js:206` (`estimateBytes`) — the pre-flight size estimate
+  shown against `maxBytes`, the one number in the studio whose whole job is to
+  predict the artifact.
+- `src/validate/rules.js:103` (`mediaBytes`, feeding `ASSET_OVERSIZE`) — an
+  asset within a third of §13's per-asset limit was passing the rule that
+  exists to catch it.
+
+The emitter's budgeter never read it: `collectAssets` measures
+`utf8Length(dataUri)` itself, which is why nothing was broken at emit time and
+why this was worth settling rather than patching.
+
+**Left for other lanes.** Two lines this lane may not touch write or read the
+old measure and should follow:
+
+- `src/emit/budget.js:424` (L10) — `applyReplacements` writes
+  `bytes: parseDataUri(hit.dataUri).bytes` back onto a `MediaRef` after
+  degrading it, which is the payload, so a degraded asset re-acquires the
+  understatement. The fix is `utf8Length(hit.dataUri)`, or `hit.bytes`, which
+  `degradeAsset` already computes that way.
+- `src/validate/rules.js:105` (L11) — `mediaBytes`'s fallback, used when a
+  `MediaRef` declares no size, is `parseDataUri(...).bytes`. The primary path
+  is now the inlined cost, so the fallback should be `utf8Length(media.dataUri)`
+  to match; today the same asset measures differently depending on whether it
+  declared a size.
+
+**Testing.** `test/specimen/media-refs.test.mjs` measures every asset of
+`buildCorpusProof()` against an oracle the test computes itself — it splits the
+URI on the comma, decodes the body with `Buffer.from(body, 'base64')`, checks
+the 4-characters-per-3-bytes arithmetic against the padding, and takes the
+length with `Buffer.byteLength` — so no `MediaRef` can pass by agreeing with the
+function that wrote it. Reverting `bytes` to the payload fails all three F19
+tests.

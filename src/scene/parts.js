@@ -284,11 +284,23 @@ export function displayUrl(url, budget = URL_LABEL_BUDGET) {
   if (stripped.length <= budget) return stripped;
 
   const parts = stripped.split('/').filter(Boolean);
-  if (parts.length < 3) return stripped;   // host plus one segment: nothing to elide
   const host = parts[0];
   const last = parts[parts.length - 1];
-  const elided = `${host}/…/${last}`;
-  return elided.length < stripped.length ? elided : stripped;
+  // Host plus one segment has no middle to drop; anything deeper loses it.
+  const elided = parts.length < 3 ? stripped : `${host}/…/${last}`;
+  const best = elided.length < stripped.length ? elided : stripped;
+  if (best.length <= budget) return best;
+
+  // Still over. A caller with a genuinely small box (a `systemMap` node is a
+  // fifth of a panel column's width) gets a label that fits it, cut in the same
+  // place and for the same reason: the host and the slug are the two ends a
+  // client recognises, so the cut is taken out of the middle of what is left
+  // rather than off the end. Without this the label simply ran past its box —
+  // and in SVG, which cannot ellipsise, ran off it with nothing to say so.
+  const room = Math.max(4, Math.floor(budget) - 1);
+  const tail = Math.max(2, Math.floor(room / 2));
+  const head = Math.max(2, room - tail);
+  return `${best.slice(0, head)}…${best.slice(best.length - tail)}`;
 }
 
 /**

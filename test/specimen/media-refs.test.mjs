@@ -13,6 +13,11 @@
  *   F12 (severity 2) — each specimen inlined its own copy of a shared logo or
  *   hero, so 67% of the media payload was byte-identical duplicates that §13's
  *   budgeter then had to spend `maxBytes` on.
+ *
+ *   F19 (severity 3) — `MediaRef.bytes` was the decoded payload, so every size
+ *   the studio put in front of a seller was a uniform third short of what the
+ *   asset costs the artifact. Nothing asserted the declared size against the
+ *   data URI it describes.
  */
 
 import test from 'node:test';
@@ -27,6 +32,7 @@ import { buildSpecimen, unresolvedMediaRefs } from '../../src/specimen/specimen.
 import {
   CORPUS_ASSETS, CORPUS_DOCUMENTS, CORPUS_PAGES, assetBytes, corpusClock, documentBytes, pageHtml,
 } from '../fixtures/corpus/index.mjs';
+import { buildCorpusProof } from '../fixtures/corpus/proof.mjs';
 
 const clock = corpusClock();
 
@@ -331,4 +337,110 @@ test('dedupeMedia keeps what a merge would otherwise lose, and is a no-op when n
   assert.equal(distinct.merged, 0);
   assert.equal(distinct.bytesSaved, 0);
   assert.deepEqual(dedupeMedia([]).carriers, []);
+});
+
+// ------------------------------------------------------------------- F19
+
+/**
+ * Take a data URI apart without using any of the code that built it.
+ *
+ * `inlined` is the length of the URI as it will sit in the artifact; `payload`
+ * is the length of the bytes it carries, decoded here by `Buffer` rather than
+ * by this repository's base64. Both are computed from the string alone, so a
+ * `MediaRef` cannot pass by agreeing with the function that wrote it.
+ *
+ * @param {string} uri
+ * @returns {{mime: string, inlined: number, payload: number}}
+ */
+function measureDataUri(uri) {
+  assert.ok(uri.startsWith('data:'), `not a data URI: ${uri.slice(0, 32)}`);
+  const comma = uri.indexOf(',');
+  assert.ok(comma > 0, 'a data URI has a comma');
+  const header = uri.slice(5, comma);
+  const body = uri.slice(comma + 1);
+  assert.ok(header.endsWith(';base64'), `capture inlines base64: ${header}`);
+
+  // Two independent readings of the payload size, so a typo in either shows up.
+  const decoded = Buffer.from(body, 'base64');
+  const padding = (body.match(/=+$/) || [''])[0].length;
+  assert.equal(decoded.length, (body.length / 4) * 3 - padding, 'base64 is 4 characters per 3 bytes');
+
+  return {
+    mime: header.slice(0, -';base64'.length),
+    inlined: Buffer.byteLength(uri, 'utf8'),
+    payload: decoded.length,
+  };
+}
+
+test('F19 — MediaRef.bytes is the inlined cost of the asset, measured against the data URI itself', async () => {
+  const proof = await buildCorpusProof();
+  /** @type {Map<string, any>} distinct MediaRef id → ref */
+  const refs = new Map();
+  for (const carrier of [...proof.specimens, ...proof.renditions]) {
+    for (const ref of carrier.media || []) if (!refs.has(ref.id)) refs.set(ref.id, ref);
+  }
+  assert.ok(refs.size >= 3, `the corpus proof carries media to measure (${refs.size})`);
+
+  let inlinedTotal = 0;
+  let payloadTotal = 0;
+
+  for (const ref of refs.values()) {
+    const measured = measureDataUri(ref.dataUri);
+    assert.equal(ref.bytes, measured.inlined,
+      `${ref.id} (${measured.mime}) declares ${ref.bytes} bytes and inlines ${measured.inlined}`);
+    assert.equal(ref.decodedBytes, measured.payload,
+      `${ref.id} carries a ${measured.payload}-byte payload`);
+    assert.ok(ref.bytes > ref.decodedBytes,
+      'base64 always costs more than the bytes it carries; a MediaRef may never claim otherwise');
+    inlinedTotal += measured.inlined;
+    payloadTotal += measured.payload;
+  }
+
+  // The finding itself: the old measure was not close. Base64 is 4/3 plus the
+  // `data:image/png;base64,` preamble, so the payload is at most 75% of the
+  // cost — anything reading `bytes` as the payload was a third light.
+  assert.ok(payloadTotal <= inlinedTotal * 0.75,
+    `payload ${payloadTotal} vs inlined ${inlinedTotal}: base64 cannot be more than 3/4 of its own encoding`);
+  assert.ok(inlinedTotal >= payloadTotal * 4 / 3,
+    `the artifact pays ${inlinedTotal} for ${payloadTotal} bytes of image`);
+});
+
+test('F19 — a specimen\'s declared media total is the bytes those assets add to the artifact', async () => {
+  const proof = await buildCorpusProof();
+  // What the studio's specimen panel and inspector both compute.
+  for (const specimen of proof.specimens) {
+    const declared = (specimen.media || []).reduce((n, m) => n + (m.bytes || 0), 0);
+    const actual = (specimen.media || []).reduce((n, m) => n + Buffer.byteLength(m.dataUri, 'utf8'), 0);
+    assert.equal(declared, actual,
+      `${specimen.id}: the size shown for this specimen's media must be the size it contributes`);
+  }
+
+  // And the same sum taken across the whole proof, once per distinct asset,
+  // which is what the emit panel's pre-flight estimate reports.
+  const byId = new Map();
+  for (const carrier of [...proof.specimens, ...proof.renditions]) {
+    for (const ref of carrier.media || []) byId.set(ref.id, ref);
+  }
+  const declared = [...byId.values()].reduce((n, m) => n + m.bytes, 0);
+  const actual = [...byId.values()].reduce((n, m) => n + Buffer.byteLength(m.dataUri, 'utf8'), 0);
+  assert.equal(declared, actual);
+  assert.ok(declared > 0);
+});
+
+test('F19 — an SVG that is passed through byte-for-byte still declares what it costs', () => {
+  // The passthrough path never touches the payload, which is exactly where a
+  // "bytes = the file the seller gave us" reading would have looked right and
+  // been wrong: the artifact pays for the base64, not for the file.
+  const path = CORPUS_ASSETS.filter((a) => /\.svg$/i.test(a.path))[0].path;
+  const svg = assetBytes(path);
+  const [ref] = captureMedia([{ name: path, bytes: svg, mime: 'image/svg+xml' }], { imageQuality: 0.85 });
+  const measured = measureDataUri(ref.dataUri);
+
+  assert.equal(ref.format, 'svg');
+  assert.equal(ref.sourceBytes, svg.length, 'the source is recorded unchanged');
+  assert.equal(ref.decodedBytes, svg.length, 'and nothing was re-encoded');
+  assert.equal(measured.payload, svg.length);
+  assert.equal(ref.bytes, measured.inlined);
+  assert.ok(ref.bytes > svg.length,
+    `${ref.bytes} inlined for a ${svg.length}-byte file — the difference is what F19 hid`);
 });

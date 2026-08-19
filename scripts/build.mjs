@@ -25,6 +25,7 @@ import { resolve, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bundle, BundleError } from './lib/bundler.mjs';
 import { utf8Length } from '../src/core/bytes.js';
+import { sha256Hex } from '../src/core/hash.js';
 import { stripComments, stripCssComments, collapseBlankLines } from './lib/strip-comments.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -253,8 +254,38 @@ const DEFAULT_SHELL = `<!doctype html>
 `;
 
 /**
+ * A digest of every source byte the build can read.
+ *
+ * `buildAll()` reads the filesystem, so two calls that disagree have two very
+ * different explanations: the build is not a pure function of its inputs (a §5
+ * violation, and a serious one), or somebody wrote to `src/` between them. Both
+ * look identical in a naive comparison — "output X differs between builds" —
+ * and during a parallel lane build the second is overwhelmingly the likelier,
+ * which is exactly the circumstance in which the first must not be waved away.
+ *
+ * So the determinism check compares this first. A changed fingerprint is a
+ * changed working tree, reported as such and retried; an unchanged fingerprint
+ * with differing outputs is the real thing.
+ *
+ * @returns {string}
+ */
+export function sourceFingerprint() {
+  /** @type {string[]} */
+  const parts = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir).sort()) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else parts.push(`${relative(ROOT, p).split('\\').join('/')}\u0000${readFileSync(p, 'utf8')}`);
+    }
+  };
+  walk(SRC);
+  return sha256Hex(parts.join('\u0001'));
+}
+
+/**
  * Produce every output as an in-memory map of path → contents.
- * @returns {{outputs: Map<string, string>, pending: string[]}}
+ * @returns {{outputs: Map<string, string>, pending: string[], fingerprint: string}}
  */
 export function buildAll() {
   /** @type {Map<string, string>} */
@@ -274,7 +305,7 @@ export function buildAll() {
   if (studio) outputs.set('pitchproof-studio.html', studio);
   else pending.push('dist/pitchproof-studio.html (src/ui/index.js not present yet)');
 
-  return { outputs, pending };
+  return { outputs, pending, fingerprint: sourceFingerprint() };
 }
 
 /** @param {Map<string, string>} outputs */
@@ -309,9 +340,16 @@ function main() {
   }
 
   if (verifyRepeat) {
+    const before = sourceFingerprint();
     const second = buildAll();
     const differing = diffOutputs(first.outputs, second.outputs);
     if (differing.length) {
+      if (before !== second.fingerprint || before !== first.fingerprint) {
+        console.error(
+          'build: cannot verify — src/ changed while the two builds ran, so the outputs describe '
+          + `two different working trees (${differing.join(', ')} differ). Re-run on a quiet tree.`);
+        process.exit(2);
+      }
       console.error(`build: NOT deterministic — differing outputs: ${differing.join(', ')}`);
       process.exit(1);
     }

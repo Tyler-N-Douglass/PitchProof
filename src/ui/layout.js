@@ -278,7 +278,9 @@ export function renderStatusBar(app) {
       h('span', { class: 'st-status-text' }, 'Local storage'),
       meter({ ratio: pressure.ratio || 0, tone: pressure.level === 'critical' ? 'bad' : pressure.level === 'warn' ? 'warn' : 'ok', label: 'local storage' }),
       h('span', { class: 'st-status-text st-mono' },
-        pressure.quota ? `${formatBytes(pressure.usage)} / ${formatBytes(pressure.quota)}` : 'quota unknown')),
+        pressure.quota
+          ? `${formatBytes(pressure.usage)} / ${formatBytes(pressure.quota)}`
+          : pressure.measured ? 'no quota reported' : 'reading the quota')),
     missing.length
       ? h('div', { class: 'st-status-group st-status-group--warn' },
         h('span', { class: 'st-status-text' }, `${plural(missing.length, 'lane')} not wired: ${missing.join(', ')}`))

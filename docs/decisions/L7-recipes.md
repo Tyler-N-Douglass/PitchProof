@@ -58,7 +58,7 @@ shape, and three lanes have to agree on one.
 | `at` | ISO-8601 instant from the caller's injected clock: `YYYY-MM-DDTHH:MM:SS[.mmm](Z|±HH:MM)` |
 | `of` | the id of the rendition the record was written for |
 | `from` | the `Provenance` the rendition held immediately before promotion |
-| `sig` | `shortHash({v, by, at, of, from}, 16)` — the *encoded* `by`, not the decoded one |
+| `sig` | `shortHash({v, by, at, of, from}, 16)` over the *encoded* `by`, not the decoded one. An unkeyed integrity digest — **not** authentication; see D-L7-17 |
 
 The matching expression, exported as `PROMOTION_RECORD_RE`:
 
@@ -93,6 +93,10 @@ deliberate act rather than a typo. The real defence is structural: `of` must
 match the rendition's own id, so a record cannot be copied between renditions,
 and `buildRendition` **strips any promotion record found in caller-supplied
 notes**, so the only code path that can write one is `promoteProvenance`.
+
+The parsed record's boolean for this is **`recordIntact`**. `signatureValid` is
+retained as an identical alias for the two lanes already reading it, and is
+deprecated — D-L7-17 records why the name was the defect and the digest was not.
 
 **What L10 and L11 need from this.** Call `hasPromotionRecord(rendition)` before
 trusting `'verified-by-user'`, and `verifyProvenance(rendition)` for the reason
@@ -516,6 +520,7 @@ overclaim §18.2 exists to prevent.
 | `renderAll(specimen, options)` | L12's "populate the library" action; the integration smoke test |
 | `RECIPE_TEMPLATES`, `recipeAccepts`, `recipesFor` | L12's recipe picker, gated on specimen kind |
 | `hasPromotionRecord`, `readPromotionRecord(s)`, `verifyProvenance`, `renditionsRequiringLabel` | **L10 and L11 — §22.6 enforcement** |
+| `PROMOTION_RECORD_LIMIT` | the one honest sentence about what a valid record proves, so no surface has to invent its own wording (D-L7-17) |
 | `assertNoAdapterSecrets`, `noteAdapterSecret`, `forgetAdapterSecrets` | **L10's absence proof**; L12's settings panel |
 | `assertNoFabricatedFacts`, `enforceNoFabricatedFacts` | L11's preflight; L12's paste surface |
 | `alignBlocksDetailed`, `blockSimilarity` | L12's side-by-side view, which needs the `moved[]` flags |
@@ -525,3 +530,95 @@ overclaim §18.2 exists to prevent.
 notable gap in the declared surface and should be added to `API.md` at
 integration; the rest are enforcement and inspector surfaces that follow from the
 laws L7 owns.
+
+---
+
+## D-L7-17 — `signatureValid` was the defect, not the digest (finding F23)
+
+**Finding.** §20 critique F23: `promotionSignature` is
+`shortHash({v, by, at, of, from}, 16)` — unkeyed — and `formatPromotionRecord`
+is on L7's published surface, so a hand-forged record with a correct digest
+promotes any rendition to `verified-by-user` and emits cleanly. The critique's
+own conclusion is the important half: *in a fully local, user-owned model no
+signature scheme can do better; the finding is that `signatureValid` reads as an
+authenticity check when it is tamper-evidence against corruption.*
+
+**Decision.** Accepted in full, as a naming and documentation defect. Four
+changes, no change to what the digest computes:
+
+1. `PromotionRecord` now carries **`recordIntact`**. `signatureValid` remains,
+   set to the identical value, marked deprecated in the typedef.
+2. The module header of `src/recipe/provenance.js` carries a section, *What
+   `sig` proves, and what it does not*, enumerating the four conditions
+   `recordIntact === true` actually asserts, the four things it does not assert,
+   why no keyed alternative exists in this product, and the five things that do
+   defend §22.6 ranked by strength.
+3. `PROMOTION_RECORD_LIMIT` is exported: one plain sentence, so a studio or
+   preflight surface showing a person the outcome has a canonical wording to
+   show beside it instead of paraphrasing.
+4. Six tests in `test/recipe/provenance.test.mjs`, three prefixed `LIMIT:`,
+   which describe attacks that **succeed**.
+
+**Why not rename outright.** `signatureValid` is read outside this lane in two
+places: `src/ui/panels/recipes.js` (L12's rendition panel) and the published
+typedef in `src/validate/provenance.js`, which L11 re-exports as the shape of
+`promotionRecord(rendition)`. A bare rename would break both, and `API.md` Part 5
+declares L7's promotion-record surface to L10 and L11. §4's rule — extend with
+optional fields only — points the same way. So the accurate name is added, the
+misleading one is kept and marked, and the alias is held to the accurate one by
+a test that asserts they never diverge. Consumers can migrate on their own clock;
+nothing breaks if they do not.
+
+**Why the digest is not strengthened.** §1.1.5 forbids accounts, cloud sync and
+any backend; §1.1.1 forbids the artifact touching the network. A signature beats
+a checksum only when the verifier holds something the forger does not, and in a
+single-user offline product every key would ship inside the artifact the forger
+already has. An unkeyed digest is the strongest honest construction available.
+Pretending otherwise — by keeping a name that implies a verifier — is exactly
+the §18 failure this module exists to prevent, committed inside the machinery
+that prevents it.
+
+**Blast radius: this is documentation-only.** The question worth answering is
+whether anything downstream treats a *valid signature* as more trustworthy than
+the *bare presence of a record*. Nothing does, and the reason is structural:
+`readPromotionRecords` filters on `recordIntact && of === rendition.id`, so
+"present" and "valid" are the same predicate. Everything downstream then reduces
+to one boolean:
+
+| consumer | what it reads | distinction drawn from the digest |
+|---|---|---|
+| `renditionsRequiringLabel` (L7) | `hasPromotionRecord` | none |
+| `requiresProvenanceLabel`, `isUnearnedVerification` (`src/emit/promotion.js`) | L7's `hasPromotionRecord`, re-exported | none |
+| `gateDeps()` → `PROVENANCE_UNLABELED` (`src/validate/rules.js`) | `ctx.deps.hasPromotionRecord` | none |
+| `runPreflight` (`src/validate/preflight.js`) | same function, injected | none |
+| L12's rendition panel (`src/ui/panels/recipes.js:316`) | `record.signatureValid` | display only — already worded "verifies against itself" / "does not verify", which is accurate |
+
+No consumer branches on the digest separately, none grants extra trust for a
+valid one, and none would behave differently if the digest were removed and the
+record's mere well-formedness used instead. So F23 changes no behaviour and no
+gate. It changes what a reader is told, which was the finding.
+
+**The honest guarantee that survives.** Ranked, and worth stating because the
+list does not end where the digest does:
+
+1. §22.6's actual risk is *the tool* producing an unearned `verified-by-user`.
+   That is closed: `buildRendition` refuses the value at any provenance a caller
+   asks for, `resolveProvenance` forces adapter output to `illustrative`, and
+   `buildRendition` strips any record arriving in caller-supplied notes.
+2. `of` binds a record to one rendition id, so a real record cannot be moved.
+3. Labelling is the default, and the failure mode of every check is a *visible*
+   label rather than a silent pass.
+4. The digest catches truncation and hand-editing.
+
+Against a user editing their own local model by hand, none of this is a defence
+and the digest is not even the weakest link — setting
+`provenance: 'client-supplied'` suppresses the label with no record of any kind,
+in one word rather than six fields and a hash. A test asserts that too, so the
+claim is not left resting on this paragraph.
+
+**Reported across the lane boundary, not fixed here.** `src/ui/services.js:546`
+documents `promotionRecord` as "L7 stores it as a signed token inside `notes` so
+it survives an export **and cannot be hand-forged**". That is the F23 overclaim
+restated, in the lane whose UI a seller actually reads. It is L12's file; the
+correction is reported to the integrator rather than made here. The panel's own
+rendered wording is already accurate — only the doc comment above it is not.

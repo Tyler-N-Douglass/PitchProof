@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { buildDeck } from '../../src/runtime/deck.js';
 import { runPreflight, autoFixes } from '../../src/validate/index.js';
 import { branchCoverage } from '../../src/validate/lane-branch.js';
+import { branchShipCost } from '../../src/validate/rules.js';
 import { cleanProof, defectProof, scene, copy, NOW } from '../fixtures/validate/defects.mjs';
 
 const preflight = (proof, options = {}) => runPreflight(proof, { clock: () => NOW, ...options });
@@ -183,4 +184,100 @@ test('branch coverage findings are ordered and deterministic', async () => {
   assert.equal(JSON.stringify(first), JSON.stringify(second));
   const orphans = first.filter((f) => f.code === 'BRANCH_UNREACHABLE').map((f) => f.locus.branchId);
   assert.deepEqual(orphans, ['bn_a_orphan', 'bn_z_orphan'], 'ordering is by locus, not by declaration');
+});
+
+// ---------------------------------------------------------------------------
+// The other end of the orphan edge, and what an orphan costs
+// ---------------------------------------------------------------------------
+
+/**
+ * The regression for F20. `branchCoverage` reports branches no scene anchors;
+ * nothing reported the mirror image — a scene anchoring a branch that is not in
+ * the proof — and the critic drove it through and got silence at every severity.
+ *
+ * The deck filters an anchor that names nothing, so the artifact offers no key
+ * for it and nobody is stranded; what is wrong is that the model says this scene
+ * offers a branch and the studio counts it. Severity 2, and reported (L11-D22).
+ */
+test('a scene anchoring a branch that does not exist is reported', async () => {
+  const proof = copy(cleanProof());
+  proof.spine[0].branchAnchors = ['bn_ghost'];
+
+  // The premise: the deck drops it, so no other rule has anything to say.
+  const deck = buildDeck(proof);
+  assert.deepEqual(deck.anchorsByScene.get(proof.spine[0].id), [], 'the deck filters an anchor that names nothing');
+  assert.deepEqual(declaredCoverage(deck), { unreachable: [], noReturn: [] });
+
+  const findings = await preflight(proof);
+  assert.equal(findings.length, 1, 'exactly one rule should have something to say about a ghost anchor');
+  const finding = findings[0];
+  assert.equal(finding.code, 'ASSET_MISSING', 'a scene naming a branch that is not in the proof is a dangling reference');
+  assert.equal(finding.severity, 2, 'the deck drops it, so nothing breaks in front of the room');
+  assert.equal(finding.locus.sceneId, proof.spine[0].id);
+  assert.equal(finding.detail.branchId, 'bn_ghost');
+  assert.equal(finding.detail.kind, 'branch-anchor');
+  assert.match(finding.message, /bn_ghost/);
+  assert.match(finding.message, /not in the proof/);
+});
+
+test('a ghost anchor is reported once per scene that names it, and never for a real branch', async () => {
+  const proof = copy(cleanProof());
+  addBranch(proof, 'bn_real', { anchorAt: 0 });
+  proof.spine[0].branchAnchors.push('bn_ghost');
+  proof.spine[1].branchAnchors = ['bn_ghost', 'bn_real'];
+  const ghosts = (await preflight(proof)).filter((f) => f.code === 'ASSET_MISSING');
+  assert.deepEqual(
+    ghosts.map((f) => f.locus.sceneId).sort(),
+    [proof.spine[0].id, proof.spine[1].id].sort(),
+  );
+  assert.ok(ghosts.every((f) => f.detail.branchId === 'bn_ghost'));
+});
+
+/**
+ * The regression for F21. `BRANCH_UNREACHABLE` stays severity 2 — a branch with
+ * no way in is a tidiness problem, not a deck that strands anyone, and §14
+ * reserves the unoverridable refusal for real harms. What was missing is that
+ * its scenes ship regardless, at a cost the seller was never shown (L11-D23).
+ */
+test('BRANCH_UNREACHABLE says the branch ships anyway and what it costs', async () => {
+  const proof = copy(cleanProof());
+  addBranch(proof, 'bn_orphan', {
+    objection: '',
+    scenes: [
+      scene('bn_orphan_s0', 1, { headline: 'Answer one' }),
+      scene('bn_orphan_s1', 1, { headline: 'Answer two' }),
+    ],
+  });
+  const finding = (await preflight(proof)).find((f) => f.code === 'BRANCH_UNREACHABLE');
+  assert.ok(finding);
+  assert.equal(finding.severity, 2, 'non-blocking is the call; silence about the cost was not');
+  assert.equal(finding.detail.sceneCount, 2);
+  assert.ok(finding.detail.shippedBytes > 0, 'the finding must quote a cost, not just a scene count');
+  assert.match(finding.message, /2 scenes ship in the artifact anyway/);
+  assert.match(finding.message, /against the byte budget/);
+  assert.match(finding.message, /delete it/, 'the seller needs the option that actually removes the weight');
+  assert.equal(finding.autoFixAvailable, true, 'and the option that keeps it, applied for them');
+});
+
+test('an unreachable branch with no scenes is not billed for weight it does not carry', async () => {
+  const proof = copy(cleanProof());
+  addBranch(proof, 'bn_hollow', { objection: '', scenes: [] });
+  const finding = (await preflight(proof)).find((f) => f.code === 'BRANCH_UNREACHABLE');
+  assert.ok(finding);
+  assert.equal(finding.detail.shippedBytes, 0);
+  assert.match(finding.message, /costs the artifact nothing/);
+});
+
+test('branchShipCost counts media only the unreachable branch shows', async () => {
+  const proof = copy(cleanProof());
+  const shared = proof.spine[0];
+  addBranch(proof, 'bn_orphan', {
+    objection: '',
+    scenes: [{ ...copy(shared), id: 'bn_orphan_s0', branchAnchors: [] }],
+  });
+  const cost = branchShipCost(proof, proof.branches.find((b) => b.id === 'bn_orphan'));
+  assert.equal(cost.sceneCount, 1);
+  assert.deepEqual(cost.exclusiveSources, [], 'the branch shows the spine\'s own specimen — removing it recovers no media');
+  assert.equal(cost.mediaBytes, 0);
+  assert.ok(cost.modelBytes > 0);
 });

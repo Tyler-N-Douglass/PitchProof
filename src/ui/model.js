@@ -523,15 +523,15 @@ export function brandGroupEvidence(brand, group) {
   switch (group) {
     case 'colors': {
       const count = (b.colors || []).length;
-      return { hasContent: count > 0, count, describe: count ? `${count} roles` : 'no colour roles' };
+      return { hasContent: count > 0, count, describe: count ? `${count} ${count === 1 ? 'role' : 'roles'}` : 'no colour roles' };
     }
     case 'faces': {
       const count = (b.faces || []).filter((f) => f && String(f.family || '').trim()).length;
-      return { hasContent: count > 0, count, describe: count ? `${count} faces` : 'no faces' };
+      return { hasContent: count > 0, count, describe: count ? `${count} ${count === 1 ? 'face' : 'faces'}` : 'no faces' };
     }
     case 'logos': {
       const count = (b.logos || []).length;
-      return { hasContent: count > 0, count, describe: count ? `${count} assets` : 'no logo' };
+      return { hasContent: count > 0, count, describe: count ? `${count} ${count === 1 ? 'asset' : 'assets'}` : 'no logo' };
     }
     case 'shape': {
       const has = overridden || confident;
@@ -544,6 +544,55 @@ export function brandGroupEvidence(brand, group) {
     default:
       return { hasContent: false, count: null, describe: 'unknown group' };
   }
+}
+
+/**
+ * The values every new project starts with, held once so a group can be
+ * compared against them. `emptyBrand`'s only seed- and time-dependent field is
+ * `id`, which no group reads.
+ * @type {any}
+ */
+const STARTER_BRAND = emptyBrand('', '');
+
+/**
+ * Is this group still exactly what a brand-new project starts with?
+ *
+ * The distinction matters because 0% confidence has two completely different
+ * meanings and the studio was showing one sentence for both. "Extraction ran
+ * and could not tell" is a result. "Nothing has been extracted and nothing has
+ * been entered" is an empty project wearing the studio's own placeholder navy
+ * and `system-ui` — and telling a seller to "check it against the source" when
+ * there is no source, about colours that are not the prospect's, is the studio
+ * describing an empty collection as a broken system.
+ *
+ * A hand edit records a `manualOverrides` path, so a group the user has touched
+ * is never a starter default even if they typed the same value back in. An
+ * extracted colour carries `source: 'extracted'` or `'derived'`, so an
+ * extraction result can never structurally equal the starter set.
+ *
+ * @param {BrandSystem} brand
+ * @param {string} group
+ * @returns {boolean}
+ */
+export function brandGroupIsStarterDefault(brand, group) {
+  if (!brand || !BRAND_GROUPS.includes(group)) return false;
+  if ((brand.manualOverrides || []).some((path) => String(path).startsWith(`brand.${group}`))) return false;
+  const mine = /** @type {any} */ (brand)[group];
+  return JSON.stringify(mine === undefined ? null : mine) === JSON.stringify(STARTER_BRAND[group]);
+}
+
+/**
+ * Has anything at all been extracted or entered into this brand yet?
+ * Used where a whole panel would otherwise read as a failed extraction when no
+ * extraction has been attempted.
+ * @param {BrandSystem} brand
+ * @returns {boolean}
+ */
+export function brandIsUntouched(brand) {
+  if (!brand) return true;
+  if (brand.sourceUrl) return false;
+  if ((brand.manualOverrides || []).length) return false;
+  return BRAND_GROUPS.every((group) => brandGroupIsStarterDefault(brand, group));
 }
 
 /**

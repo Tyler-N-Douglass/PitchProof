@@ -276,7 +276,7 @@ function renderRenditions(app, proof) {
         trailing: button({ act: 'rendition.remove', arg: r.id, variant: 'quiet', title: `Remove ${r.label}` }, '×'),
       });
     }))
-    : empty('No renditions yet. Paste one above — the “after” side is what makes a before/after scene mean anything.'),
+    : empty('No renditions yet. Paste one above, or run a seed recipe against a captured specimen — the “after” side is what makes a before/after scene mean anything.'),
 
   selected ? renderRenditionDetail(app, selected) : null);
 }

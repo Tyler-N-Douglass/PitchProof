@@ -34,6 +34,15 @@ A structured field would make the record unforgeable by accident, un-deletable b
 tidying, and machine-readable without a regular expression shared between three
 lanes.
 
+§20's finding F23 landed on the same point from the other side and is answered
+in `docs/decisions/L7-recipes.md` D-L7-17: the digest is as strong as a product
+with no backend allows, so the fix there was to stop the *name* implying
+otherwise — the parsed field is now `recordIntact`. Note what that leaves for
+this dispute. A structured `Rendition.promotion` would not make the record
+authenticated either; nothing in a product with no server can. It would fix the
+other half: a record a user cannot destroy by tidying their prose, and one no
+consumer has to reach through a regular expression to read.
+
 **What the lane built.** The contract as written. The record is encoded in
 `notes` as a single delimited line, documented in `docs/decisions/L7-recipes.md`
 D-L7-2 and in `src/recipe/provenance.js`, parsed by `readPromotionRecords`, and

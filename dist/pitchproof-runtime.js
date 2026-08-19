@@ -3057,11 +3057,17 @@ function displayUrl(url, budget = URL_LABEL_BUDGET) {
   if (stripped.length <= budget) return stripped;
 
   const parts = stripped.split('/').filter(Boolean);
-  if (parts.length < 3) return stripped;
   const host = parts[0];
   const last = parts[parts.length - 1];
-  const elided = `${host}/…/${last}`;
-  return elided.length < stripped.length ? elided : stripped;
+
+  const elided = parts.length < 3 ? stripped : `${host}/…/${last}`;
+  const best = elided.length < stripped.length ? elided : stripped;
+  if (best.length <= budget) return best;
+
+  const room = Math.max(4, Math.floor(budget) - 1);
+  const tail = Math.max(2, Math.floor(room / 2));
+  const head = Math.max(2, room - tail);
+  return `${best.slice(0, head)}…${best.slice(best.length - tail)}`;
 }
 
 function specimenMeta(specimen, options = {}) {
@@ -4861,7 +4867,7 @@ const { layoutText, measureText } = __require("core/text-metrics.js");
 const { MAP_DESIGN } = __require("scene/geometry.js");
 const { styleForRole } = __require("scene/type-scale.js");
 const { renderedFamily } = __require("scene/brand-access.js");
-const { sceneHead, provenanceLabel, emptyState, specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger } = __require("scene/parts.js");
+const { sceneHead, provenanceLabel, emptyState, URL_LABEL_BUDGET, specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger } = __require("scene/parts.js");
 
 const MAP = {
   nodeW: 200,
@@ -4903,9 +4909,7 @@ function systemMap(ctx) {
   const sourceLabel = specimenTitle(ctx.specimen);
 
   const nodeInnerW = MAP.nodeW - MAP.nodePad * 2;
-  const urlBudget = labelBudget('mapNodeMeta', nodeInnerW, MAP.metaLines, ctx.brand)
-    - (ctx.specimen && ctx.specimen.locale ? String(ctx.specimen.locale).length + 5 : 0);
-  const sourceMeta = specimenMeta(ctx.specimen, { urlBudget: Math.max(8, urlBudget) })
+  const sourceMeta = fitSourceMeta(ctx.specimen, nodeInnerW, ctx.brand)
     || (ctx.specimen ? ctx.specimen.kind : 'no specimen attached');
   const transformLabel = ctx.scene.subhead ? String(ctx.scene.subhead) : 'Transformation';
   const recipeCount = new Set(rends.map((r) => r.recipeId).filter(Boolean)).size;
@@ -5063,7 +5067,7 @@ function node(ctx, spec) {
       'data-pp-unit-h': String(MAP.lineStep.title),
       'data-pp-ws': 'nowrap',
 
-      'data-pp-to': title.truncated ? 'ellipsis' : null,
+      'data-pp-to': title.truncated && i === titleLines.length - 1 ? 'ellipsis' : null,
     }, line))),
   metaLines.length
     ? h('text', {
@@ -5080,7 +5084,7 @@ function node(ctx, spec) {
       'data-pp-unit-w': String(innerW),
       'data-pp-unit-h': String(MAP.lineStep.meta),
       'data-pp-ws': 'nowrap',
-      'data-pp-to': meta.truncated ? 'ellipsis' : null,
+      'data-pp-to': meta.truncated && i === metaLines.length - 1 ? 'ellipsis' : null,
     }, line)))
     : null);
 }
@@ -5113,14 +5117,24 @@ function mapStyle(role, brand) {
   return { ...spec.style, family: renderedFamily(brand, spec.face, spec.style.weight) };
 }
 
-function labelBudget(role, maxUnits, maxLines, brand) {
-  const style = mapStyle(role, brand);
+function fitSourceMeta(specimen, maxUnits, brand) {
+  if (!specimen) return null;
+  let budget = URL_LABEL_BUDGET;
+  let label = specimenMeta(specimen, { urlBudget: budget });
+  if (!label) return null;
 
-  const sample = 'n.example/equipment-heat-exchangers';
-  const perChar = measureText(sample, style) / sample.length;
-  if (!(perChar > 0)) return 0;
-  return Math.max(8, Math.floor((maxUnits * maxLines) / perChar) - 1);
+  while (budget > MIN_URL_BUDGET) {
+    if (!wrap(label, 'mapNodeMeta', maxUnits, MAP.metaLines, brand).truncated) return label;
+    budget -= 2;
+
+    const next = specimenMeta(specimen, { urlBudget: budget });
+    if (!next) break;
+    label = next;
+  }
+  return label;
 }
+
+const MIN_URL_BUDGET = 12;
 
 function fanPath(x1, y1, x2, y2) {
   const dx = Math.max(40, (x2 - x1) / 2);
@@ -5135,7 +5149,8 @@ __exports["MAP"] = MAP;
 __exports["systemMap"] = systemMap;
 __exports["outputBoxes"] = outputBoxes;
 __exports["wrap"] = wrap;
-__exports["labelBudget"] = labelBudget;
+__exports["fitSourceMeta"] = fitSourceMeta;
+__exports["MIN_URL_BUDGET"] = MIN_URL_BUDGET;
 };
 __modules["scene/layouts/quote-card.js"] = function (__exports, __require) {
 
@@ -5790,6 +5805,8 @@ __exports["faceFor"] = __require("scene/brand-access.js").faceFor;
 __exports["colorFor"] = __require("scene/brand-access.js").colorFor;
 __exports["logoFor"] = __require("scene/brand-access.js").logoFor;
 __exports["neutralBrand"] = __require("scene/brand-access.js").neutralBrand;
+__exports["availableFamilies"] = __require("scene/brand-access.js").availableFamilies;
+__exports["renderedFamily"] = __require("scene/brand-access.js").renderedFamily;
 __exports["DEFAULT_STACKS"] = __require("scene/brand-access.js").DEFAULT_STACKS;
 __exports["splitBeforeAfter"] = __require("scene/layouts/split-before-after.js").splitBeforeAfter;
 __exports["fanOut"] = __require("scene/layouts/fan-out.js").fanOut;

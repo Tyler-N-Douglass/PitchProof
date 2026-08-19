@@ -552,3 +552,128 @@ boxes report it.
 and the stylesheet already breaks it. Not reporting that made the detector read
 a word the browser would have wrapped as an unbreakable horizontal overflow —
 a false severity-1 on the client's own table copy.
+
+---
+
+## L8-25 — A scene labels every rendition it declares, not only the one it drew
+
+**Defect it came from:** the corpus proof reached `emit()` and was refused with
+two severity-1 `PROVENANCE_UNLABELED` findings, both on `quoteCard` scenes —
+*"Scene sc_437d80e0181d renders 1 unscoped rendition(s) needing a provenance
+label but has 0 spare .pp-provenance element(s)."*
+
+**Unsettled by:** §9 says an illustrative rendition renders with a visible label.
+It does not say what a layout that *selects* owes a rendition it declined to
+select. Four of the eight select: `quoteCard` takes one quotation, `fullBleed`
+one image, `sideNote` keeps only renditions that produced a note, and `systemMap`
+draws five outputs and collapses the rest.
+
+**How the corpus produced it.** Sectioning a real page at heading boundaries
+gives a `quoteCard` scene a rendition whose blocks contain no `quote` block.
+`pullQuote` then fell through to the specimen's quote — the client's own words —
+and rendered no provenance label, while the scene still listed the illustrative
+rendition in `renditionIds`. The scene's headline in that proof *was* the
+rendition's own leading heading, so it was rendition-derived text on screen with
+nothing labelling it. The emitter was right to refuse.
+
+**Decision.** Every rendition a scene declares that needs a provenance label gets
+one, on every branch of every layout. Where the layout scopes the rendition and
+labels it in place — a fan card, a split column, a stack step, a legend chip, an
+index entry — nothing changes. Where it does not, `withProvenanceLedger()` in
+`parts.js` appends a **provenance ledger**: one row per remaining rendition,
+naming the rendition and carrying the standard label. The row is itself a
+`data-pp-rendition` scope, so the label sits inside the subtree of the rendition
+it describes exactly like every other label, and it carries no `data-pp-el`, so
+no beat can hide it. All eight layouts end in that call.
+
+**Why "declared", not "visibly rendered".** The alternative rule — label a
+rendition only when its material is on screen — is the rule the layouts already
+had, and it is the rule that failed. A layout cannot evaluate it: `quoteCard`
+renders `scene.headline`, and whether that headline came from a rendition is
+knowable to L9 and to a text probe in the emitter, but not to the layout. What
+a layout *can* evaluate is what the scene declares, and that predicate can only
+over-state the presence of illustrative material, never hide it — which is the
+right direction for §22.6.
+
+**Why the row names the rendition.** A ledger row appears exactly where the
+rendition's own material is *not* under the label. An unnamed label there would
+float beside whatever the layout did render, which on `quoteCard` and
+`fullBleed` is often the prospect's own page. Marking the client's content
+"illustrative" is §18.1 read backwards and would undercut §18.3's "the
+prospect's own content is presented unmodified". Naming the rendition makes the
+label a statement about that rendition and about nothing else on screen.
+
+**What the ledger costs, and where that is accounted.** The strip is in flow at
+the foot of the stage, so everything above it has that much less vertical room.
+`withProvenanceLedger` stamps `data-pp-ledger="<rows>"` on the layout root,
+`measureScene` carries it down, and `boxGeometry` subtracts `ledgerAllowance(bp)`
+— one strip plus the `.pp-layout` gap — from `contentHeightPx` and
+`bodyHeightPx` before any slot is computed. Every stretching slot derives from
+those two, so one subtraction keeps the whole measurement honest. A ledger deep
+enough to wrap onto a second strip is a scene declaring four or more renditions
+it never shows; the single-strip allowance under-states that case, and
+under-stating the room means reporting overflow rather than hiding it.
+
+**What the audit found in the other seven.** Rendered against eight hostile
+scene shapes (a rendition with no quote, none anywhere, a media-only rendition,
+a specimen-supplied hero, one rendition of several carrying the image, nine
+renditions on a five-output map, an empty rendition, no specimen at all):
+`splitBeforeAfter`, `fanOut`, `stack` and `contentsIndex` were clean on all
+eight — each gives every rendition a scope of its own and labels it there.
+`fullBleed` left renditions unlabelled on six of the eight, `sideNote` on four,
+`systemMap` on one (everything past its fifth output node), and `quoteCard` on
+all eight. All four are closed by the same change.
+
+---
+
+## L8-26 — `systemMap` breaks its lines in the face the artifact will render in
+
+**Defect it came from:** L10's gate reported a severity-1 `TEXT_OVERFLOW` on
+`mapNodeMeta`, 4.7% over at all three breakpoints with `textOverflow: 'clip'` —
+a source URL that just stopped, with nothing on screen to say it was cut.
+
+**Unsettled by:** `API.md` L8 has one `measureScene`, and `docs/decisions`
+L8-6 fixes `style.family` as the *requested* brand family because L11 resolves
+the substitution downstream. That is right for every layout that hands its text
+to CSS. `systemMap` is the one layout that does not: SVG has no line breaking,
+so the layout computes the breaks itself, once, at author time.
+
+**Decision.** Four changes, all in `systemMap` and the parts it calls.
+
+1. **Lines are trimmed.** `layoutText` measures a wrapped line without the space
+   that ended it but returns the string with that space still attached. The
+   layout put that string in a `<tspan>`, `measureScene` read it back, and the
+   trailing space was measured as part of the run. That was the whole 4.7%: an
+   overflow in the measurement that was never on the screen, graded severity 1
+   because SVG runs are `clip`.
+2. **Breaks are computed post-substitution.** `renderedFamily()` in
+   `brand-access.js` applies the same resolution L11 measures against — walk the
+   brand's declared stack, take the first family the artifact can count on, else
+   let `resolveFace` pick by metric distance — and `wrap()` breaks against that.
+   A brand whose stack lands on a family 10% wider than the requested one's
+   metric model otherwise gets lines that fit in the studio and run out of their
+   node on the projector.
+3. **The URL is elided against the map's node, not against a panel column.**
+   `URL_LABEL_BUDGET` is sized for a 320px panel meta line; a map node is 172
+   design units with two lines to spend. `fitSourceMeta()` shortens the label
+   through the real line breaker until it stops truncating, and `displayUrl()`
+   now honours its budget past the structural `host/…/slug` elision by taking
+   the remainder out of the middle. The budget is not estimated from an average
+   advance, because it is not an average that decides: the wrap breaks at
+   hyphens and slashes, so 46 characters may take two lines or three.
+4. **A cut that still has to happen says so.** Where a label cannot fit even
+   after eliding, `wrap()` ellipsises the last line it kept and the layout
+   stamps `data-pp-to="ellipsis"` on that run only. SVG has neither a clamp nor
+   a `text-overflow`, so without this the label simply stopped — which under
+   L8-22's grading is content lost with nothing to show for it, the case §22.2
+   exists to block.
+
+**Why `renderedFamily` is stated twice.** L11 depends on L8; L8 cannot import
+`resolveBoxFace` back. The half that matters — the metric model and
+`resolveFace` — is shared in `core/text-metrics.js`, and only the stack walk is
+restated. `test/scene/measure.test.mjs` asserts the two agree on a brand built
+to separate them.
+
+**Scope.** This applies to the SVG roles and nothing else. L8-6 stands for every
+other layout: CSS breaks its own lines in whatever face it ended up with, so
+reporting the requested family there is still the honest answer.

@@ -175,7 +175,27 @@ runPreflight(proof, {breakpoints?, clock, runtimeJs?, runtimeCss?, html?, css?})
 
 ---
 
-## 6. `hasPromotionRecord` is used by three lanes and declared by none
+## 6. ~~`hasPromotionRecord` is used by three lanes and declared by none~~ — **closed**
+
+> **Closed.** `API.md` Part 5 now declares `hasPromotionRecord`,
+> `verifyProvenance`, `renditionsRequiringLabel` and `PROMOTION_RECORD_RE` on
+> `recipe/index.js`, naming L10 and L11 as the reason. The "what a v2 should say"
+> block below is what shipped, near enough verbatim.
+>
+> The objection turned out to be understated. It predicted that three readers of
+> one undeclared format were "one format drift away" from a disagreement; the
+> drift had already happened. L7 writes a signed, delimited record and L11's
+> reader was looking for an English sentence, so preflight raised a **severity-1**
+> `PROVENANCE_UNLABELED` against renditions `promoteProvenance` had promoted
+> correctly — the studio refused to emit a proof `emit()` was happy with. Reported
+> by L10 as L10-D9 and fixed in L11-D19: L11 no longer implements a reader, it
+> bridges to L7's through `src/validate/lane-recipe.js`. The record below stands
+> as written, and the lesson with it — "a lane imports only declared surfaces" is
+> the right rule, and the answer to an undeclared surface another lane owns is to
+> get it declared, not to write a second one.
+
+<details>
+<summary>The objection as filed</summary>
 
 **Surface:** `API.md` Part 3 → L7 declares `promoteProvenance(rendition, {by,
 at})` and says it "records a promotion entry in `rendition.notes`". No reader is
@@ -201,6 +221,8 @@ PROMOTION_RECORD_RE: RegExp
 
 and have L10 and L11 import it rather than each carrying a parser.
 
+</details>
+
 ---
 
 ## Non-disputes, recorded so the critic does not re-derive them
@@ -219,6 +241,15 @@ and have L10 and L11 import it rather than each carrying a parser.
   through one accessor that returns `number | null` and says "unmeasured" in
   every message rather than quoting a percentage it does not have (L11-D17).
   §22.2's case is the unknown family, so `null` is the answer that matters most.
+- **§4 gives no finding code for a `LogoAsset` whose `kind` and payload
+  disagree.** `data` is documented as "inline SVG markup or data URI" for either
+  kind, so a `kind: 'svg'` logo carrying `data:image/png;…` is contract-legal and
+  L11 accepts it (L11-D21). It is a mislabelled kind, not a missing asset, and
+  `ASSET_MISSING` — a severity-1 code — is the wrong place to smuggle it in. Not
+  filed as a dispute because nothing is blocked: the emitter inlines the payload
+  it was given, and the kind field is a hint about the payload rather than a
+  promise the artifact relies on. Recorded so the next critic does not read the
+  silence as an oversight.
 - **`BREAKPOINTS` is a closed list of three.** §14 says "all three breakpoints",
   so this is the spec's decision, not a gap. `runPreflight` still accepts
   explicit geometry so a studio preview at an arbitrary size can be checked, and

@@ -19,6 +19,8 @@ import {
   textOverflowOf, displayUrl,
 } from '../../src/scene/index.js';
 import { renderedFamily } from '../../src/scene/brand-access.js';
+import { specimenMeta } from '../../src/scene/parts.js';
+import { MAP, wrap, fitSourceMeta } from '../../src/scene/layouts/system-map.js';
 import { layoutCases, contextFor, brandFixture, specimen, localeFanout } from '../fixtures/scene/content.mjs';
 import { buildCorpusProof } from '../fixtures/corpus/proof.mjs';
 
@@ -417,6 +419,29 @@ test('a map label line carries no whitespace of its own', () => {
   }
 });
 
+/**
+ * A brand whose declared fallback stack lands somewhere other than the family
+ * `resolveFace` would pick on its own. This is the case that separates the two:
+ * the requested face is unavailable, and the stack the brand wrote names a
+ * *wider* available family than the metric model would have chosen. A layout
+ * that breaks its lines against the requested family's model is breaking them
+ * about 10% too narrow — lines that fit in the studio and run out of their node
+ * on the client's screen.
+ * @returns {any}
+ */
+function substitutingBrand() {
+  const brand = brandFixture();
+  return {
+    ...brand,
+    faces: brand.faces.map((face) => ({
+      ...face,
+      family: face.role === 'mono' ? 'Sohne Mono' : 'Sohne',
+      fallbackStack: face.role === 'mono' ? ['Sohne Mono', 'Courier New', 'monospace'] : ['Sohne', 'Verdana', 'sans-serif'],
+      embeddable: false,
+    })),
+  };
+}
+
 test('a map label line fits its node in the face the artifact will actually draw it in', async () => {
   // The line breaking happens in the layout, once, at author time — so it has
   // to be computed against the substituted family, not the requested one. A
@@ -424,7 +449,9 @@ test('a map label line fits its node in the face the artifact will actually draw
   // resolves to Arial and "Sohne Mono" to Courier New, and a break computed
   // from Sohne's metrics is a line that runs out of its node on a real screen.
   const corpus = (await buildCorpusProof()).brand;
-  for (const brand of [brandFixture(), corpus]) {
+  assert.equal(renderedFamily(substitutingBrand(), 'display'), 'Verdana',
+    'the hostile brand no longer substitutes to a different family than the metric model would pick');
+  for (const brand of [brandFixture(), corpus, substitutingBrand()]) {
     for (const url of HOSTILE_URLS) {
       for (const n of [1, 3, 5, 9]) {
         const spec = specimen({ sourceUrl: url });
@@ -470,22 +497,38 @@ test('a map label the node could not hold says so, rather than stopping', () => 
 });
 
 test('the map elides a URL against its own node, not against a panel column', () => {
-  // `URL_LABEL_BUDGET` is sized for a 320px panel meta line. A map node is a
-  // fifth of that with two lines to spend, and eliding against the column's
-  // number is what left the map meta running past its node.
+  // `URL_LABEL_BUDGET` is sized for a 320px panel meta line. A map node is 172
+  // design units with two lines to spend — a fifth of that — so a label elided
+  // against the column's number arrives already too long, and the map's only
+  // recourse is to drop the tail. In SVG that drop is silent: no clamp, no
+  // ellipsis, just a source line that stops. The map elides against its own
+  // node instead, and this asserts both halves.
   const brand = brandFixture();
-  const url = 'https://www.northwind-industrial.example/equipment/heat-exchangers/hx-400/';
-  const spec = specimen({ sourceUrl: url });
+  const innerW = MAP.nodeW - MAP.nodePad * 2;
+  const spec = specimen({ sourceUrl: 'https://www.northwind-industrial.example/equipment/heat-exchangers/hx-400/' });
+
+  const columnLabel = specimenMeta(spec);
+  const mapLabel = fitSourceMeta(spec, innerW, brand);
+  assert.ok(columnLabel && mapLabel);
+  assert.ok(mapLabel.length < columnLabel.length,
+    `the map drew the panel column's label verbatim (${mapLabel})`);
+
+  // The column's label does not fit the node; the map's does.
+  assert.equal(wrap(columnLabel, 'mapNodeMeta', innerW, MAP.metaLines, brand).truncated, true,
+    'the panel column label already fits a map node, so this fixture tests nothing');
+  assert.equal(wrap(mapLabel, 'mapNodeMeta', innerW, MAP.metaLines, brand).truncated, false,
+    'the map still cannot hold the label it elided for itself');
+
+  // …and that holds through the render, at every breakpoint.
   const rends = localeFanout(5);
-
   const map = buildScene({ layout: 'systemMap', specimen: spec, renditions: rends, headline: 'Flow' });
-  const mapMeta = measureScene(map, { ...contextFor(map, { specimen: spec, renditions: rends }), brand }, 'sm')
-    .boxes.filter((b) => b.role === 'mapNodeMeta').map((b) => b.text).join('');
-  const columnLabel = displayUrl(url);
-
-  assert.ok(columnLabel && columnLabel.length > 0);
-  assert.ok(!mapMeta.includes(columnLabel),
-    `the map used the panel column's label verbatim (${columnLabel}); it has a fifth of that width`);
+  const ctx = { ...contextFor(map, { specimen: spec, renditions: rends }), brand };
+  for (const bp of BPS) {
+    for (const box of measureScene(map, ctx, bp).boxes.filter((b) => b.role === 'mapNodeMeta')) {
+      assert.equal(box.textOverflow, 'clip',
+        `${bp}: a map meta line was cut: ${JSON.stringify(box.text)}`);
+    }
+  }
 });
 
 test('every systemMap scene of a corpus proof measures inside its own nodes', async () => {

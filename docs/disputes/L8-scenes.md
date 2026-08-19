@@ -154,3 +154,69 @@ their anchor.
 **What would settle it.** An optional `origin?: string` on `Beat` — additive
 under §4's "may extend with optional fields only" — recording the group key that
 produced it.
+
+---
+
+## L8-D7 — §9's law is stated over "renders", and nothing defines it
+
+**Surface.** §9: "Any rendition not marked `client-supplied` or explicitly
+promoted … **renders** with a visible, non-removable label in the artifact".
+`API.md` L2 `LayoutContext = { scene, brand, specimen, renditions, … }`, where
+`renditions` is `scene.renditionIds` resolved.
+
+**Objection.** Three parties read "renders" three different ways and the
+contract arbitrates none of them. A **layout** can only see what it was handed —
+the renditions the scene declares — and four of the eight then select a subset
+to draw. The **emitter** decides it by probing the rendered text for the
+rendition's label or a forty-character run of its block text, which is a
+heuristic: it says yes when the scene's headline happens to repeat the
+rendition's leading heading, and no when the layout drew a rendition's media
+with none of its words. A **client in the room** reads it as "is any of this
+generated" and does not distinguish at all. A law about the single reputational
+risk in the product (§22.6) rests on a word with three meanings.
+
+**Built as written.** Nothing in the contract is changed and the emitter's
+predicate is not worked around. L8 satisfies the strictest available reading:
+every rendition a scene *declares* that needs a label gets one, on every branch
+of every layout, in a `data-pp-rendition` scope of its own
+(`withProvenanceLedger` in `src/scene/parts.js`, decision L8-25). That is a
+superset of every reading of "renders", so it cannot under-label under any of
+them, and it labels the rendition by name so it cannot smear the label onto the
+prospect's own content either.
+
+**What would settle it.** Either §9 saying "a rendition a scene declares",
+which is what the emitter's own `renditionIds` reading already assumes, or a
+`shownRenditionIds` on `Scene` written by whichever lane made the selection —
+so the layout, the emitter and the validator answer the question from one field
+rather than from three guesses.
+
+---
+
+## L8-D8 — `MeasuredBox.style.family` is the requested face, which SVG cannot use
+
+**Surface.** `API.md` L8 `boxes: { … style … }[]`, with `style.family`; L11
+resolves the substitution downstream (`resolveBoxFace` in
+`src/validate/overflow.js`). Recorded on this side as decision L8-6.
+
+**Objection.** The division works because CSS breaks its own lines: the layout
+reports what it asked for, L11 resolves what will render, and the browser wraps
+in whatever it got. `systemMap` is drawn as inline SVG, and SVG has no line
+breaking — so *the layout* must break the lines, at author time, and it must
+break them against the family that will actually render. The contract gives the
+layout the requested family and puts the resolver in the lane that depends on
+it, so the one layout that needs the answer before it renders is the one layout
+that cannot ask for it.
+
+**Built as written.** `style.family` in every reported box is still the
+requested family; L8-6 stands. `renderedFamily()` in
+`src/scene/brand-access.js` restates L11's stack walk for `systemMap`'s line
+breaking only — the metric model itself is shared, in
+`core/text-metrics.resolveFace`, so only the stack-walk rule is in two places.
+`test/scene/measure.test.mjs` asserts the two agree on a brand built to
+separate them (a declared fallback stack landing on a wider available family
+than the metric model would pick).
+
+**What would settle it.** Promoting the face resolution into
+`core/text-metrics.js` as one function both lanes call — L11 already imports
+`resolveFace` from there, and only the "available families" rule and the
+declared-stack walk sit above it. Neither lane needs to own that.

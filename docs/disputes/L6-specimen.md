@@ -176,3 +176,47 @@ export interface Specimen {
 An asset table also gives §13's degradation report somewhere honest to count
 from: today a budgeter that walks specimens sees one asset n times and can
 double-count what it saved by degrading it.
+
+---
+
+## 6. `MediaRef.bytes` does not say which of an asset's three sizes it is
+
+**Lane:** L6 · **Contract:** §4 `MediaRef`
+
+**Objection.** `bytes: number` is the only field in `MediaRef` with no comment,
+and it is the only one whose meaning is genuinely ambiguous. An inlined asset
+has three sizes — the file the seller supplied, the payload left after §8's
+downscale and recompress, and the length of the `dataUri` it is carried as —
+and base64 puts a third between the last two. Every neighbouring field is
+unambiguous (`dataUri` is annotated, `intrinsic` is in pixels), so a consumer
+has no reason to suspect the one number it is most likely to show a user.
+
+That is not hypothetical: the §20 critic's F19 found `bytes` holding the decoded
+payload while three studio surfaces displayed it as the size of the asset, each
+a uniform 34% short, for as long as the field has existed. A one-line comment on
+the frozen contract would have prevented it.
+
+**What the lane built.** The contract as written, with `bytes` resolved to the
+inlined cost — `utf8Length(dataUri)`, the same measure `budgetAssets` takes —
+and the other two sizes carried in optional fields, `sourceBytes` and
+`decodedBytes` (D-L6-19). No field was renamed, retyped or removed, and the type
+is unchanged.
+
+**What a v2 contract should say.**
+
+```ts
+export interface MediaRef {
+  // …as frozen…
+  /** What this asset costs the artifact: utf8Length(dataUri), base64 included. */
+  bytes: number;
+  /** The file as supplied, before downscale or recompression. */
+  sourceBytes?: number;
+  /** The payload inside the data URI, after downscale and recompression. */
+  decodedBytes?: number;
+}
+```
+
+The comment is the whole of the objection. `bytes` is the number a seller is
+shown next to an image in a product whose defining constraint is total size; the
+contract should say, in the contract, that it is the size the image contributes.
+

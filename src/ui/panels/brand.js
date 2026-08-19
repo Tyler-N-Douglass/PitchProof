@@ -25,7 +25,10 @@ import {
   badge, button, checkbox, empty, field, notice, pair, pairs, rawBox, section, select, swatch, toolbar,
 } from '../components.js';
 import { formatMetric, formatPercent, formatRatio, humanize } from '../format.js';
-import { BRAND_GROUPS, LOW_CONFIDENCE, brandGroupEvidence, pairedRole, reviewedGroups, unreviewedBrandGroups } from '../model.js';
+import {
+  BRAND_GROUPS, LOW_CONFIDENCE, brandGroupEvidence, brandGroupIsStarterDefault, brandIsUntouched,
+  pairedRole, reviewedGroups, unreviewedBrandGroups,
+} from '../model.js';
 import { COLOR_ROLES, CONTRAST_AA_BODY, FOREGROUND_ROLES } from '../../core/contracts.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
 
@@ -126,6 +129,11 @@ function renderContrastFindings(findings) {
 function renderReviewGate(app, brand, pending) {
   const reviewable = pending.filter((entry) => brandGroupEvidence(brand, entry.group).hasContent);
   const empty = pending.filter((entry) => !brandGroupEvidence(brand, entry.group).hasContent);
+  // A group still holding the values every new project starts with has not been
+  // measured at all. Grouping it with genuinely low-confidence results would
+  // have the panel report a failed extraction where no extraction was run.
+  const starter = reviewable.filter((entry) => brandGroupIsStarterDefault(brand, entry.group));
+  const measured = reviewable.filter((entry) => !brandGroupIsStarterDefault(brand, entry.group));
 
   return section({
     title: 'Waiting for your review',
@@ -145,10 +153,20 @@ function renderReviewGate(app, brand, pending) {
         '. ',
         emptyAdvice(entry.group))))))
     : null,
-  reviewable.length
+  starter.length
     ? notice('warn', h('div', null,
-      h('p', null, `${reviewable.length === 1 ? 'One group is' : `${reviewable.length} groups are`} below the ${Math.round(LOW_CONFIDENCE * 100)}% confidence floor. The emit stays closed until each is reviewed.`),
-      h('ul', { class: 'st-review-list' }, reviewable.map((entry) => h('li', { [KEY_ATTR]: entry.group },
+      h('p', null, `${starter.length === 1 ? 'One group is' : `${starter.length} groups are`} still exactly what a new project starts with. Nothing has been extracted from their site and nothing has been entered by hand, which is what the 0% reads — it is “not measured”, not “measured and bad”. The emit stays closed until you have looked at ${starter.length === 1 ? 'it' : 'them'}, and what is on screen is not theirs until you make it so.`),
+      h('ul', { class: 'st-review-list' }, starter.map((entry) => h('li', { [KEY_ATTR]: entry.group },
+        h('strong', null, humanize(entry.group)),
+        ' — ',
+        brandGroupEvidence(brand, entry.group).describe,
+        ', as shipped. ',
+        starterAdvice(entry.group))))))
+    : null,
+  measured.length
+    ? notice('warn', h('div', null,
+      h('p', null, `${measured.length === 1 ? 'One group is' : `${measured.length} groups are`} below the ${Math.round(LOW_CONFIDENCE * 100)}% confidence floor. The emit stays closed until each is reviewed.`),
+      h('ul', { class: 'st-review-list' }, measured.map((entry) => h('li', { [KEY_ATTR]: entry.group },
         h('strong', null, humanize(entry.group)),
         ' — ',
         formatPercent(entry.confidence),
@@ -163,9 +181,29 @@ function renderReviewGate(app, brand, pending) {
       act: 'brand.review',
       arg: entry.group,
       checked: false,
-      hint: 'Marks this group reviewed. Editing a field does not review it — looking at it does.',
+      hint: brandGroupIsStarterDefault(brand, entry.group)
+        ? 'Marks this group reviewed. These are still the studio’s starting values, so ticking this accepts them as the brand the artifact will wear.'
+        : 'Marks this group reviewed. Editing a field does not review it — looking at it does.',
     })))
     : null);
+}
+
+/**
+ * What to do about a group that is still the shipped starting value. Distinct
+ * from `reviewAdvice`, which tells you how to check a *measurement*: there is
+ * no measurement here and no source to check one against.
+ * @param {string} group
+ * @returns {string}
+ */
+function starterAdvice(group) {
+  const advice = {
+    colors: 'Extract their site above, or type their hexes into the roles below. Until then the artifact would wear PitchProof’s navy, not theirs.',
+    faces: 'Extract their site above, or enter the families they actually use — the fallback stack is what decides whether headlines overflow.',
+    logos: 'Ask them for the SVG, or drop it with the saved page.',
+    shape: 'Set the radius, border and shadow from a real component on their site.',
+    imagery: 'Choose the treatment that matches what they publish.',
+  };
+  return advice[group] || 'Extract their site above, or enter it by hand below.';
 }
 
 /** @param {string} group @returns {string} */
@@ -330,6 +368,12 @@ function renderFaces(app, brand) {
       face.metricDelta && Math.abs(face.metricDelta.avgAdvance - 1) > 0.06
         ? notice('warn', `The fallback runs ${formatPercent(Math.abs(face.metricDelta.avgAdvance - 1), 1)} ${face.metricDelta.avgAdvance > 1 ? 'wider' : 'narrower'} than ${face.family || 'the requested face'}. That is the gap that overflows headlines after substitution — the sweep measures against the fallback, so run it before you rely on any layout.`)
         : null,
+      // Three dashes with no explanation read as a failed measurement. The
+      // delta is measured when a face is captured from a page; a face typed in
+      // by hand has never been compared against anything.
+      face.metricDelta
+        ? null
+        : h('p', { class: 'st-field-hint' }, 'No delta yet: it is measured when a face is read off a real page, by comparing that face against the fallback that would replace it. Extract their site to have it filled in — the rehearsal sweep measures overflow against the fallback either way.'),
       checkbox({
         label: 'I have a licence for this font file and may embed it',
         act: 'brand.setFaceEmbeddable',
@@ -430,6 +474,12 @@ function renderConfidence(app, brand, reviewed) {
     title: 'Confidence and review',
     subtitle: 'Computed from cluster separation, sample size and agreement across sources — never hardcoded (§7).',
   },
+  // Five bars reading 0% look like a broken extractor. On a project where no
+  // extraction has been attempted they mean the opposite: nothing has been
+  // measured, so there is nothing for a confidence to be about yet.
+  brandIsUntouched(brand)
+    ? notice('info', 'Nothing has been extracted or entered yet, so every group reads 0%. That is “not measured”, not “measured and found wrong” — extract their site above, or fill the fields in by hand.')
+    : null,
   h('div', { class: 'st-conf' }, BRAND_GROUPS.map((group) => {
     const value = Number(brand.confidence?.[group] ?? 0);
     const low = value < LOW_CONFIDENCE;
@@ -449,7 +499,11 @@ function renderConfidence(app, brand, reviewed) {
           arg: group,
           checked: isReviewed,
           disabled: !evidence.hasContent && !isReviewed,
-          hint: evidence.hasContent ? null : `Nothing to review — ${evidence.describe}.`,
+          hint: !evidence.hasContent
+            ? `Nothing to review — ${evidence.describe}.`
+            : brandGroupIsStarterDefault(brand, group)
+              ? 'Not measured — this is still the value a new project starts with.'
+              : null,
         })
         : badge('above the floor', 'ok'));
   })));
@@ -466,5 +520,7 @@ function renderOverrides(brand) {
   },
   overrides.length
     ? h('ul', { class: 'st-paths' }, overrides.map((path) => h('li', { class: 'st-mono', [KEY_ATTR]: path }, path)))
-    : empty('Nothing has been overridden. Everything here is as extracted.'));
+    : empty(brand.sourceUrl
+      ? 'Nothing has been overridden. Everything here is as extracted.'
+      : 'Nothing has been overridden — and nothing has been extracted either, so everything above is the value a new project starts with.'));
 }

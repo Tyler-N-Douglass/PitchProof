@@ -292,6 +292,10 @@ function paletteSpec(rgba, quality) {
  * depends on the ids alone and not on the order the carriers are passed in —
  * §17.6 needs the same project to dedupe to the same bytes every time.
  *
+ * `bytesSaved` and each group's `bytes` are inlined bytes — `MediaRef.bytes`,
+ * the data URI's own length — so the saving reported here is the saving §13's
+ * budget actually sees.
+ *
  * @param {any[]} carriers specimens and/or renditions
  * @returns {{carriers: any[], mapping: Record<string, string>, merged: number,
  *            bytesSaved: number, groups: {id: string, absorbed: string[], bytes: number}[]}}

@@ -58,7 +58,7 @@
  * `PromotionRecord` therefore carries **`recordIntact`**, which says what is
  * true. `signatureValid` remains as an alias with the identical value, because
  * L12's rendition panel and `src/validate/provenance.js`'s published typedef
- * already read it (see `docs/decisions/L7-recipes.md` D-L7-11); new code should
+ * already read it (see `docs/decisions/L7-recipes.md` D-L7-17); new code should
  * read `recordIntact`.
  *
  * `recordIntact === true` means exactly four things, and nothing else:
@@ -112,6 +112,36 @@
  * there is no floor to move; the guarantee this module actually offers is that
  * **nothing the tool itself does can produce an unearned `'verified-by-user'`**.
  *
+ * ---
+ *
+ * ## If you are re-implementing this reader, know these five things
+ *
+ * L10 found a second reader of this format in `src/validate/provenance.js` that
+ * did not recognise records `promoteProvenance` actually writes. It is being
+ * deleted in favour of this one. These are the parts a note-scraper gets wrong,
+ * written down so the next person does not have to rediscover them:
+ *
+ * 1. **`PROMOTION_RECORD_RE` is a `/g` regex, and `lastIndex` is shared state.**
+ *    It is exported because L10 and L11 asked for it, but `.test()` or `.exec()`
+ *    on it alternates between hit and miss across calls unless you reset
+ *    `lastIndex = 0` first, as `parsePromotionRecords` does. Prefer calling
+ *    `parsePromotionRecords`; if you must use the regex, reset it.
+ * 2. **`by` is base64url, not plain text.** A scraper looking for `by=Dana`
+ *    finds nothing; the record says `by=RGFuYQ`. Decoding can throw on a
+ *    corrupted record, which is caught here and reported as not intact.
+ * 3. **A record is only usable for the rendition it names.** `of` must equal
+ *    `rendition.id`. Validity is not a property of the line alone, so a reader
+ *    that takes a notes *string* rather than a *rendition* cannot answer the
+ *    question and will accept a record copied off another rendition.
+ * 4. **Records accumulate; the last one stands.** Re-promotion appends, and each
+ *    record's `from` names what it superseded. Reading the first match gives the
+ *    wrong promoter and the wrong `from` on any twice-promoted rendition.
+ * 5. **Invalid records are ignored by the readers and reported by
+ *    `verifyProvenance`.** That split is deliberate: a reader that threw on a
+ *    malformed record would let a hand-edited note break the whole preflight,
+ *    and one that silently dropped it would lose the finding. If you need the
+ *    reason a record did not count, call `verifyProvenance`, not the readers.
+ *
  * @module recipe/provenance
  */
 
@@ -122,6 +152,18 @@ import { PROVENANCE_VALUES, validateRendition } from '../core/contracts.js';
 
 /** Record format version. Bump only with L10 and L11. */
 export const PROMOTION_RECORD_VERSION = 1;
+
+/**
+ * The one honest sentence about `sig`, in a single place so no surface has to
+ * invent its own wording for it (finding F23). Any studio or preflight surface
+ * that shows a person the outcome of `recordIntact` should show this alongside
+ * it rather than paraphrasing.
+ */
+export const PROMOTION_RECORD_LIMIT =
+  'The promotion record is checked against itself, not against an authority. '
+  + 'PitchProof has no accounts and no server, so a valid record proves the line '
+  + 'has not been corrupted or partly edited — it does not prove that the person '
+  + 'named promoted anything.';
 
 /** Matches one promotion record anywhere in a notes string. */
 export const PROMOTION_RECORD_RE =
@@ -167,6 +209,12 @@ export function isIsoInstant(s) {
 
 /**
  * The digest that makes a truncated or hand-edited record detectable.
+ *
+ * **Unkeyed, and exported.** This is the whole of finding F23: any caller —
+ * including one hand-writing a record — can compute a `sig` that validates.
+ * See the module header for why no keyed alternative exists in a product with
+ * no backend and no accounts (§1.1.5), and what defends §22.6 instead.
+ *
  * @param {{v: number, by: string, at: string, of: string, from: string}} fields
  * @returns {string} 16 hex characters
  */
@@ -178,6 +226,12 @@ export function promotionSignature(fields) {
 
 /**
  * Serialize a promotion record.
+ *
+ * Exported for round-tripping and for the `LIMIT:` tests. It is **not** an
+ * authorisation: a record this produces validates wherever `of` matches, no
+ * matter who called it. `promoteProvenance` is the only function that attaches
+ * one to a rendition and moves its provenance.
+ *
  * @param {{by: string, at: string, of: string, from: string}} fields
  * @returns {string}
  */
@@ -197,11 +251,22 @@ export function formatPromotionRecord(fields) {
  * @property {string} of        rendition id the record was written for
  * @property {string} from      provenance held before promotion
  * @property {string} raw       the record exactly as it appeared
- * @property {boolean} signatureValid
+ * @property {boolean} recordIntact    the record recomputes against itself: known
+ *   version, real calendar `at`, decodable `by`, and a `sig` that matches. It
+ *   means the line has not been corrupted or partially edited — **not** that a
+ *   person promoted anything. See the module header, finding F23.
+ * @property {boolean} signatureValid  deprecated alias of `recordIntact`, kept
+ *   because L12's rendition panel and `src/validate/provenance.js`'s typedef
+ *   already read it. Always identical to `recordIntact`; the name overstates
+ *   what it knows, so read `recordIntact` in new code.
  */
 
 /**
- * Parse every promotion record in a notes string, valid or not.
+ * Parse every promotion record in a notes string, intact or not.
+ *
+ * Nothing here is filtered: a record whose digest fails is returned with
+ * `recordIntact: false` so `verifyProvenance` can report *why*.
+ *
  * @param {string|null|undefined} notes
  * @returns {PromotionRecord[]} source order
  */
@@ -216,6 +281,10 @@ export function parsePromotionRecords(notes) {
     const expected = promotionSignature({ v: Number(v), by, at, of, from });
     let decoded = '';
     try { decoded = unb64url(by); } catch { decoded = ''; }
+    const intact = expected === sig
+      && Number(v) === PROMOTION_RECORD_VERSION
+      && isIsoInstant(at)
+      && decoded !== '';
     out.push({
       version: Number(v),
       by: decoded,
@@ -223,22 +292,29 @@ export function parsePromotionRecords(notes) {
       of,
       from,
       raw,
-      signatureValid: expected === sig && Number(v) === PROMOTION_RECORD_VERSION && isIsoInstant(at) && decoded !== '',
+      recordIntact: intact,
+      // Deprecated alias. Same fact, misleading name; see the module header.
+      signatureValid: intact,
     });
   }
   return out;
 }
 
 /**
- * The valid promotion records carried by a rendition: signature intact, format
+ * The usable promotion records carried by a rendition: digest intact, format
  * version known, and written for *this* rendition.
+ *
+ * "Usable" is the honest word. It means the record is well-formed and bound to
+ * this rendition — not that its `by` names anyone real. See finding F23 in the
+ * module header.
+ *
  * @param {import('../core/contracts.d.ts').Rendition} rendition
  * @returns {PromotionRecord[]} oldest first
  */
 export function readPromotionRecords(rendition) {
   if (!rendition || typeof rendition !== 'object') return [];
   return parsePromotionRecords(rendition.notes)
-    .filter((r) => r.signatureValid && r.of === rendition.id);
+    .filter((r) => r.recordIntact && r.of === rendition.id);
 }
 
 /**
@@ -252,11 +328,14 @@ export function readPromotionRecord(rendition) {
 }
 
 /**
- * Does this rendition carry a promotion record that verifies against itself?
+ * Does this rendition carry an intact promotion record written for it?
  *
- * L10 and L11 call this to detect a hand-forged `'verified-by-user'`. A `true`
- * answer means a promotion was recorded; it does not mean the person named is
- * who they say they are — see the module header on `sig`.
+ * L10 and L11 call this to detect a `'verified-by-user'` with nothing behind
+ * it. **A `true` answer means a promotion was recorded** — it does not mean the
+ * person named exists, saw this rendition, or consented. This is the single
+ * gate downstream: `requiresProvenanceLabel` (L10), `PROVENANCE_UNLABELED`
+ * (L11) and `renditionsRequiringLabel` all turn on this boolean and none of
+ * them draws any further distinction from the digest. See finding F23.
  * @param {import('../core/contracts.d.ts').Rendition} rendition
  * @returns {boolean}
  */
@@ -444,10 +523,10 @@ export function verifyProvenance(rendition) {
   }
 
   const parsed = parsePromotionRecords(rendition.notes);
-  const valid = parsed.filter((r) => r.signatureValid && r.of === id);
+  const valid = parsed.filter((r) => r.recordIntact && r.of === id);
 
   for (const r of parsed) {
-    if (!r.signatureValid) out.push(`rendition ${id}: promotion record fails its signature — hand-edited or truncated`);
+    if (!r.recordIntact) out.push(`rendition ${id}: promotion record fails its signature — hand-edited or truncated`);
     else if (r.of !== id) out.push(`rendition ${id}: promotion record was written for ${r.of}, not this rendition`);
   }
 
@@ -463,6 +542,14 @@ export function verifyProvenance(rendition) {
 /**
  * The renditions in a proof whose provenance requires the artifact to carry a
  * visible label (§9, §18.1). L10 asserts a label node exists for each of these.
+ *
+ * Default-to-labelled: a rendition leaves this set only by being
+ * `'client-supplied'`, or by being `'verified-by-user'` **and** carrying an
+ * intact record. Both of those are assertions a person made about their own
+ * local model, and neither is authenticated — see finding F23. What this
+ * function guarantees is narrower and still worth having: nothing the tool
+ * itself produces can leave the set on its own.
+ *
  * @param {import('../core/contracts.d.ts').Rendition[]} renditions
  * @returns {import('../core/contracts.d.ts').Rendition[]}
  */

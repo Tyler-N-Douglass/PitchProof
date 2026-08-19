@@ -24,6 +24,15 @@
  * - **The promotion record format** is documented in `recipe/provenance.js` and
  *   in `docs/decisions/L7-recipes.md` D-L7-2. It is one line in `notes`:
  *   `[[pp-promotion:1;by=<base64url>;at=<iso>;of=<renditionId>;from=<provenance>;sig=<16 hex>]]`.
+ * - **`sig` is tamper-evidence, not authentication** (finding F23). It is an
+ *   unkeyed digest, and `promotionSignature`/`formatPromotionRecord` are on
+ *   this surface, so anyone with the repository can mint a record that passes.
+ *   `PromotionRecord.recordIntact` is the accurate name for the outcome;
+ *   `signatureValid` survives as an identical alias for L12 and L11, and
+ *   overstates what it knows. `PROMOTION_RECORD_LIMIT` is the sentence to show
+ *   a person next to either one. There is no backend and no account system to
+ *   key a real signature against (§1.1.5) — the module header in
+ *   `recipe/provenance.js` sets out why, and what defends §22.6 instead.
  * - **`assertNoAdapterSecrets(value)`** — proves an adapter key is absent from
  *   anything about to be serialised. Empty means clean.
  * - **`renditionsRequiringLabel(renditions)`** — the exact set the artifact must
@@ -39,7 +48,7 @@ export {
   hasPromotionRecord, readPromotionRecord, readPromotionRecords, parsePromotionRecords,
   formatPromotionRecord, promotionSignature, stripPromotionRecords, isIsoInstant,
   verifyProvenance, renditionsRequiringLabel, resolveProvenance, renditionId,
-  PROMOTION_RECORD_VERSION, PROMOTION_RECORD_RE,
+  PROMOTION_RECORD_VERSION, PROMOTION_RECORD_RE, PROMOTION_RECORD_LIMIT,
 } from './provenance.js';
 
 export {

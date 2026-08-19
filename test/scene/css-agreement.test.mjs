@@ -145,11 +145,19 @@ test('the provenance label takes its type from runtime.css, and this sheet does 
   assert.equal(runtime.decls['letter-spacing'], `${spec.letterSpacingEm}em`);
   assert.ok(Number(/(\d+)/.exec(runtime.decls['font-size'])[1]) >= 11, '§18.1 size floor');
 
-  // Nothing in this sheet may push the label towards invisibility.
+  // Nothing in this sheet may push the label towards invisibility — and that
+  // holds for *every* rule that reaches it, not only the one that positions it.
+  // The provenance ledger added a second such rule (L8-25); a ban written
+  // against a single selector would not have covered it.
   const ours = rule('.pp-scene .pp-provenance');
   assert.ok(ours, 'this sheet positions the label');
-  for (const banned of ['display', 'opacity', 'visibility', 'font-size', 'color', 'background']) {
-    assert.equal(ours.decls[banned], undefined, `.pp-scene .pp-provenance sets ${banned}`);
+  const reaching = RULES.filter((r) => r.selector.split(',')
+    .some((sel) => /(^|[\s>+~])\.pp-provenance(\s|$|[.:[])/.test(`${sel.trim()} `)));
+  assert.ok(reaching.length >= 1, 'no rule in this sheet touches the label');
+  for (const r of reaching) {
+    for (const banned of ['display', 'opacity', 'visibility', 'font-size', 'color', 'background']) {
+      assert.equal(r.decls[banned], undefined, `${r.selector} sets ${banned} on the provenance label`);
+    }
   }
 });
 

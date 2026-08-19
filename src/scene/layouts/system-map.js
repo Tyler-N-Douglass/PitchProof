@@ -35,7 +35,7 @@ import { MAP_DESIGN } from '../geometry.js';
 import { styleForRole } from '../type-scale.js';
 import { renderedFamily } from '../brand-access.js';
 import {
-  sceneHead, provenanceLabel, emptyState,
+  sceneHead, provenanceLabel, emptyState, URL_LABEL_BUDGET,
   specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger,
 } from '../parts.js';
 
@@ -87,9 +87,7 @@ export function systemMap(ctx) {
   // *map node* gives it rather than against the panel-column budget in
   // parts.js — two lines of 172 design units, not one line of a 320px column.
   const nodeInnerW = MAP.nodeW - MAP.nodePad * 2;
-  const urlBudget = labelBudget('mapNodeMeta', nodeInnerW, MAP.metaLines, ctx.brand)
-    - (ctx.specimen && ctx.specimen.locale ? String(ctx.specimen.locale).length + 5 : 0);
-  const sourceMeta = specimenMeta(ctx.specimen, { urlBudget: Math.max(8, urlBudget) })
+  const sourceMeta = fitSourceMeta(ctx.specimen, nodeInnerW, ctx.brand)
     || (ctx.specimen ? ctx.specimen.kind : 'no specimen attached');
   const transformLabel = ctx.scene.subhead ? String(ctx.scene.subhead) : 'Transformation';
   const recipeCount = new Set(rends.map((r) => r.recipeId).filter(Boolean)).size;
@@ -353,30 +351,47 @@ function mapStyle(role, brand) {
 }
 
 /**
- * How many characters of a label a map node can hold across all of its lines.
+ * The source node's meta line, elided until the node can actually hold it.
  *
- * `URL_LABEL_BUDGET` in parts.js is sized for a panel meta line — a 320px
- * column at 10px in a monospace face. A map node is 172 design units wide and
- * gives its meta two lines, which is a different and much smaller budget, and
- * eliding a URL against the column's number is what left the map's meta line
- * running past its node with nothing on screen to say so. This is the map's own
- * number, computed from the map's own geometry.
- * @param {string} role
- * @param {number} maxUnits
- * @param {number} maxLines
+ * `URL_LABEL_BUDGET` in parts.js is a character count sized for a panel meta
+ * line — a 320px column at 10px in a monospace face. A map node is 172 design
+ * units wide with two lines to spend, a fifth of that, and eliding a URL
+ * against the column's number left the map with a label it could only cut. In
+ * SVG a cut is silent: there is no clamp and no ellipsis, so the line simply
+ * stopped and the presenter could not tell a short URL from a truncated one.
+ *
+ * The budget is not estimated from an average advance, because it is not an
+ * average that decides: the wrap breaks at hyphens and slashes, so a label of
+ * 46 characters may take two lines or three depending on where its breaks fall.
+ * This asks the real line breaker and shortens until it stops truncating —
+ * deterministic, bounded, and exact for the label in hand.
+ *
+ * @param {import('../../core/contracts.d.ts').Specimen|null} specimen
+ * @param {number} maxUnits   the node's inner width, in design units
  * @param {import('../../core/contracts.d.ts').BrandSystem} brand
- * @returns {number}
+ * @returns {string|null}
  */
-export function labelBudget(role, maxUnits, maxLines, brand) {
-  const style = mapStyle(role, brand);
-  // A representative advance rather than a per-character sum: the budget is a
-  // character count handed to an eliding function, and the elision is checked
-  // by the wrap that follows it.
-  const sample = 'n.example/equipment-heat-exchangers';
-  const perChar = measureText(sample, style) / sample.length;
-  if (!(perChar > 0)) return 0;
-  return Math.max(8, Math.floor((maxUnits * maxLines) / perChar) - 1);
+export function fitSourceMeta(specimen, maxUnits, brand) {
+  if (!specimen) return null;
+  let budget = URL_LABEL_BUDGET;
+  let label = specimenMeta(specimen, { urlBudget: budget });
+  if (!label) return null;
+  // Two characters a step, down to a floor that still shows a host and a slug.
+  while (budget > MIN_URL_BUDGET) {
+    if (!wrap(label, 'mapNodeMeta', maxUnits, MAP.metaLines, brand).truncated) return label;
+    budget -= 2;
+    // Not `break` on an unchanged label: `displayUrl`'s structural elision
+    // (host/…/slug) already sits below several budgets in a row, and stopping
+    // at the first repeat would stop before the budget ever bit.
+    const next = specimenMeta(specimen, { urlBudget: budget });
+    if (!next) break;
+    label = next;
+  }
+  return label;
 }
+
+/** The shortest a source label may be elided to before it stops being one. */
+export const MIN_URL_BUDGET = 12;
 
 /**
  * A cubic from the transform node's edge to an output node's edge. Curves

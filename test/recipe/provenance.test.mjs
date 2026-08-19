@@ -16,6 +16,7 @@ import {
   readPromotionRecord, readPromotionRecords, parsePromotionRecords, formatPromotionRecord,
   promotionSignature, stripPromotionRecords, isIsoInstant, verifyProvenance,
   renditionsRequiringLabel, resolveProvenance, PROMOTION_RECORD_VERSION,
+  PROMOTION_RECORD_LIMIT,
 } from '../../src/recipe/index.js';
 import { validateRendition } from '../../src/core/contracts.js';
 import { retailSpecimen } from '../fixtures/recipe/specimens.mjs';
@@ -239,4 +240,98 @@ test('identical inputs produce identical rendition ids; provenance and notes do 
   assert.equal(make({ provenance: 'client-supplied' }).id, make().id);
   assert.notEqual(make({ label: 'fr-FR' }).id, make().id);
   assert.notEqual(make({ producedBy: 'manual-paste' }).id, make().id);
+});
+
+/* -------------------------------------------------------------------------
+ * Finding F23 — the limit of `sig`, demonstrated rather than asserted.
+ *
+ * The tests above prove what the record *catches*. These prove what it does
+ * not, because a limit stated only in a comment is a limit nobody checks. Each
+ * one describes an attack that **succeeds**, and each one is here so that a
+ * future change which quietly claims to have fixed it has to face a red test.
+ * ---------------------------------------------------------------------- */
+
+test('LIMIT: a hand-forged record with a correctly computed digest validates', () => {
+  // No call to `promoteProvenance`. Everything below is a forger with a copy of
+  // the repository and a text editor: mint the line, staple it to the notes,
+  // flip the provenance by hand.
+  const base = make();
+  const forgedLine = formatPromotionRecord({
+    by: 'Nobody Who Exists', at: AT, of: base.id, from: 'illustrative',
+  });
+  const forged = { ...base, provenance: 'verified-by-user', notes: forgedLine };
+
+  const record = readPromotionRecord(forged);
+  assert.ok(record, 'the forged record parses');
+  assert.equal(record.recordIntact, true, 'and its digest recomputes — this is the limit');
+  assert.equal(record.by, 'Nobody Who Exists', 'naming anyone at all');
+  assert.equal(hasPromotionRecord(forged), true, 'so the downstream gate opens');
+  assert.deepEqual(verifyProvenance(forged), [], 'and nothing in the model objects');
+  assert.deepEqual(renditionsRequiringLabel([forged]), [], 'so the artifact renders it unlabelled');
+});
+
+test('LIMIT: promotionSignature is unkeyed — a digest can be computed from the record alone', () => {
+  const fields = { v: PROMOTION_RECORD_VERSION, by: 'Zm9yZ2Vy', at: AT, of: 'rd_0123456789ab', from: 'illustrative' };
+  const sig = promotionSignature(fields);
+  const byHand = `[[pp-promotion:${fields.v};by=${fields.by};at=${fields.at};of=${fields.of};from=${fields.from};sig=${sig}]]`;
+
+  const [parsed] = parsePromotionRecords(byHand);
+  assert.equal(parsed.recordIntact, true, 'no secret is needed to produce a record that validates');
+  assert.equal(parsed.by, 'forger');
+  // There is no second value to compare against: the digest is a function of
+  // the record's own fields and nothing else.
+  assert.equal(sig, promotionSignature({ ...fields }));
+});
+
+test('LIMIT: the digest is not the weakest link — client-supplied suppresses the label with no record at all', () => {
+  // Forging a promotion record takes six fields and a hash. Forging the label
+  // away takes one word. Hardening the digest would not move this floor.
+  const relabelled = { ...make(), provenance: 'client-supplied' };
+  assert.equal(hasPromotionRecord(relabelled), false, 'no record involved');
+  assert.deepEqual(verifyProvenance(relabelled), [], 'and a template-produced rendition may legitimately be client-supplied');
+  assert.deepEqual(renditionsRequiringLabel([relabelled]), [], 'yet the visible label is gone');
+});
+
+test('recordIntact is the accurate name and signatureValid is its alias, always equal', () => {
+  const good = promoteProvenance(make(), { by: 'Dana', at: AT });
+  const bad = { ...good, notes: good.notes.replace(/sig=[0-9a-f]{16}/, 'sig=0000000000000000') };
+
+  for (const rendition of [good, bad]) {
+    for (const record of parsePromotionRecords(rendition.notes)) {
+      assert.equal(
+        record.signatureValid, record.recordIntact,
+        'the alias must never drift from the field it aliases',
+      );
+    }
+  }
+  assert.equal(parsePromotionRecords(good.notes)[0].recordIntact, true);
+  assert.equal(parsePromotionRecords(bad.notes)[0].recordIntact, false);
+});
+
+test('PROMOTION_RECORD_LIMIT states the limit without claiming authentication', () => {
+  assert.equal(typeof PROMOTION_RECORD_LIMIT, 'string');
+  assert.ok(PROMOTION_RECORD_LIMIT.length > 80, 'a real sentence, not a label');
+  assert.match(PROMOTION_RECORD_LIMIT, /does not prove/);
+  assert.doesNotMatch(
+    PROMOTION_RECORD_LIMIT, /\bauthentic|\bsigned by\b|\bproves that\b/i,
+    'the honest sentence must not itself overstate',
+  );
+});
+
+test('the guarantee that survives F23: no L7 code path produces an unearned verified-by-user', () => {
+  // What is left after the forgery above is still worth stating precisely.
+  // Every route through this module either refuses the value or writes a real
+  // record for it; only editing the model by hand gets around that.
+  assert.equal(make({ provenance: 'verified-by-user' }).provenance, 'illustrative');
+  assert.equal(resolveProvenance('verified-by-user', 'manual-paste'), 'illustrative');
+  assert.equal(resolveProvenance('client-supplied', 'adapter'), 'illustrative');
+
+  const smuggled = make({
+    notes: formatPromotionRecord({ by: 'Dana', at: AT, of: 'rd_0123456789ab', from: 'illustrative' }),
+  });
+  assert.equal(smuggled.notes, null, 'buildRendition strips a record arriving in caller notes');
+
+  const honest = promoteProvenance(make(), { by: 'Dana', at: AT });
+  assert.equal(honest.provenance, 'verified-by-user');
+  assert.equal(readPromotionRecord(honest).by, 'Dana');
 });

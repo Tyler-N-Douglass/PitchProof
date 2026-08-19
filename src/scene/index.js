@@ -28,7 +28,7 @@ export { sceneVars, GEOM, TYPE_ROLES, BP_IDS, BP_QUERY, geom, cssRoleName, scene
 export { styleForRole, textRoles } from './type-scale.js';
 export { alignColumns, alignPair, signatureOf } from './align.js';
 export { renderBlock, renderBlocks, blockBody, summarize, firstOfType, headingRole } from './blocks.js';
-export { faceFor, colorFor, logoFor, neutralBrand, DEFAULT_STACKS } from './brand-access.js';
+export { faceFor, colorFor, logoFor, neutralBrand, availableFamilies, renderedFamily, DEFAULT_STACKS } from './brand-access.js';
 export { splitBeforeAfter } from './layouts/split-before-after.js';
 export { fanOut } from './layouts/fan-out.js';
 export { stack } from './layouts/stack.js';

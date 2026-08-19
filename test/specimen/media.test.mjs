@@ -329,7 +329,9 @@ test('§8 a PNG over 2400px is downscaled to a max edge of 2400, with accurate i
 
   const parsed = parseDataUri(ref.dataUri);
   assert.equal(parsed.mime, 'image/png');
-  assert.equal(ref.bytes, parsed.bytes, 'bytes is the real byte count of what was inlined');
+  assert.equal(ref.bytes, Buffer.byteLength(ref.dataUri, 'utf8'),
+    'bytes is what the asset costs the artifact: the inlined data URI itself');
+  assert.equal(ref.decodedBytes, parsed.bytes, 'decodedBytes is the payload inside that URI');
   const decoded = decodePng(base64Decode(parsed.body));
   assert.deepEqual([decoded.width, decoded.height], [2400, 1200], 'intrinsic describes the inlined image');
 });
@@ -392,7 +394,11 @@ test('§8 a JPEG is passed through unchanged and reported as not resized, so L10
   assert.equal(ref.recompressed, false);
   assert.equal(ref.needsDownscale, true, 'the emitter is told this asset is still over budget');
   assert.equal(ref.resizeSkipped, 'jpeg-no-encoder');
-  assert.equal(ref.bytes, jpeg.length, 'the bytes are the original bytes');
+  assert.equal(ref.decodedBytes, jpeg.length, 'the payload is the original bytes');
+  assert.equal(ref.sourceBytes, jpeg.length, 'and nothing was done to the source');
+  assert.equal(ref.bytes, Buffer.byteLength(ref.dataUri, 'utf8'),
+    'but what it costs the artifact is the base64 of them, which is larger');
+  assert.ok(ref.bytes > ref.decodedBytes);
   assert.deepEqual(Array.from(base64Decode(parseDataUri(ref.dataUri).body)), Array.from(jpeg));
   assert.equal(parseDataUri(ref.dataUri).mime, 'image/jpeg');
   assert.equal(ref.quality, null, 'no quality is claimed for an image that was not recompressed');
@@ -426,7 +432,8 @@ test('an SVG is inlined as text, with scripts and external references flagged fo
   assert.deepEqual(ref.intrinsic, { w: 48, h: 24 });
   assert.ok(ref.notes.includes('svg:script'));
   assert.ok(ref.notes.includes('svg:external-reference'));
-  assert.equal(ref.bytes, svg.length);
+  assert.equal(ref.decodedBytes, svg.length);
+  assert.equal(ref.bytes, Buffer.byteLength(ref.dataUri, 'utf8'));
 });
 
 test('identical assets collapse to one MediaRef that remembers every name it arrived under', () => {

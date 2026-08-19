@@ -73,7 +73,9 @@ export function renderProjectPanel(app) {
         h('span', null, 'Local storage'),
         h('span', { class: 'st-mono' }, pressure.quota
           ? `${formatBytes(pressure.usage)} of ${formatBytes(pressure.quota)} (${Math.round((pressure.ratio || 0) * 100)}%)`
-          : `${formatBytes(pressure.usage)} used · this browser will not report a quota`)),
+          : pressure.measured
+            ? `${formatBytes(pressure.usage)} used · this browser would not report a quota`
+            : `${formatBytes(pressure.usage)} used · reading the quota`)),
       meter({
         ratio: pressure.ratio || 0,
         tone: pressure.level === 'critical' ? 'bad' : pressure.level === 'warn' ? 'warn' : 'ok',

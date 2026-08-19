@@ -17,7 +17,7 @@
  */
 
 import { contentHash } from '../core/hash.js';
-import { brandGroupEvidence, unreviewedBrandGroups } from './model.js';
+import { brandGroupEvidence, brandGroupIsStarterDefault, unreviewedBrandGroups } from './model.js';
 
 /**
  * @typedef {object} Blocker
@@ -34,6 +34,19 @@ export const BRAND_GROUP_PHRASE = {
   logos: 'The logo assets',
   shape: 'The shape language',
   imagery: 'The imagery treatment',
+};
+
+/**
+ * The verb and pronoun each phrase takes. Three of the five groups are plural
+ * and two are singular, and a blocker that reads "The shape language are
+ * empty" is a sentence a seller reports as a bug in a product that is working.
+ */
+export const BRAND_GROUP_GRAMMAR = {
+  colors: { verb: 'are', it: 'them' },
+  faces: { verb: 'are', it: 'them' },
+  logos: { verb: 'are', it: 'them' },
+  shape: { verb: 'is', it: 'it' },
+  imagery: { verb: 'is', it: 'it' },
 };
 
 /**
@@ -105,17 +118,32 @@ export function emitBlockers(app) {
   for (const entry of unreviewedBrandGroups(proof.brand)) {
     const evidence = brandGroupEvidence(proof.brand, entry.group);
     const phrase = BRAND_GROUP_PHRASE[entry.group] || entry.group;
-    blockers.push(evidence.hasContent
-      ? {
-        kind: 'BRAND_UNREVIEWED',
-        message: `${phrase} came out ${Math.round(entry.confidence * 100)}% confident (${evidence.describe}). §7 holds a low-confidence brand field out of an emit until somebody has looked at it — check it against the source and mark it reviewed.`,
-        where: 'brand',
-      }
-      : {
+    const g = BRAND_GROUP_GRAMMAR[entry.group] || { verb: 'is', it: 'it' };
+    if (!evidence.hasContent) {
+      blockers.push({
         kind: 'BRAND_EMPTY',
-        message: `${phrase} are empty — ${evidence.describe}. There is nothing here to review, so nothing can be signed off: extract them, or enter them by hand.`,
+        message: `${phrase} ${g.verb} empty — ${evidence.describe}. There is nothing here to review, so nothing can be signed off: extract ${g.it}, or enter ${g.it} by hand.`,
         where: 'brand',
       });
+    } else if (brandGroupIsStarterDefault(proof.brand, entry.group)) {
+      // 0% here does not mean "extraction ran and could not tell". It means
+      // nothing has been extracted and nothing has been entered, so what is on
+      // screen is the studio's own starting value — not the prospect's. Saying
+      // it "came out 0% confident" and asking for it to be checked "against the
+      // source" describes a measurement that never happened, against a source
+      // that does not exist.
+      blockers.push({
+        kind: 'BRAND_DEFAULTS',
+        message: `${phrase} ${g.verb} still the ${evidence.describe} every new project starts with — nothing has been extracted from their site and nothing has been entered by hand, which is why the confidence reads 0%. Extract their brand, or set ${g.it} yourself, before signing ${g.it} off as theirs.`,
+        where: 'brand',
+      });
+    } else {
+      blockers.push({
+        kind: 'BRAND_UNREVIEWED',
+        message: `${phrase} came out ${Math.round(entry.confidence * 100)}% confident (${evidence.describe}). §7 holds a low-confidence brand field out of an emit until somebody has looked at it — check ${g.it} against the source and mark ${g.it} reviewed.`,
+        where: 'brand',
+      });
+    }
   }
 
   if (!app.services.has('emit')) {

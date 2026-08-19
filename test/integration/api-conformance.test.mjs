@@ -285,15 +285,39 @@ test('no lane reaches into another lane past its published surface', async (t) =
     ui: ['index.js'],
   };
 
+  // The one exception, named rather than waved through.
+  //
+  // `validate/index.js` reaches `emit/scan.js` and `emit/provenance.js` through
+  // this bridge. Importing them through `emit/index.js` instead pulls
+  // `emit/emit.js` into the graph, and since L10's §14 gate now imports
+  // `validate/index.js` — which is what lets `emit()` run L11's actual rules
+  // rather than a second copy of them — that closes a cycle the bundler refuses
+  // outright (D3: it refuses what it will not silently mis-compile).
+  //
+  // So the deep import is load-bearing, not lazy. It is pinned to exactly these
+  // two modules from exactly this file: any *other* deep import into `emit`, or
+  // this one growing a third module, is a violation again.
+  const ALLOWED_DEEP = {
+    'src/validate/lane-emit.js': {
+      modules: ['../emit/scan.js', '../emit/provenance.js'],
+      reason: 'breaks the emit -> validate -> emit cycle the bundler refuses (D17, L10-D8)',
+    },
+  };
+
   /** @type {string[]} */
   const violations = [];
+  /** @type {Set<string>} */
+  const exceptionsUsed = new Set();
   for (const lane of Object.keys(published)) {
     for (const file of walk(join(ROOT, 'src', lane))) {
+      const rel = file.slice(ROOT.length + 1).split('\\').join('/');
       const src = readFileSync(file, 'utf8');
       for (const m of src.matchAll(/from\s+['"](\.\.\/([a-z-]+)\/[^'"]+)['"]/g)) {
         const [, spec, target] = m;
         if (target === lane || target === 'core' || target === 'runtime') continue;
         if (!published[target]) continue;
+        const allowed = ALLOWED_DEEP[rel];
+        if (allowed && allowed.modules.includes(spec)) { exceptionsUsed.add(`${rel} ${spec}`); continue; }
         const tail = spec.split('/').slice(2).join('/');
         if (!published[target].includes(tail)) {
           violations.push(`${file.slice(ROOT.length + 1)} imports ${spec} — ${target} publishes only ${published[target].join(', ')}`);
@@ -305,6 +329,17 @@ test('no lane reaches into another lane past its published surface', async (t) =
     return t.skip(`cross-lane imports to reconcile at integration:\n  ${violations.join('\n  ')}`);
   }
   assert.deepEqual(violations, [], violations.join('\n'));
+
+  // An exception nobody uses any more is an exception that has stopped being
+  // load-bearing, and a list of those is how this check rots into a permission
+  // slip. Each one must still be needed, and must still carry its reason.
+  for (const [file, entry] of Object.entries(ALLOWED_DEEP)) {
+    assert.ok(entry.reason && entry.reason.length > 20, `${file}'s deep-import exception has no reason worth the name`);
+    for (const spec of entry.modules) {
+      assert.ok(exceptionsUsed.has(`${file} ${spec}`),
+        `${file} no longer imports ${spec}; remove the exception rather than leaving the door open`);
+    }
+  }
 });
 
 /**

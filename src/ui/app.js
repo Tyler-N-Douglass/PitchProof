@@ -101,7 +101,10 @@ export class StudioApp extends Emitter {
       /** @type {string[]} action ids currently running */
       busy: [],
       projects: [],
-      pressure: { level: 'ok', usage: 0, quota: 0, ratio: 0 },
+      // `measured` separates "the estimate has not been read yet" from "the
+      // browser was asked and would not say". Both render as a missing quota,
+      // and only the second is a fact about the browser.
+      pressure: { level: 'ok', usage: 0, quota: 0, ratio: 0, measured: false },
       save: { status: 'idle', at: null, error: null, revision: 0 },
       settings: { proxyBase: '', adapterEndpoint: '', adapterKey: '', operator: '' },
       /** @type {{findings: any[], at: string|null, running: boolean, error: string|null}} */
@@ -322,7 +325,7 @@ export class StudioApp extends Emitter {
   reportPressure(pressure) {
     if (!pressure) return;
     const before = this.ui.pressure.level;
-    this.ui.pressure = pressure;
+    this.ui.pressure = { ...pressure, measured: true };
     if (pressure.level === 'ok' || pressure.level === before) return;
     const pct = Math.round((pressure.ratio || 0) * 100);
     this.notify(
@@ -336,7 +339,8 @@ export class StudioApp extends Emitter {
   async refreshProjects() {
     if (!this.store) return;
     this.ui.projects = await this.store.list();
-    try { this.ui.pressure = await this.store.pressure(); } catch { /* an unknown quota is not an error */ }
+    try { this.ui.pressure = { ...await this.store.pressure(), measured: true }; }
+    catch { /* an unknown quota is not an error */ }
   }
 
   /** Read the per-machine settings out of the meta store. */

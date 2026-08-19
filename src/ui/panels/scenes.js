@@ -145,7 +145,7 @@ function renderScene(app, scene, at) {
         r.label || '(unnamed)',
         r.provenance === 'illustrative' ? h('span', { class: 'st-chip-flag' }, 'illustrative') : null);
       }))
-      : h('p', { class: 'st-field-hint' }, 'No renditions exist yet. Paste one in Recipes.')),
+      : h('p', { class: 'st-field-hint' }, 'No renditions exist yet. Paste one in Recipes, or run a seed recipe there against a captured specimen.')),
 
   h('div', { class: 'st-field' },
     h('span', { class: 'st-field-label' }, `Branches offered here · ${(scene.branchAnchors || []).length}`),

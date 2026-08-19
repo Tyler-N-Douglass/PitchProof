@@ -8,14 +8,14 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { bundle, parseModule, BundleError } from '../../scripts/lib/bundler.mjs';
 import { scan, BANNED, jsFiles } from '../../scripts/lint-determinism.mjs';
-import { buildAll, jsStringLiteral, cssFiles, concatCss } from '../../scripts/build.mjs';
+import { buildAll, jsStringLiteral, cssFiles, concatCss, sourceFingerprint, SRC } from '../../scripts/build.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -135,9 +135,35 @@ test('the whole build is deterministic across two runs', () => {
   const a = buildAll();
   const b = buildAll();
   assert.deepEqual([...a.outputs.keys()].sort(), [...b.outputs.keys()].sort());
-  for (const [name, contents] of a.outputs) {
-    assert.equal(contents, b.outputs.get(name), `${name} differs between builds`);
+
+  // Two `buildAll()` calls that disagree have two very different explanations:
+  // the build is not a pure function of its inputs, or somebody wrote to `src/`
+  // between them. During a parallel lane build the second is overwhelmingly the
+  // likelier — and that is exactly the circumstance in which the first must not
+  // be waved away, so the two are separated rather than guessed at.
+  const differing = [...a.outputs.keys()].filter((name) => a.outputs.get(name) !== b.outputs.get(name));
+  if (differing.length && a.fingerprint !== b.fingerprint) {
+    assert.fail(
+      `src/ changed while this test ran, so ${differing.join(', ')} describe two different working trees. `
+      + 'This is not a determinism result either way — re-run on a quiet tree.');
   }
+  assert.deepEqual(differing, [], `${differing.join(', ')} differ between two builds of identical sources`);
+});
+
+test('the source fingerprint moves when a source moves, and not otherwise', () => {
+  assert.equal(sourceFingerprint(), sourceFingerprint());
+  assert.match(sourceFingerprint(), /^[0-9a-f]{64}$/);
+
+  const probe = join(SRC, '__fingerprint-probe.css');
+  assert.ok(!existsSync(probe), 'the probe path is already taken');
+  const before = sourceFingerprint();
+  writeFileSync(probe, '/* probe */\n');
+  try {
+    assert.notEqual(sourceFingerprint(), before, 'adding a source file did not move the fingerprint');
+  } finally {
+    rmSync(probe, { force: true });
+  }
+  assert.equal(sourceFingerprint(), before, 'removing the probe did not restore the fingerprint');
 });
 
 test('embedded source strings cannot break out of a script element', () => {

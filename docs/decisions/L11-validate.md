@@ -318,7 +318,14 @@ is the same seam the integrator uses.
 
 ---
 
-## L11-D7 — `hasPromotionRecord` is L11's, not imported from L7
+## L11-D7 — ~~`hasPromotionRecord` is L11's, not imported from L7~~ (superseded by L11-D19)
+
+> **Reversed.** The premise below — "`API.md` does not declare a reader on L7's
+> surface" — stopped being true: `API.md` Part 5 now declares
+> `hasPromotionRecord`, `verifyProvenance`, `renditionsRequiringLabel` and
+> `PROMOTION_RECORD_RE` on `recipe/index.js`, for exactly this purpose. The
+> decision below was acted on for one round, the two readers disagreed in
+> production, and L11-D19 records the correction. Kept for the record.
 
 **Unsettled by:** §9 makes `promoteProvenance` the only route to
 `verified-by-user` and says it records who and when. `API.md` does not declare a
@@ -574,3 +581,234 @@ would "overflow", burying the real findings.
 asserts every measured scene produces at least one box and that every box has a
 positive container. A layout that measures nothing fails there, by name, instead
 of producing a hundred meaningless overflow findings.
+
+---
+
+## L11-D19 — There is one reader of the promotion record, and it is L7's
+
+**Defect:** L10-D9, reported against the previous round. **Supersedes L11-D7.**
+
+**Unsettled by:** §9 makes `promoteProvenance` the only route to
+`verified-by-user` and says it records who promoted it and when. It does not say
+who owns the *reader*.
+
+**What was wrong.** `src/validate/provenance.js` carried its own reader, and
+`runPreflight` defaulted to it. L7 writes a delimited, signed record —
+`[[pp-promotion:1;by=…;at=…;of=…;from=…;sig=…]]`, frozen in
+`docs/decisions/L7-recipes.md` D-L7-2 — and L11's regex was looking for an
+English sentence ("promoted … by X at YYYY-MM-DD"). The two never matched. A
+rendition promoted the only supported way therefore drew a **severity-1**
+`PROVENANCE_UNLABELED` from preflight, so the studio disabled the emit button on
+an honest proof, while `emit()` — which reads the record with L7's function —
+accepted the same proof without complaint. Two readers of one format, disagreeing,
+with the stricter one in front of the seller.
+
+**Decision.** Deleted. `src/validate/lane-recipe.js` bridges to
+`recipe/index.js` the way `lane-brand.js` and `lane-scene.js` bridge to L4 and
+L8, and `validate/provenance.js` re-exports `hasPromotionRecord` and
+`readPromotionRecord` from it. `promotionRecord` stays as a named L11 export
+because callers use it, but it is now `readPromotionRecord` underneath and
+returns L7's record shape — the same object L10's `promotionRecord` returns.
+`deps.hasPromotionRecord` survives as an injection seam; nothing has to be
+injected any more for preflight and the emitter to agree, and L10 can drop the
+injection from its equivalence test.
+
+**Why.** §4's point is that lanes talk through contracts, and a second
+implementation of a format another lane owns needs a stronger justification than
+"the reader was not declared". The reader is declared now. Beyond the drift: the
+old reader was *more permissive in the wrong direction* — it accepted a sentence
+anyone could type into `Rendition.notes`, which is precisely the forgery L7's
+signature exists to make hard, and which `buildRendition` strips on the way in.
+Deferring to L7 is both the safer reading and the smaller surface.
+
+**Regression.** `test/validate/provenance.test.mjs` builds the record by calling
+`promoteProvenance` rather than by writing a string that imitates it, asserts
+L11, L10 and L7 all read it, asserts the English sentence is *not* accepted, and
+asserts preflight's default answer is identical to the answer with L10's reader
+injected.
+
+---
+
+## L11-D20 — `DUPLICATE_SCENE`'s content fingerprint is over structural paths, not element ids
+
+**Defect:** reported by the integrator after L10 read the same symptom as a
+`buildScene({id})` bug. It is not one: the id override works, which is exactly
+why the fingerprint missed.
+
+**Unsettled by:** §14 lists `DUPLICATE_SCENE` and §4 says `Beat.reveals` holds
+element ids. Nothing says what makes two scenes "the same scene".
+
+**What was wrong.** The rule has two halves. The id half — one scene id in more
+than one place — worked. The content half hashed
+`{layout, headline, subhead, specimenId, renditionIds, beats: reveals}` and
+could never fire, because `elementId(sceneId, path)` mixes the scene id into
+every reveal id. Two scenes that are duplicates in every visible way always hold
+different reveal ids, so they always fingerprinted differently; the only scenes
+whose reveals matched were scenes sharing an id, which the first half already
+caught. Dead code, and the corpus `DUPLICATE_SCENE` plant went undetected.
+
+**Decision.** The fingerprint is over what the room sees: layout, headline,
+subhead, specimen, renditions, and the *shape* of the beats — how many, in what
+order, and which structural elements each one reveals. The structure is
+recoverable, and this is the part worth stating plainly: `elementId` is one-way,
+but the path vocabulary is not a secret. It is whatever the layout passed to
+`ctx.el()`. `revealPathIndex` (in `preflight.js`) renders every scene once with
+`el` set to the identity, collects the paths in document order, and maps
+`elementId(scene.id, path)` back to each. `beatShape` then relabels every reveal
+as `@<path>`, keeping beat order and sorting within a beat, because a beat
+reveals its elements together but the order of the beats is the telling.
+
+Three consequences worth naming:
+
+- The index is **deck-wide, not per scene**. A scene deep-copied rather than
+  rebuilt keeps the ids of the scene it was copied from; looking those up across
+  the deck resolves them to the paths they name, so both kinds of duplicate — the
+  rebuilt twin and the copy-paste — reduce to the same shape. Ids are content
+  hashes of `{sceneId, path}`, so a lookup landing on another scene's entry means
+  the two genuinely name the same path.
+- An id **no scene renders** — a stale reveal, or one typed by hand — falls back
+  to the ordinal of its first appearance in that scene's own beats. Still
+  id-free, so two scenes carrying the same structural mistake still fingerprint
+  alike, and no scene id ever reaches the hash.
+- Beats did **not** have to be dropped from the fingerprint, so the question the
+  integrator flagged does not arise. Presenter notes and dwell hints are left
+  out: they are the presenter's script, not what the audience sees, and a seller
+  who reworded a note has not made it a different scene.
+
+**Why this and not something looser.** Dropping beats entirely would have made
+the fingerprint `{layout, headline, subhead, specimen, renditions}`, which reads
+"a rebuilt scene is a duplicate of the hand-staged one it replaced" — false, and
+noisy on any proof where a scene was re-planned. The control proof stages its
+opening scene in two beats where `buildScene` would stage three; a test pins that
+those two are *not* duplicates.
+
+**Regression.** `test/integration/corpus-plants.test.mjs`'s `DUPLICATE_SCENE`
+plant now detects, unchanged. In-lane: two `buildScene` twins under different
+ids are caught, a deep copy carrying its original's ids is caught, a twin whose
+beats are restaged into one is not, and a rebuild of a differently-staged scene
+is not.
+
+---
+
+## L11-D21 — `ASSET_MISSING` accepts an SVG logo as markup **or** as a data URI
+
+**Defect:** L10-D10.
+
+**Unsettled by:** nothing — §4 settles it, and the rule disagreed with §4.
+
+**What was wrong.** §4 documents `LogoAsset.data` as "inline SVG markup or data
+URI" for **either** `kind`. The rule required `kind: 'svg'` to be literal markup
+and reported `data:image/svg+xml,…` as a missing asset at **severity 1** — a
+refusal to emit a proof the contract permits, which is the most expensive false
+positive a severity-1 rule can have.
+
+**Decision.** Built against the contract as written (§4 requires that of a lane
+that disagrees, and here the lane does not disagree). `logoPayloadUsable`
+accepts, for `kind: 'svg'`, either inline markup containing an `<svg` element or
+a parseable data URI. Two refinements, both about payloads with nothing in them
+rather than about form:
+
+- A data URI that **declares** `image/svg+xml` and decodes to something with no
+  `<svg` element in it is still reported. `data:image/svg+xml,` is as empty as
+  `''`, and the check that catches empty inline markup should catch it too rather
+  than waving it through on the strength of the `data:` prefix.
+- A data URI of some **other** type on a `kind: 'svg'` logo is accepted. A PNG
+  payload under an `svg` kind is a mislabelled kind, not a missing asset, and
+  `ASSET_MISSING` is not the code for it. §4 gives no code that is; recorded here
+  rather than smuggled in under this one.
+
+`kind: 'raster'` still requires a data URI: inline SVG markup is not a raster
+image, whatever the field's documentation permits in general.
+
+**Why.** No dispute is filed, because there is nothing to dispute — the contract
+is right and the rule was wrong. A severity-1 finding is an unoverridable refusal
+(§14), and the bar for one is that the proof is genuinely unshippable.
+
+**Regression.** `test/validate/rules.test.mjs` runs the clean proof with its logo
+in all three legal forms — inline, percent-encoded data URI, base64 data URI —
+and asserts silence, then runs four empty payloads and asserts one finding each.
+
+---
+
+## L11-D22 — A scene anchoring a branch that does not exist is `ASSET_MISSING`, at severity 2
+
+**Defect:** F20, from the §20 critique's severity-3 tail.
+
+**Unsettled by:** §11 and §14 describe coverage from the branch's side — a branch
+nothing anchors. Neither says anything about the mirror image: a scene whose
+`branchAnchors` names a branch that is not in the proof. `branchCoverage` reports
+the first; nothing reported the second, at any severity.
+
+**Decision.** Reported by the `ASSET_MISSING` rule, at **severity 2**, once per
+scene that names the missing branch.
+
+**Why this code.** §4's fourteen codes are closed, so this had to join an
+existing one. `ASSET_MISSING` already owns "a scene references something that is
+not in the proof" — it reports exactly that for `scene.specimenId` and for each
+of `scene.renditionIds`. A branch anchor is the third member of that set and the
+rule's `inspects` line now says so. `BRANCH_UNREACHABLE` was the alternative and
+is wrong twice over: it is about a branch, and there is no branch here.
+
+**Why severity 2 and not 1**, against the integrator's reading that this is
+§22.4 stranding. It is not, and the difference is checkable: `buildDeck` filters
+`branchAnchors` against the sequences that exist, so a ghost anchor produces no
+affordance, no key and no navigation target in the artifact. Nobody is offered
+anything, so nobody is stranded — the test asserts the filtering directly, so
+this justification fails loudly if the deck ever stops doing it. What *is* wrong
+is real but smaller: the model claims this scene offers a branch, the studio's
+scene panel and inspector count it when they say how many branches a scene
+offers, and the objection the anchor was placed for now has no way in from that
+scene. That is a warning. Severity 1 blocks emit with no override (§14), and the
+bar for that is a proof that would misrepresent the client or break in the room;
+this breaks neither.
+
+**Regression.** `test/validate/branch.test.mjs` asserts the deck filters the
+ghost and that `branchCoverage` therefore says nothing, then asserts preflight
+produces exactly one finding, its code, its severity and its locus.
+
+---
+
+## L11-D23 — `BRANCH_UNREACHABLE` stays severity 2, and says what the branch costs
+
+**Defect:** F21, from the §20 critique's severity-3 tail. The critic's objection
+was "non-blocking is defensible; shipping unreachable scenes silently is not."
+
+**Unsettled by:** §14 lists the code and §11 defines the condition. Neither says
+what the emitter should do with a branch that has no way in.
+
+**Decision, in two parts.**
+
+*Severity stays 2.* A branch with no anchor and no jump-index entry is a
+tidiness problem: the deck presents correctly, nobody is stranded, and the client
+sees nothing wrong. §14 makes severity 1 an unoverridable refusal, and
+`emit()` now runs this whole rule set, so choosing 1 here would mean a seller
+with an untidy project cannot ship at all. That is a worse outcome than the one
+it prevents.
+
+*The silence does not stay.* The message now says the branch's scenes ship
+anyway, quotes an estimate of what they cost, and names both ways out — the
+auto-fix that makes it reachable, and deleting it, which is the only thing that
+takes the weight out of the file. `branchShipCost` estimates it the way
+`SIZE_BUDGET_EXCEEDED` estimates the whole: the branch's scene JSON after
+compression, plus media belonging to specimens and renditions **nothing else in
+the deck shows**. Shared media is excluded rather than double-counted — removing
+the branch would not recover it, so billing the branch for it would be a number
+the seller cannot act on. A branch with no scenes is billed nothing and the
+message says so.
+
+**Why not have the emitter drop them.** It was the obvious alternative and it is
+L10's call, not mine, so I have reported it upward rather than reaching across
+the boundary. My recommendation is against: an emitter that silently deletes
+authored content is a worse failure than one that ships it with a warning — the
+seller who anchored a branch and then broke the anchor gets a file missing an
+answer they thought they had prepared, and nothing tells them. §13's degradation
+report exists because even *recompressing* an image is something the seller has
+to be told about; deleting scenes is a larger act than that and deserves at least
+the same. Reporting is enough because the finding is actionable in both
+directions and the cost is now on the screen.
+
+**Regression.** `test/validate/branch.test.mjs` pins the severity, the scene
+count, a non-zero cost, the "ships anyway" and "delete it" halves of the message,
+and the auto-fix; a hollow branch is asserted to be billed zero; and
+`branchShipCost` is asserted to exclude media the spine also shows.
+

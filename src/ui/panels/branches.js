@@ -41,7 +41,7 @@ export function renderBranchesPanel(app) {
     renderCreate(app, branches, coverage),
     renderList(app, branches, selected, coverage),
     selected ? renderBranch(app, selected, coverage) : null,
-    renderJumpTest(app, deck));
+    renderJumpTest(app, branches, deck));
 }
 
 /**
@@ -220,16 +220,55 @@ function renderReturnTarget(app, branch, coverage) {
 }
 
 /**
+ * Why the jump box cannot be typed into yet, in the words of whatever is
+ * actually true — or `null` when it can.
+ *
+ * There are three different reasons this box can be inert and they are not
+ * interchangeable. §18 is a section about a tool not misstating what it knows,
+ * and the studio misstating its *own* capability is the worst version of that:
+ * a seller who reads "not wired into this build" beside the product's headline
+ * interaction stops using the feature (CRITIQUE-1 F22). An empty index is an
+ * empty collection, not a broken system, and it says so.
+ *
+ * @param {any} app
+ * @param {any[]} branches
+ * @param {any} deck
+ * @param {any} index
+ * @returns {string|null}
+ */
+function jumpUnavailableReason(app, branches, deck, index) {
+  if (!app.services.has('branch')) {
+    return 'The branch lane (src/branch/index.js) did not load in this build, so no index can be built here. '
+      + 'Nothing else on this panel is affected — branches, aliases and return policies are all still editable.';
+  }
+  if (!branches.length) {
+    return 'No branches yet, so there is nothing for the index to find. '
+      + 'Create one above and its objection and every alias on it become searchable here, and by / on stage.';
+  }
+  if (!deck) {
+    return 'The index is built over the whole deck, and there is no deck until the spine has at least one scene. '
+      + 'Add a scene in Scenes and this box starts answering.';
+  }
+  if (!index) {
+    return 'The branch lane could not build an index from this deck. That is a defect rather than an empty state — '
+      + 'run the rehearsal sweep, which checks branch reachability against the same deck.';
+  }
+  return null;
+}
+
+/**
  * Test the jump index the presenter will actually type into. §11 sets the bar:
  * three characters of "approvals" lands in the approval-chain branch in under a
  * second.
  * @param {any} app
+ * @param {any[]} branches
  * @param {any} deck
  */
-function renderJumpTest(app, deck) {
+function renderJumpTest(app, branches, deck) {
   const query = String(app.draft('branch.jumpQuery', ''));
   const index = deck ? app.services.buildJumpIndex(deck) : null;
-  const results = index && query ? app.services.searchJump(index, query) : [];
+  const reason = jumpUnavailableReason(app, branches, deck, index);
+  const results = !reason && query ? app.services.searchJump(index, query) : [];
 
   return section({
     title: 'Jump index',
@@ -237,10 +276,11 @@ function renderJumpTest(app, deck) {
   },
   field({
     label: 'Try a query', act: 'branch.jumpTest', value: query,
-    placeholder: 'app', key: 'jump-query',
-    hint: index ? 'Fuzzy over objection text and aliases.' : 'The branch lane builds this index; it is not wired into this build.',
+    placeholder: reason ? '' : 'app', key: 'jump-query',
+    disabled: !!reason,
+    hint: reason || `Fuzzy over objection text and aliases. ${plural(branches.length, 'branch', 'branches')} in the index.`,
   }),
-  query
+  !reason && query
     ? (results.length
       ? h('ol', { class: 'st-jump-results' }, results.map((r) => h('li', { class: 'st-jump-result', [KEY_ATTR]: r.branchId },
         h('button', {

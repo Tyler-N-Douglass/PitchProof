@@ -190,7 +190,7 @@ const assetMissing = {
   code: 'ASSET_MISSING',
   severity: severityOf('ASSET_MISSING'),
   title: 'Missing asset',
-  inspects: 'every media block reference, media data URI, logo payload, and every scene reference to a specimen or rendition',
+  inspects: 'every media block reference, media data URI, logo payload, and every scene reference to a specimen, a rendition or a branch',
   autoFixable: true,
   run(ctx) {
     const { proof, deck } = ctx;
@@ -250,8 +250,20 @@ const assetMissing = {
       }));
     }
 
+    const branchIds = new Set((proof.branches || []).map((b) => b.id));
     for (const { scene, branchId } of allScenes(proof)) {
       const reachable = !deck || deck.sceneLocator.has(scene.id);
+      for (const anchored of scene.branchAnchors || []) {
+        if (branchIds.has(anchored)) continue;
+        out.push(makeFinding({
+          code: 'ASSET_MISSING',
+          severity: 2,
+          locus: { sceneId: scene.id, branchId: branchId || undefined },
+          key: `scene-anchor:${scene.id}:${anchored}`,
+          message: `Scene ${scene.id} anchors branch "${anchored}", which is not in the proof. The deck drops an anchor that names nothing, so the artifact offers no key for it — but the objection this scene was meant to answer now has no way in from here, and the studio still counts the anchor when it says how many branches the scene offers. Remove the anchor, or restore the branch it names.`,
+          detail: { sceneId: scene.id, branchId: anchored, kind: 'branch-anchor' },
+        }));
+      }
       if (scene.specimenId && !specimenById.has(scene.specimenId)) {
         out.push(makeFinding({
           code: 'ASSET_MISSING',
@@ -394,25 +406,102 @@ const contrastFail = {
   },
 };
 
+/**
+ * Roughly what an unreachable branch still costs the artifact.
+ *
+ * §14 makes `BRANCH_UNREACHABLE` a warning, and it should stay one — a branch
+ * with no way in is a tidiness problem, not a deck that breaks in front of the
+ * room. But the emitter ships its scenes regardless: the copy, the specimens and
+ * the inlined media all go into the file and all count against §13's byte
+ * budget, and until now nothing told the seller that is what they were paying
+ * for. This is the number the message quotes (L11-D23).
+ *
+ * Two parts, estimated the same way `SIZE_BUDGET_EXCEEDED` estimates the whole:
+ * the branch's own scene JSON after compression, and the media belonging to
+ * specimens and renditions **nothing else in the deck shows**. Media shared with
+ * a reachable scene is not a cost of the branch — removing the branch would not
+ * recover it — so it is left out rather than double-counted.
+ *
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @param {import('../core/contracts.d.ts').Branch} branch
+ * @returns {{sceneCount: number, modelBytes: number, mediaBytes: number, totalBytes: number, exclusiveSources: string[]}}
+ */
+export function branchShipCost(proof, branch) {
+  const scenes = (branch && branch.scenes) || [];
+  if (scenes.length === 0) {
+    return { sceneCount: 0, modelBytes: 0, mediaBytes: 0, totalBytes: 0, exclusiveSources: [] };
+  }
+  const modelBytes = utf8Length(JSON.stringify(scenes)) * MODEL_COMPRESSION_ESTIMATE;
+
+  /** @type {Set<string>} */
+  const mine = new Set();
+  /** @type {Set<string>} */
+  const elsewhere = new Set();
+  for (const { scene, branchId } of allScenes(proof)) {
+    const into = branchId === (branch && branch.id) ? mine : elsewhere;
+    if (scene.specimenId) into.add(scene.specimenId);
+    for (const id of scene.renditionIds || []) into.add(id);
+  }
+  const exclusive = [...mine].filter((id) => !elsewhere.has(id)).sort();
+
+  const owners = new Map();
+  for (const specimen of proof.specimens || []) owners.set(specimen.id, specimen);
+  for (const rendition of proof.renditions || []) owners.set(rendition.id, rendition);
+
+  let media = 0;
+  for (const id of exclusive) {
+    const owner = owners.get(id);
+    for (const m of (owner && owner.media) || []) media += mediaBytes(m) * BASE64_EXPANSION;
+  }
+
+  return {
+    sceneCount: scenes.length,
+    modelBytes: Math.round(modelBytes),
+    mediaBytes: Math.round(media),
+    totalBytes: Math.round(modelBytes + media),
+    exclusiveSources: exclusive,
+  };
+}
+
+/** Bytes at a scale a seller reads at a glance. */
+export function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}MB`;
+  if (n >= 1000) return `${Math.round(n / 1000)}KB`;
+  return `${Math.round(n)} bytes`;
+}
+
 /** @type {Rule} */
 const branchUnreachable = {
   code: 'BRANCH_UNREACHABLE',
   severity: severityOf('BRANCH_UNREACHABLE'),
   title: 'Branch with no way in',
-  inspects: '§11 coverage: every branch, for an anchoring scene or a jump-index entry',
+  inspects: '§11 coverage: every branch, for an anchoring scene or a jump-index entry, and what its scenes cost the artifact if neither exists',
   autoFixable: true,
   run(ctx) {
     const coverage = ctx.deps.branchCoverage(ctx.deck);
     const byId = new Map((ctx.proof.branches || []).map((b) => [b.id, b]));
     return sortFindings((coverage.unreachable || []).map((branchId) => {
       const branch = byId.get(branchId);
+      const cost = branchShipCost(ctx.proof, branch || { id: branchId, scenes: [] });
+      const ships = cost.sceneCount === 0
+        ? 'It has no scenes, so it costs the artifact nothing.'
+        : `Its ${cost.sceneCount === 1 ? 'scene ships' : `${cost.sceneCount} scenes ship`} in the artifact anyway — the emitter drops nothing the model declares — at an estimated ${formatBytes(cost.totalBytes)} against the byte budget${cost.mediaBytes > 0 ? `, ${formatBytes(cost.mediaBytes)} of it media nothing else in the deck shows` : ''}. That is weight the client downloads to reach content no key opens.`;
       return makeFinding({
         code: 'BRANCH_UNREACHABLE',
         locus: { branchId },
         key: `unreachable:${branchId}`,
         autoFixAvailable: true,
-        message: `Branch "${branch ? branch.objection || branchId : branchId}" has no anchoring scene and no jump-index entry, so no key the presenter can press reaches it. Give it the objection in the client's words (which puts it in the jump index), or anchor it to the scene where that objection lands.`,
-        detail: { branchId, objection: branch ? branch.objection : null, sceneCount: branch ? (branch.scenes || []).length : 0 },
+        message: `Branch "${branch ? branch.objection || branchId : branchId}" has no anchoring scene and no jump-index entry, so no key the presenter can press reaches it. ${ships} Give it the objection in the client's words (which puts it in the jump index), or anchor it to the scene where that objection lands — auto-fix offers it from the opening scene. If it is not worth presenting, delete it: nothing else removes it from the file.`,
+        detail: {
+          branchId,
+          objection: branch ? branch.objection : null,
+          sceneCount: cost.sceneCount,
+          shippedBytes: cost.totalBytes,
+          shippedModelBytes: cost.modelBytes,
+          shippedMediaBytes: cost.mediaBytes,
+          exclusiveSources: cost.exclusiveSources,
+        },
       });
     }));
   },
@@ -824,7 +913,7 @@ const duplicateScene = {
   code: 'DUPLICATE_SCENE',
   severity: severityOf('DUPLICATE_SCENE'),
   title: 'Duplicate scene',
-  inspects: 'every scene id across the spine and every branch, and every scene\'s content fingerprint',
+  inspects: 'every scene id across the spine and every branch, and every scene\'s visible content — layout, copy, specimen, renditions and the shape of its beats',
   autoFixable: false,
   run(ctx) {
     const { proof } = ctx;
