@@ -9,7 +9,8 @@
     "test": "node --test --test-concurrency=4 \"test/**/*.test.mjs\"",
     "verify:offline": "node scripts/verify-offline.mjs",
     "verify:determinism": "node scripts/lint-determinism.mjs",
-    "verify": "node scripts/lint-determinism.mjs && npm test && node scripts/build.mjs --verify-repeat && node scripts/verify-offline.mjs"
+    "verify": "node scripts/lint-determinism.mjs && INTEGRATION_STRICT=1 node --test \"test/**/*.test.mjs\" && node scripts/build.mjs --verify-repeat && node scripts/verify-offline.mjs",
+    "verify:conformance": "INTEGRATION_STRICT=1 node --test test/integration/api-conformance.test.mjs"
   },
   "devDependencies": {
     "playwright": "^1.56.1"

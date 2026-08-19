@@ -39,6 +39,7 @@ extension fields or encoded records, which §4 permits.
 | 14 | L11 | `FIXED_SEVERITY` | Pins three of the fourteen codes and says nothing about the other eleven, though §14 forbids lowering any of them | L11 publishes all fourteen in one table, load-time-checked against `FIXED_SEVERITY` |
 | 15 | L10 | `TypeFace.embeddable` | Nowhere to carry the font file the flag asserts rights over | L5's optional `fontFile`/`rightsAssertion`; `deps.fonts` at emit |
 | 16 | L10 | `EmitResult` | No field for what could **not** be degraded | Reported in `degradations` with a reason |
+| 16b | L12 | `BrandSystem` | No field for §7's "who reviewed this brand group, and when", which the low-confidence review gate needs | Optional `reviewedGroups` |
 
 ## Against `API.md` (the integration surface, not the frozen contracts)
 
@@ -64,12 +65,16 @@ integrator's document, not a frozen contract.
 | 31 | L10 | D10's allowlist | Makes an outbound link in the prospect's **own content** a severity-1 refusal — right rule, arguably wrong section | Built as written; a rendered `cta` href is refused |
 | 32 | L10 | D10's allowlist | `mailto:` and `tel:` are refused, and probably should not be — neither reaches a network | Built as written |
 | 33 | L10 | — | The artifact composition root was unowned by any lane | Resolved: `src/artifact.js`, DECISIONS D19 |
+| 34 | L12 | L6 `restoreBlock` | Declared, but not the field it restores *from* | L6 publishes `stripped[]`; now declared |
+| 35 | L12 | L5 `classifyImagery` | No declared surface builds the `ImageSample`s it needs, so the studio cannot classify imagery at all | Held by the §7 review gate as `unknown`/0% rather than guessed — a documented gap |
+| 36 | L12 | L3 `ingestFiles` | The studio's real need for drop-dispatch, published only as a lane extension | Now declared |
 
 ## Defects found in already-frozen code, and closed
 
 | # | Found by | Where | What | Closed |
 |---|---|---|---|---|
 | D1 | L9's return-stack property test | `src/runtime/nav.js` (L2) | `exitedFrom` recorded one return frame where `returnPolicy: 'nextSpineScene'` unwinds the whole stack, so stepping back left the stack floored on a branch and the next return threw — the §22.4 stranding case | `ec1dd38`; DECISIONS D18. L9 removed its fence and replaced its pin with a regression test |
+| D5 | L12 | `scripts/build.mjs` | `buildStudio` filled its markers with `String.replace` and a *string* replacement, which expands `$'`, `$&` and `` $` `` — and three bundled sources legitimately contain them. Each `$'` spliced the whole remainder of the document into a string literal, so `dist/pitchproof-studio.html` parsed with a syntax error and rendered its own "bundle did not load" fallback. **The primary deliverable did not run while 1608 tests were green** | `d3f8189`; DECISIONS D23. `test/integration/studio.test.mjs` now opens the built file in a browser |
 | D2 | L9's overlay work | `src/runtime/keymap.js` (L2) | `ArrowUp`/`ArrowDown` resolved to `prevScene`/`nextScene` while a text field had focus, so arrowing through the jump results also walked the presentation behind the overlay | Fixed: while typing, only `whileTyping` bindings resolve, which is Escape alone. L9's capture-phase interception is now the outer of two defences rather than the only one |
 | D3 | L10's `verify-offline.mjs` | `src/core/vdom.js` (L1) and `src/runtime/host.js` (L2) | `value` was set with `setAttribute`, which sets a form control's *default*, and `mount` rebuilt the subtree on every repaint — so the jump index re-rendered per keystroke with its caret at 0 and a presenter typing `appr` got `rppa`, matching nothing. §11's named interaction did not work at all | `db31f4c`; DECISIONS D22 |
 | D4 | L11's real-lane bridge | `src/emit/provenance.js` (L10) | `assertProvenance` kept only the *last* subtree carrying a `data-pp-rendition`, and `splitBeforeAfter` marks three — so every illustrative rendition in a split scene was falsely reported unlabelled at severity 1, blocking the emit on a correct proof | Fixed by L10, unioning across scopes |

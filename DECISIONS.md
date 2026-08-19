@@ -423,8 +423,9 @@ and indexes the rest rather than copying them.
 | L3 Ingest | `docs/decisions/L3-ingest.md` | 20 |
 | L10 Emitter | `docs/decisions/L10-emit.md` | 23 |
 | L11 Validate | `docs/decisions/L11-validate.md` | 14 |
+| L12 Studio UI | `docs/decisions/L12-ui.md` | 13 |
 
-162 lane decisions in total, alongside the 22 cross-cutting ones here.
+175 lane decisions in total, alongside the 23 cross-cutting ones here.
 
 **Why.** A lane's reasoning is most useful next to the code it explains, and
 flattening six documents into one would have lost the attribution that makes a
