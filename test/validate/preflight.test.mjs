@@ -68,6 +68,61 @@ test('a defect inside a branch is found by the sweep', async () => {
   assert.ok(inBranch.length > 0, 'an overflow inside a branch is still an overflow in front of the client');
 });
 
+test("L8's measurement declares a truncation mode, which the grading turns on", () => {
+  const proof = cleanProof();
+  const measurements = measureDeck(proof, buildDeck(proof), BREAKPOINTS, resolveDeps({}));
+  const boxes = measurements.flatMap((m) => m.boxes);
+  assert.ok(boxes.length > 0);
+  for (const box of boxes) {
+    assert.ok(
+      box.textOverflow === 'clip' || box.textOverflow === 'ellipsis',
+      `every measured box must declare how it truncates; ${box.role} declares ${JSON.stringify(box.textOverflow)}`,
+    );
+  }
+  // The one-line clamp the layouts put under every panel title ellipsises, which
+  // is what makes a long URL a warning rather than a blocked emit.
+  const clamped = boxes.filter((b) => b.maxLines === 1);
+  assert.ok(clamped.length > 0, 'the layouts must still be emitting one-line clamps');
+  assert.ok(clamped.every((b) => b.textOverflow === 'ellipsis'));
+});
+
+test("the prospect's own URL and title do not block the emit §20-F6", async () => {
+  // The critic's reproduction: a real source URL and a real page title, both
+  // rendered by `splitBeforeAfter` into one-line clamped rows, both far past
+  // their containers at sm. §18.3 presents the prospect's content unmodified, so
+  // there is nothing the seller can shorten — and the rows ellipsise by design.
+  const proof = copy(cleanProof());
+  proof.specimens[0].sourceUrl = 'https://www.northwind-industrial.example/insights/fouling-resistant-heat-exchangers';
+  proof.specimens[0].title = 'Fouling-resistant heat exchangers for continuous process lines | Northwind Industrial';
+
+  const findings = await preflight(proof);
+  const overflow = findings.filter((f) => f.code === 'TEXT_OVERFLOW');
+  assert.ok(overflow.length > 0, 'the overflow is real and must still be reported');
+  assert.deepEqual(
+    overflow.filter((f) => f.severity === 1).map((f) => f.message),
+    [],
+    'but nothing about it may refuse the emit',
+  );
+  assert.ok(overflow.every((f) => f.detail.textOverflow === 'ellipsis'));
+  assert.equal(summarize(findings).canEmit, true, 'the layout the before/after thesis rests on must stay emittable');
+});
+
+test('a clipping box carrying the same overflow does block', async () => {
+  const proof = copy(cleanProof());
+  proof.specimens[0].sourceUrl = 'https://www.northwind-industrial.example/insights/fouling-resistant-heat-exchangers';
+  const findings = await preflight(proof, {
+    // The same measurement with the truncation mode taken away: identical text,
+    // identical geometry, and the text now disappears with no signal.
+    measureScene: (scene, ctx, bp) => {
+      const m = resolveDeps({}).measureScene(scene, ctx, bp);
+      return { ...m, boxes: m.boxes.map((b) => ({ ...b, textOverflow: 'clip' })) };
+    },
+  });
+  const blocking = findings.filter((f) => f.code === 'TEXT_OVERFLOW' && f.severity === 1);
+  assert.ok(blocking.length > 0, 'text cut with no signal is the §22.2 defect and must block');
+  assert.ok(blocking.every((f) => f.detail.textOverflow === 'clip'));
+});
+
 // ---------------------------------------------------------------------------
 // Injected time and injected dependencies
 // ---------------------------------------------------------------------------

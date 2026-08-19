@@ -316,3 +316,70 @@ they do not measure whether it destroys content that resembles furniture. The
 adversarial page caught three real false negatives on its first run, which
 produced D-L6-11. A corpus that only ever agrees with the implementation is a
 number, not a test.
+
+---
+
+## D-L6-17 — Importer-supplied blocks have their media refs rewritten to captured ids
+
+**Unsettled by:** §6.5 has the `.docx`/`.pptx`/PDF importers produce
+`ContentBlock[]` directly, and §8 has this lane inline media as data URIs. What
+neither says is who reconciles the two namespaces: an importer's `media` block
+references its own part name (`word/media/image1.png`, `page001-Im1.png`), while
+`captureMedia` mints `md_…` ids.
+
+**Decision.** `buildSpecimen` runs importer-supplied blocks through
+`resolveBlockMedia(blocks, media)`, which resolves each `ref` against the
+captured assets by exact name, basename, relative form and percent-decoded
+form, and rewrites it to the `MediaRef` id. A ref that resolves to nothing keeps
+its original value, is flagged `unresolved: true`, and is listed on
+`specimen.mediaUnresolved` and by `unresolvedMediaRefs(specimen)`.
+
+**Why.** The §20 critic (F4, severity 1) found that without this, every `.docx`
+or PDF containing an image produced a specimen whose image was inlined *and*
+unreachable — three severity-1 `ASSET_MISSING` findings from two corpus
+documents, which blocks emit outright. The HTML path had always resolved refs
+during blockification; the importer path silently did not, and nothing asserted
+that a block's `ref` names a `MediaRef` of its own specimen. That assertion now
+exists for all three importer paths (`.docx`, PDF, image) in
+`test/specimen/media-refs.test.mjs`.
+
+---
+
+## D-L6-18 — Media is deduplicated twice: at capture through a ledger, and after the fact by an explicit pass
+
+**Unsettled by:** §13 requires the emitter to budget aggressively against
+`maxBytes`; nothing says who is responsible for the same bytes being inlined
+once per specimen.
+
+**Decision.** Two entry points, because a project can arrive either way.
+
+- **`MediaLedger`**, an optional `options.ledger` on `buildSpecimen` /
+  `captureMedia`. One ledger per project: the second and later captures of the
+  same bytes reuse the first `MediaRef` whole — same id, same data URI — and
+  skip the re-encode. It counts `hits` and `bytesSaved`.
+- **`dedupeMedia(carriers)`**, a pass over anything shaped
+  `{media, blocks}` — specimens and renditions together — for projects whose
+  specimens were captured independently. It groups by **inlined data URI**,
+  keeps the lexicographically smallest id in each group, rewrites every `media`
+  block (including `stripped[].blocks`, so restoring a stripped block cannot
+  reintroduce a dead ref) and returns `{carriers, mapping, merged, bytesSaved,
+  groups}`.
+
+Grouping is on the data URI, not the source digest, because what costs bytes in
+the artifact is what was inlined: two captures of one photograph at different
+scales are genuinely two assets. The surviving id is chosen from the ids alone,
+so the result does not depend on the order carriers are passed in — §17.6 needs
+the same project to dedupe to the same bytes every time. `alt` text and source
+names differ per page, so the survivor keeps the first non-empty `alt` and
+records the rest in `altVariants`, with `absorbedIds` naming what it replaced;
+a merge that quietly dropped a page's alt text would be an invisible content
+change (§18.3).
+
+**Why.** The §20 critic (F12) measured 67% of the media payload as byte-identical
+duplicates on the fixture corpus — five duplicate groups, 13,428 wasted bytes of
+20,142 — which both inflates the artifact and makes §13's degradation report
+double-count. On the corpus this collapses 12 `MediaRef`s to 3 distinct sets of
+bytes, saving 11,481 of 15,308 bytes. Deduping at capture is the cheaper path
+and also avoids redundant PNG encoding; the explicit pass exists because the
+studio imports pages on different days and the emitter must be able to fix a
+project it did not capture.

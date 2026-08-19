@@ -23,7 +23,7 @@
 import { countWords, validateSpecimen } from '../core/contracts.js';
 import { contentId } from '../core/ids.js';
 import { parseHtml } from '../ingest/index.js';
-import { blocksWithTrace, repairHeadingLevels, unrepairHeadingLevels } from './blocks.js';
+import { blocksWithTrace, repairHeadingLevels, resolveBlockMedia, unrepairHeadingLevels } from './blocks.js';
 import { classifyChrome, dropNonRendered } from './chrome.js';
 import {
   attrOf, bodyOf, byTag, childrenOf, cloneTree, elements, firstElement, isText,
@@ -31,7 +31,7 @@ import {
 } from './dom.js';
 import { inferKindWithEvidence } from './kind.js';
 import { detectLocale, localeSignals } from './locale.js';
-import { captureMedia, MAX_EDGE } from './media.js';
+import { captureMedia, dedupeMedia, MAX_EDGE } from './media.js';
 
 /**
  * Page metadata: title, description, canonical, lang and the Open Graph and
@@ -120,7 +120,7 @@ function firstHeading(blocks) {
  * @param {{kind?: string, imageQuality?: number, clock?: () => string,
  *          idMinter?: {next: (kind: string) => string}, siblings?: any[],
  *          maxEdge?: number, repairHeadings?: boolean, parseHtml?: (html: string) => any,
- *          strip?: boolean, strict?: boolean}} [options]
+ *          strip?: boolean, strict?: boolean, ledger?: import('./media.js').MediaLedger}} [options]
  * @returns {import('../core/contracts.d.ts').Specimen}
  */
 export function buildSpecimen(capture, options = {}) {
@@ -141,7 +141,7 @@ export function buildSpecimen(capture, options = {}) {
     const hint = hints.get(a.name) || hints.get(String(a.name || '').split('/').pop()) || null;
     return { ...a, alt: a.alt !== undefined ? a.alt : (hint ? hint.alt : null) };
   });
-  const media = captureMedia(assets, { imageQuality, maxEdge, idMinter: minter });
+  const media = captureMedia(assets, { imageQuality, maxEdge, idMinter: minter, ledger: options.ledger });
 
   // --- blocks and chrome -------------------------------------------------
   /** @type {any[]} */
@@ -154,12 +154,23 @@ export function buildSpecimen(capture, options = {}) {
   let chromeRoot = null;
   let chromeSiblingPages = 0;
   /** @type {string[]} */
+  let mediaUnresolved = [];
+  /** @type {string[]} */
   let chromeNotes = [];
 
   if (Array.isArray(capture.blocks) && capture.blocks.length > 0) {
     // Document and image importers hand over blocks directly; there is no page
     // chrome in a `.docx`, and inventing some would be worse than none.
-    blocks = capture.blocks.map((b) => ({ ...b }));
+    //
+    // Their media blocks still reference the importer's own part names
+    // (`word/media/image1.png`, `page001-Im1.png`), so the refs are rewritten
+    // to the ids `captureMedia` minted for those exact bytes. Without this the
+    // image is inlined in the proof and unreachable from the block that shows
+    // it, which is a severity-1 ASSET_MISSING on every `.docx` or PDF that
+    // contains a picture.
+    const resolved = resolveBlockMedia(capture.blocks, media);
+    blocks = resolved.blocks;
+    mediaUnresolved = resolved.unresolved;
     blockPositions = blocks.map((_, i) => i);
     locator = 'importer';
   } else if (doc) {
@@ -272,6 +283,7 @@ export function buildSpecimen(capture, options = {}) {
       notes: chromeNotes,
     },
     headingsRepaired: Boolean(options.repairHeadings),
+    mediaUnresolved,
     kindConfidence: inferred.confidence,
     kindEvidence: inferred.evidence,
     localeSignals: doc ? localeSignals(doc, sourceUrl) : [],

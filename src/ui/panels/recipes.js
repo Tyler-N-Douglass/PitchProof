@@ -53,26 +53,64 @@ export function renderRecipesPanel(app) {
  * @param {any} selected
  */
 function renderLibrary(app, recipes, selected) {
+  const specimen = findSpecimen(app.proof, app.ui.selection.specimenId) || (app.proof.specimens || [])[0] || null;
+  const applicable = specimen ? app.services.recipesFor(specimen) : [];
+  const applicableIds = new Set(applicable.map((r) => r.id));
+
   return section({
     title: 'Recipe library',
-    subtitle: 'The eight from §9. A recipe is the point you are making, not a button that generates anything.',
-    actions: toolbar(button({ act: 'recipe.loadSeed', variant: recipes.length ? 'ghost' : 'primary' },
-      recipes.length ? 'Reload the seed library' : 'Load the eight seed recipes')),
+    subtitle: 'The eight from §9. Each one is a transformation you can run on a specimen, and the point you are making with it.',
+    actions: toolbar(
+      button({ act: 'recipe.loadSeed', variant: recipes.length ? 'ghost' : 'primary' },
+        recipes.length ? 'Reload the library' : 'Load the eight seed recipes'),
+      button({
+        act: 'recipe.runAll', variant: 'primary',
+        disabled: !recipes.length || !specimen || applicable.length === 0,
+        title: !specimen ? 'Capture a specimen first'
+          : applicable.length === 0 ? 'No seed recipe accepts this specimen’s kind'
+            : `Run ${applicable.length} recipes against “${truncate(specimen.title, 30)}”`,
+      }, 'Run every recipe that fits'),
+    ),
   },
   recipes.length
-    ? h('div', { class: 'st-rows' }, recipes.map((r) => row({
-      act: 'recipe.select', arg: r.id, key: r.id, selected: !!selected && r.id === selected.id,
-      title: h('span', null, r.name, h('code', { class: 'st-mono st-dim' }, ` ${r.id}`)),
-      meta: h('span', null, r.intent),
-      trailing: button({ act: 'recipe.remove', arg: r.id, variant: 'quiet', title: `Remove ${r.name}` }, '×'),
-    })))
-    : empty('No recipes yet.', button({ act: 'recipe.loadSeed', variant: 'primary' }, 'Load the eight seed recipes')),
+    ? h('div', { class: 'st-rows' }, recipes.map((r) => {
+      const fits = applicableIds.has(r.id);
+      const made = (app.proof.renditions || []).filter((rd) => rd.recipeId === r.id).length;
+      return row({
+        act: 'recipe.select', arg: r.id, key: r.id, selected: !!selected && r.id === selected.id,
+        title: h('span', null,
+          r.name,
+          made ? badge(`${made} made`, 'ok') : null,
+          specimen && !fits ? badge('does not fit this specimen', 'dim', `Takes ${(r.inputKinds || []).join(', ')}`) : null),
+        meta: h('span', null, r.intent),
+        trailing: h('div', { class: 'st-row-tools' },
+          button({
+            act: 'recipe.run', arg: r.id, variant: fits ? 'primary' : 'ghost',
+            disabled: !specimen || !fits,
+            title: !specimen ? 'Capture a specimen first'
+              : fits ? `Run “${r.name}” on “${truncate(specimen.title, 28)}”`
+                : `“${r.name}” takes ${(r.inputKinds || []).join(', ')}`,
+          }, 'Run'),
+          button({ act: 'recipe.remove', arg: r.id, variant: 'quiet', title: `Remove ${r.name}` }, '×')),
+      });
+    }))
+    : empty('The library is empty. These eight are the reframe: one page becoming nine markets, four channels, three breakpoints, five review states (§9).',
+      button({ act: 'recipe.loadSeed', variant: 'primary' }, 'Load the eight seed recipes')),
+
+  recipes.length && !specimen
+    ? notice('warn', 'A recipe transforms a specimen. Capture one in Specimens and every recipe here becomes runnable.')
+    : null,
+
   selected
     ? pairs(
       pair('Intent', selected.intent),
       pair('Takes', h('span', { class: 'st-mono' }, (selected.inputKinds || []).join(', ') || 'any specimen')),
       pair('Produces', h('span', { class: 'st-mono' }, (selected.outputLabels || []).join(' · ') || '—')),
     )
+    : null,
+
+  recipes.length
+    ? notice('info', 'A recipe writes the "after" side from their own content. It fabricates no metric, no logo, no testimonial and no named customer — §18.2 — and everything it produces is stamped illustrative until you check it yourself.')
     : null);
 }
 
@@ -93,7 +131,7 @@ function renderPasteSurface(app, specimen, recipe) {
 
   return section({
     title: 'Paste a rendition',
-    subtitle: 'Their page on the left, your output on the right, aligned block by block. This is the default path (§9).',
+    subtitle: 'Their page on the left, your output on the right, aligned block by block. Bring real output and paste it here; run a seed recipe above when you want the shape of the argument first.',
     actions: toolbar(
       button({
         act: 'rendition.create', variant: 'primary',

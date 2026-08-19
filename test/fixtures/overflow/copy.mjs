@@ -94,3 +94,26 @@ export const LONG_TOKENS = [
  */
 export const BREAKABLE_TOKEN =
   'campaign-assets/emea/de-DE/product-detail-page-hero-2400x1200.png';
+
+/**
+ * The panel meta line the before/after layouts render under every column title:
+ * the specimen's own source URL, stripped of its scheme. This is not copy anyone
+ * wrote for the proof — it is the prospect's URL and the layout's chrome — and it
+ * is the string the §20 critic found blocking four of the eight layouts, so the
+ * corpus carries it verbatim rather than a stand-in for it.
+ */
+export const PANEL_META = [
+  'www.northwind-industrial.example/insights/fouling-resistant-heat-exchangers',
+  'www.northwind-industrial.example/products/plate-heat-exchanger-series-40',
+  'www.northwind-industrial.example/de/einblicke/waermetauscher',
+  'www.northwind.example/blog',
+  'de-DE',
+  'pasted by the team',
+];
+
+/** Column titles: the specimen's own `<title>`, likewise not written for the proof. */
+export const PANEL_TITLES = [
+  'Fouling-resistant heat exchangers for continuous process lines | Northwind Industrial',
+  'Plate heat exchanger, Series 40',
+  'Before',
+];

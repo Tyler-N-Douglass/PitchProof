@@ -14,6 +14,9 @@
 
 import { contentId, elementId } from '../../../src/core/ids.js';
 import { defaultEmitOptions } from '../../../src/core/contracts.js';
+import { collectByAttr } from '../../../src/core/vdom.js';
+import { REVEAL_ATTR } from '../../../src/runtime/beats.js';
+import { makeSceneRenderer } from '../../../src/validate/preflight.js';
 
 /** The instant every fixture is captured at, and the instant preflight is run at. */
 export const CAPTURED_AT = '2026-02-01T09:00:00.000Z';
@@ -152,6 +155,43 @@ export function scene(id, beats = 2, overrides = {}) {
 }
 
 /**
+ * Re-point every beat's reveals at element ids the layout actually renders.
+ *
+ * A fixture that writes `elementId(sceneId, 'block/0')` by hand is writing an id
+ * no layout mints, so every beat in it is a keypress that does nothing — the
+ * defect the §20 critic found (F16) and which `BEAT_EMPTY` now reports. A
+ * control proof has to be a proof the studio could have produced, so the reveals
+ * come from the rendered tree, chunked across the beats in order.
+ *
+ * Beats that deliberately reveal nothing are left alone, so a planted
+ * `BEAT_EMPTY` survives this pass.
+ *
+ * @template T @param {T} proof @returns {T}
+ */
+export function withRenderedReveals(proof) {
+  const render = makeSceneRenderer(proof);
+  const scenes = [...(proof.spine || [])];
+  for (const branch of proof.branches || []) scenes.push(...(branch.scenes || []));
+  for (const scene of scenes) {
+    /** @type {string[]} */
+    let ids = [];
+    try {
+      ids = collectByAttr(render(scene), REVEAL_ATTR).map((el) => el.a[REVEAL_ATTR]).filter(Boolean);
+    } catch (e) { continue; }
+    if (ids.length === 0) continue;
+    const live = (scene.beats || []).filter((b) => (b.reveals || []).length > 0);
+    if (live.length === 0) continue;
+    const per = Math.max(1, Math.floor(ids.length / live.length));
+    live.forEach((beat, i) => {
+      const start = i * per;
+      beat.reveals = i === live.length - 1 ? ids.slice(start) : ids.slice(start, start + per);
+      if (beat.reveals.length === 0) beat.reveals = [ids[Math.min(start, ids.length - 1)]];
+    });
+  }
+  return proof;
+}
+
+/**
  * A complete, presentable proof with no defects at all. Every rule must be
  * silent on it.
  * @param {object} [overrides]
@@ -166,7 +206,7 @@ export function cleanProof(overrides = {}) {
     scenes: [scene('sc_ap0', 2, { headline: 'Approval chain' })],
     returnPolicy: 'anchor',
   }];
-  return {
+  return withRenderedReveals({
     schemaVersion: 1,
     id: contentId('proof', 'validate-clean'),
     prospectName: 'Northwind Industrial',
@@ -186,7 +226,7 @@ export function cleanProof(overrides = {}) {
     branches,
     emitOptions: defaultEmitOptions(),
     ...overrides,
-  };
+  });
 }
 
 /**
@@ -208,6 +248,17 @@ export function copy(v) {
  * @returns {any}
  */
 export function defectProof(code) {
+  return withRenderedReveals(plantDefect(code));
+}
+
+/**
+ * The mutation itself. Split out so `defectProof` can re-derive the beats after
+ * it: a fixture that changes which blocks a scene shows changes which elements
+ * the layout renders, and a stale reveal would plant a second, unintended defect.
+ * @param {string} code
+ * @returns {any}
+ */
+function plantDefect(code) {
   const p = copy(cleanProof());
   switch (code) {
     case 'ASSET_MISSING':
@@ -312,6 +363,20 @@ export function defectProof(code) {
     default:
       throw new Error(`defectProof: no fixture for ${code}`);
   }
+}
+
+/**
+ * A beat whose reveals all name element ids nothing renders — §20 critic F16.
+ *
+ * Built after `withRenderedReveals`, so it is the one dead beat in an otherwise
+ * live proof. Functionally identical to a beat with no reveals at all: the
+ * presenter presses forward and the screen does not change.
+ * @returns {any}
+ */
+export function danglingRevealProof() {
+  const p = copy(cleanProof());
+  p.spine[0].beats[0].reveals = ['el_deadbeef00'];
+  return p;
 }
 
 /** A rendered document and stylesheet for the rules that need one. */

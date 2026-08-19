@@ -21,10 +21,13 @@ import { validateBrand, COLOR_ROLES, MAX_TRANSITION_MS } from '../../src/core/co
 import { IdMinter } from '../../src/core/ids.js';
 import { cssFontFamily } from '../../src/core/text-metrics.js';
 import { stripCssComments } from '../../src/brand/shape.js';
+import { encodePng } from '../../src/brand/logo.js';
 import {
   buildBrandSystem, compileTheme, pickFace, assertNoStudioVars, joinCss,
   normalizeFace, normalizeLogo, normalizeColor,
   detectFaces, detectShape, classifyImagery, extractLogos, inverseVariant, attachUserFont,
+  sampleFromPng, classifyImage, normalizeSample, selectLogos, identityScore, declaredLogoUrls,
+  logosConfidence, toImageSamples,
   ROLE_VAR, FACE_VAR, VAR_ORDER, THEME_DEFAULTS, SHADOW_SCALE, TRANSITION_MS, STUDIO_PREFIX,
 } from '../../src/brand/theme.js';
 
@@ -396,3 +399,91 @@ test('the lane surface re-exports everything API.md declares', () => {
     assert.equal(typeof fn, 'function');
   }
 });
+
+test('the imagery classifier is reachable through the lane surface', () => {
+  // `API.md` publishes only `color.js` and `theme.js` from the brand lane, so a
+  // classifier that can only be reached through `imagery.js` can never run —
+  // imagery comes back `unknown` at zero confidence and the §7 review gate holds
+  // the brand. These are the exports that close that.
+  for (const fn of [sampleFromPng, classifyImage, normalizeSample, toImageSamples]) {
+    assert.equal(typeof fn, 'function');
+  }
+  const png = encodePng(vividArtwork(64, 64));
+  const sample = sampleFromPng(png, { id: 'hero', role: 'hero' });
+  assert.equal(sample.width, 64);
+  const result = classifyImagery([sample]);
+  assert.notEqual(result.treatment, 'unknown');
+  assert.ok(result.confidence > 0, 'a decoded image produces real confidence');
+});
+
+test('buildBrandSystem accepts raw PNG asset bytes as imagery evidence', () => {
+  // L3 hands the studio `{name, bytes, mime}` records; requiring decoded pixels
+  // here is how imagery silently stayed `unknown`.
+  const bytes = encodePng(vividArtwork(64, 64));
+  const brand = buildBrandSystem({ colors: PALETTE, images: [{ name: '/assets/hero.png', bytes }] }, { clock, idMinter: minter() });
+  assert.notEqual(brand.imagery.treatment, 'unknown');
+  assert.ok(brand.confidence.imagery > 0);
+  const errors = [];
+  validateBrand(brand, 'brand', errors);
+  assert.deepEqual(errors, []);
+
+  // Formats this build cannot decode are skipped, not guessed at or thrown on.
+  assert.deepEqual(toImageSamples([{ name: 'a.jpg', bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0]) }]), []);
+  assert.deepEqual(toImageSamples(undefined), []);
+  assert.equal(toImageSamples([{ width: 2, height: 2, data: new Uint8Array(16) }]).length, 1);
+});
+
+test('buildBrandSystem gives the primary role to the identity, not the og:image', () => {
+  // The §20 critic's F10: `logoFor(brand)` defaults to `primary`, so every
+  // layout rendered the og:image hero instead of the logo.
+  const doc = el('html', {}, [
+    el('head', {}, [
+      el('script', { type: 'application/ld+json' }, [{ type: 'text', text: JSON.stringify({ '@type': 'Organization', logo: '/assets/logo.svg' }) }]),
+      el('link', { rel: 'icon', href: '/assets/mark.svg' }, []),
+      el('meta', { property: 'og:image', content: '/assets/hero-plant.png' }, []),
+    ]),
+    el('body', {}, [
+      el('header', { class: 'site-header', role: 'banner' }, [
+        el('a', { class: 'site-header__logo', href: '/' }, [el('img', { src: '/assets/logo.svg', alt: 'Northwind Industrial' }, [])]),
+      ]),
+    ]),
+  ]);
+  const assets = [
+    { name: '/assets/logo.svg', bytes: new TextEncoder().encode('<svg viewBox="0 0 240 48"><path fill="#0b1220" d="M0 0h240v48z"/></svg>'), mime: 'image/svg+xml' },
+    { name: '/assets/mark.svg', bytes: new TextEncoder().encode('<svg viewBox="0 0 48 48"><rect width="48" height="48" fill="#0b1220"/></svg>'), mime: 'image/svg+xml' },
+    { name: '/assets/hero-plant.png', bytes: encodePng(vividArtwork(320, 180)), mime: 'image/png' },
+  ];
+
+  const brand = buildBrandSystem({ colors: PALETTE, doc, assets }, { clock, idMinter: minter() });
+  const primary = brand.logos.filter((l) => l.variant === 'primary');
+  assert.equal(primary.length, 1);
+  assert.deepEqual(primary[0].intrinsic, { w: 240, h: 48 });
+  assert.equal(primary[0].declared, true);
+  assert.equal(brand.logos.some((l) => l.intrinsic.w === 320), false, 'the hero is not a brand asset');
+  assert.deepEqual(declaredLogoUrls(doc), ['/assets/logo.svg']);
+  // A schema.org declaration is the strongest agreement signal there is.
+  assert.ok(brand.confidence.logos > 0.8, String(brand.confidence.logos));
+  const errors = [];
+  validateBrand(brand, 'brand', errors);
+  assert.deepEqual(errors, []);
+});
+
+test('selection and identity scoring are reachable for the studio inspector', () => {
+  assert.equal(typeof selectLogos, 'function');
+  assert.equal(typeof identityScore, 'function');
+  assert.equal(typeof logosConfidence, 'function');
+});
+
+/** Flat saturated artwork, as RGBA — decisive for the imagery classifier. */
+function vividArtwork(w, h) {
+  const palette = [[230, 57, 70], [29, 53, 87], [244, 162, 97], [42, 157, 143]];
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = palette[(Math.floor((x * 2) / w) + 2 * Math.floor((y * 2) / h)) % 4];
+      const i = (y * w + x) * 4;
+      data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = 255;
+    }
+  }
+  return { width: w, height: h, data };
+}

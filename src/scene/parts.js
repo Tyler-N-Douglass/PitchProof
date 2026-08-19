@@ -107,12 +107,30 @@ export function panelHead(spec) {
 }
 
 /**
- * A source URL as a label a client can read: no scheme, no trailing slash.
+ * The longest source label the panel meta line is allowed to be before the
+ * middle of the path is elided. Sized against the narrowest container that
+ * carries one — a single-column panel at `sm`, 320px at 10px in a monospace
+ * face, which holds about 53 characters.
+ */
+export const URL_LABEL_BUDGET = 48;
+
+/**
+ * A source URL as a label a client can read: no scheme, no trailing slash, and
+ * the middle of a long path elided rather than the end.
  *
  * The scheme is dropped for a reason beyond tidiness — an absolute URL written
  * into the artifact is a `NETWORK_REFERENCE` under §13, and the artifact's own
  * chrome has no business carrying one. The prospect's *content* is rendered
- * verbatim (§18.3); this is our label, not their copy.
+ * verbatim (§18.3); this is our label, not their copy, which is what makes
+ * eliding it a design decision rather than an edit to their page.
+ *
+ * The elision is from the middle because the two informative ends of a URL are
+ * the host and the last path segment — the slug that says which page this is.
+ * Letting the CSS truncate from the right instead keeps the host and throws the
+ * slug away, which is the half a client actually recognises. Where the label
+ * still does not fit, the stylesheet ellipsises it and `measureScene` reports
+ * `textOverflow: 'ellipsis'`, so the truncation is graded as visible rather
+ * than as data lost silently (CRITIQUE-1 F6).
  * @param {string|null|undefined} url
  * @returns {string|null}
  */
@@ -122,7 +140,15 @@ export function displayUrl(url) {
     .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
     .replace(/^\/\//, '')
     .replace(/\/+$/, '');
-  return stripped || null;
+  if (!stripped) return null;
+  if (stripped.length <= URL_LABEL_BUDGET) return stripped;
+
+  const parts = stripped.split('/').filter(Boolean);
+  if (parts.length < 3) return stripped;   // host plus one segment: nothing to elide
+  const host = parts[0];
+  const last = parts[parts.length - 1];
+  const elided = `${host}/…/${last}`;
+  return elided.length < stripped.length ? elided : stripped;
 }
 
 /**

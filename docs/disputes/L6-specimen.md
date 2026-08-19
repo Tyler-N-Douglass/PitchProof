@@ -136,3 +136,43 @@ stripChrome(doc, {siblings?}): {root, removed, how, siblingPages, notes}
 // siblings: other pages of the same site — DocNode | RawCapture | {root}.
 // The page under analysis is ignored if present.
 ```
+
+
+---
+
+## 5. `Specimen.media` cannot express "these two specimens share one asset"
+
+**Lane:** L6 · **Contract:** §4 `Specimen.media: MediaRef[]`, `Proof`
+
+**Objection.** Every specimen carries its own `MediaRef[]`, and a `Proof` has no
+asset table. A logo that appears on five captured pages is therefore modelled as
+five `MediaRef`s, and the only thing preventing five copies of the bytes in the
+artifact is that the runtime happens to key `mediaById` by id. §13 asks the
+emitter to budget aggressively against `maxBytes`; with the model as frozen, the
+emitter has to reconstruct the sharing relationship by comparing data URIs.
+
+**What the lane built.** The contract as written. Sharing is expressed the only
+way it can be — by the same `MediaRef` id and data URI appearing in more than
+one specimen's `media` array — produced either at capture through an optional
+`MediaLedger` or afterwards by `dedupeMedia` (D-L6-18). No field was renamed,
+retyped or removed, and a v1 consumer that iterates `specimen.media` still sees
+every asset that specimen uses.
+
+**What a v2 contract should say.**
+
+```ts
+export interface Proof {
+  // …as frozen…
+  /** Assets, stored once; specimens and renditions reference them by id. */
+  assets?: MediaRef[];
+}
+export interface Specimen {
+  // …as frozen…
+  /** Ids into `Proof.assets`; `media` stays for v1 consumers. */
+  mediaIds?: string[];
+}
+```
+
+An asset table also gives §13's degradation report somewhere honest to count
+from: today a budgeter that walks specimens sees one asset n times and can
+double-count what it saved by degrading it.

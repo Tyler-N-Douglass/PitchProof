@@ -24,6 +24,8 @@
 import { BREAKPOINTS, validateProofShape } from '../core/contracts.js';
 import { buildDeck } from '../runtime/deck.js';
 import { renderLayout, missingLayouts } from '../runtime/layouts.js';
+import { REVEAL_ATTR } from '../runtime/beats.js';
+import { collectByAttr } from '../core/vdom.js';
 import { elementId } from '../core/ids.js';
 import { registerAllLayouts } from '../scene/index.js';
 import { RULES } from './rules.js';
@@ -185,6 +187,44 @@ export function makeSceneRenderer(proof) {
 }
 
 /**
+ * The element ids each scene's layout actually renders.
+ *
+ * §4 `Beat.reveals` names element ids, and L2 requires every revealable element
+ * to carry `data-pp-el`. A beat naming an id the layout never renders is a
+ * keypress that does nothing in front of the room — functionally the same defect
+ * as a beat with no reveals at all, and invisible to a sweep that only reads the
+ * model. Rendering each scene once makes it visible.
+ *
+ * A scene whose tree carries no revealable element at all is left out: that is a
+ * still-frame layout the beat engine renders whole, and comparing against an
+ * empty set would flag every beat in it.
+ *
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @param {any} deck
+ * @param {(scene: any) => any} render
+ * @returns {Map<string, Set<string>>}
+ */
+export function renderedElementIds(proof, deck, render) {
+  /** @type {Map<string, Set<string>>} */
+  const out = new Map();
+  if (typeof render !== 'function') return out;
+  for (const scene of deck.sceneById.values()) {
+    let ids;
+    try {
+      const tree = render(scene);
+      ids = collectByAttr(tree, REVEAL_ATTR).map((el) => el.a[REVEAL_ATTR]).filter(Boolean);
+    } catch (e) {
+      // A layout that cannot render is a defect the layout registry reports;
+      // this rule stays silent rather than blaming every beat in the scene for it.
+      continue;
+    }
+    if (ids.length === 0) continue;
+    out.set(scene.id, new Set(ids));
+  }
+  return out;
+}
+
+/**
  * The §14 automated sweep.
  *
  * @param {import('../core/contracts.d.ts').Proof} proof
@@ -212,8 +252,10 @@ export async function runPreflight(proof, options = {}) {
   const nowIso = readClock(options.clock);
   const measurements = measureDeck(proof, deck, breakpoints, deps);
 
+  const renderScene = options.renderScene || makeSceneRenderer(proof);
   const ctx = {
-    renderScene: options.renderScene || makeSceneRenderer(proof),
+    renderScene,
+    renderedElementIds: renderedElementIds(proof, deck, renderScene),
     proof,
     deck,
     breakpoints,

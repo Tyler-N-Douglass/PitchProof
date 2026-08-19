@@ -63,6 +63,75 @@ export const LANE_MODULES = [
 ];
 
 /**
+ * Declared lane surfaces the studio deliberately does not call, and why.
+ *
+ * `API.md` Part 3 is checked from the *publishing* side — a lane must export
+ * what it declared. Nothing checked the *consuming* side, and that is exactly
+ * how the seed recipe library came to be built, tested, published and
+ * unreachable from the studio for a whole pass (CRITIQUE-1 F14).
+ *
+ * `test/ui/lane-conformance.test.mjs` now closes that: every surface declared
+ * for a lane the studio imports must either appear in `services.js` as a call,
+ * or appear here with a reason. Adding a lane export the studio ought to use
+ * and forgetting to wire it fails a test; deciding not to use one costs a
+ * sentence.
+ *
+ * Keyed by module path, then by export name.
+ * @type {Record<string, Record<string, string>>}
+ */
+export const LANE_SURFACE_NOTES = {
+  'src/ingest/index.js': {
+    attr: 'A DOM accessor for lanes that walk a document. The studio never walks one: it hands captures to L5 and L6, which do.',
+    importSavedPage: 'Routed through `ingestFiles`, L3\'s own multi-file router, which attaches a saved page\'s asset folder to the page it belongs to. Calling the importers individually would be a second, worse copy of that (D-L12-4).',
+    importHar: 'Routed through `ingestFiles`, which sniffs the archive and calls this itself.',
+    importMhtml: 'Routed through `ingestFiles`, which sniffs the archive and calls this itself.',
+    importOoxml: 'Routed through `ingestFiles`, which sniffs the MIME and calls this itself.',
+    importPdf: 'Routed through `ingestFiles`, which sniffs the MIME and calls this itself.',
+    importImage: 'Routed through `ingestFiles`, which sniffs the MIME and calls this itself.',
+  },
+  'src/brand/color.js': {
+    srgbToLinear: 'Colour maths. The studio shows numbers L4 computed; it computes none of its own (§7: "computed, never assumed").',
+    hexToRgb: 'Colour maths. Every number the studio shows was computed by L4 and handed over on the token.',
+    rgbToHex: 'Colour maths. The studio normalises a typed hex itself and asks L4 for everything derived from it.',
+    rgbToOklab: 'Colour maths. The studio asks for `oklch`, which is the form the §4 token carries.',
+    oklabToRgb: 'Colour maths. Conversions belong to the lane that owns the colour space.',
+    oklabToOklch: 'Colour maths. The studio asks for `oklch` directly and never converts between spaces.',
+    relativeLuminance: 'Colour maths — the studio asks for `contrastRatio`, which is the number a person reads.',
+    inGamut: 'The solver guarantees its own output is in gamut; re-checking it here would be the studio second-guessing the lane that owns the constraint.',
+    clampChromaToGamut: 'Same: gamut clamping belongs to derivation, and `deriveForContrast` is the studio\'s route to it.',
+    quantize: 'Reached through `extractPalette`, which L4 documents as "the whole §7 colour pipeline in one call, for L5\'s buildBrandSystem and for the studio\'s extract step".',
+    chooseK: 'Reached through `extractPalette`.',
+    solveRoles: 'Reached through `extractPalette`.',
+    colorConfidence: 'Reached through `extractPalette`, which returns the confidence it computed.',
+  },
+  'src/brand/theme.js': {
+    detectFaces: 'Reached through `buildBrandSystem`, which detects faces itself when it is given a document and stylesheets.',
+    extractLogos: 'Reached through `buildBrandSystem`.',
+    detectShape: 'Reached through `buildBrandSystem`.',
+    classifyImagery: 'Reached through `buildBrandSystem`. The studio supplies its samples via `imagerySamples` (D-L12-3).',
+  },
+  'src/specimen/index.js': {
+    stripChrome: 'Reached through `buildSpecimen`, which strips, records what it removed, and keeps it restorable in one pass.',
+    toBlocks: 'Reached through `buildSpecimen`.',
+    captureMedia: 'Reached through `buildSpecimen`.',
+    detectLocale: 'Reached through `buildSpecimen`, which writes the locale onto the specimen.',
+  },
+  'src/recipe/index.js': {
+    recipeById: 'A project holds its own copy of each recipe, which the user may have removed. Looking one up in the library would answer a different question from the one the panel is asking.',
+  },
+  'src/scene/index.js': {
+    PROVENANCE_LABEL_CLASS: 'The class the artifact renders. The studio never writes artifact classes — that is the D11 line — and the emitter is what asserts the label is present.',
+  },
+  'src/branch/index.js': {
+    randomWalk: 'The seeded driver behind §17.8\'s property test. A studio that walked branches at random would be doing the test suite\'s job, not the seller\'s.',
+  },
+  'src/emit/index.js': {
+    inlineRuntime: 'The document builder inside `emit`. The studio has exactly one route to an emitted file, and it goes through the gate (§14).',
+  },
+  'src/validate/index.js': {},
+};
+
+/**
  * The sentence a panel shows where a lane's result would have gone.
  * @param {string} key
  * @returns {string}
@@ -177,6 +246,28 @@ export function makeServices(env) {
       if (!ingestLane) return laneErr('ingest');
       try { return ingestLane.importHtmlText(html, { sourceUrl: sourceUrl || null, clock }); }
       catch (e) { return err(`Could not parse that HTML: ${message(e)}`, e); }
+    },
+
+    /**
+     * §6's strategy chain, in order, with what each one needs. Shown when a
+     * fetch fails so the user reads a route forward rather than an error: "most
+     * enterprise sites refuse a direct fetch, which is normal" is a sentence
+     * L3 already wrote, and the studio should be quoting it rather than
+     * inventing its own.
+     * @returns {{id: string, label: string, describe: string, kind: string, automatic: boolean, requires: string[]}[]}
+     */
+    fetchStrategies() {
+      if (!ingestLane) return [];
+      try {
+        return ingestLane.fetchStrategies().map((strategy) => ({
+          id: strategy.id,
+          label: strategy.label,
+          describe: strategy.describe,
+          kind: strategy.kind,
+          automatic: !!strategy.automatic,
+          requires: strategy.requires || [],
+        }));
+      } catch { return []; }
     },
 
     /**
@@ -378,6 +469,55 @@ export function makeServices(env) {
     },
 
     /**
+     * The seed recipes that accept a specimen, in library order. §9's library
+     * is a set of *transformations*, so which of them apply depends on what the
+     * specimen is.
+     * @param {any} specimen
+     * @returns {any[]}
+     */
+    recipesFor(specimen) {
+      if (!recipeLane || !specimen) return [];
+      try { return recipeLane.recipesFor(specimen); } catch { return []; }
+    },
+
+    /**
+     * @param {any} recipe
+     * @param {any} specimen
+     * @returns {boolean}
+     */
+    recipeAccepts(recipe, specimen) {
+      if (!recipeLane || !recipe || !specimen) return false;
+      try { return recipeLane.recipeAccepts(recipe, specimen); } catch { return false; }
+    },
+
+    /**
+     * Run one seed recipe's template against a specimen (§9: the seed library
+     * "is the reframe payload"). Deterministic, and a failure is a `Result`
+     * rather than a half-built set.
+     * @param {string|any} recipe
+     * @param {any} specimen
+     * @param {object} [options]
+     * @returns {any}
+     */
+    renderRecipe(recipe, specimen, options = {}) {
+      if (!recipeLane) return laneErr('recipe');
+      try { return recipeLane.renderRecipe(recipe, specimen, options); }
+      catch (e) { return err(`That recipe could not run: ${message(e)}`, e); }
+    },
+
+    /**
+     * Run every seed recipe that accepts the specimen.
+     * @param {any} specimen
+     * @param {object} [options]
+     * @returns {any}
+     */
+    renderAllRecipes(specimen, options = {}) {
+      if (!recipeLane) return laneErr('recipe');
+      try { return ok(recipeLane.renderAll(specimen, options)); }
+      catch (e) { return err(`The recipe library could not run: ${message(e)}`, e); }
+    },
+
+    /**
      * @param {object} args
      * @returns {any}
      */
@@ -526,6 +666,26 @@ export function makeServices(env) {
     },
 
     /**
+     * Where a branch actually returns to, resolved against the live deck.
+     * §22.4: a nested jump that does not unwind strands the presenter, so the
+     * studio shows the scene a branch exits to rather than only whether one
+     * exists.
+     * @param {any} deck
+     * @param {string} branchId
+     * @returns {{sequenceId: string, sceneIndex: number, scene: any}|null}
+     */
+    returnTargetFor(deck, branchId) {
+      if (!branchLane || !deck) return null;
+      try {
+        const target = branchLane.returnTargetFor(deck, branchId);
+        if (!target) return null;
+        const sequence = deck.sequences.get(target.sequenceId);
+        const scene = sequence ? sequence.scenes[target.sceneIndex] || null : null;
+        return { ...target, scene };
+      } catch { return null; }
+    },
+
+    /**
      * @param {any} deck
      * @returns {{unreachable: string[], noReturn: string[]}}
      */
@@ -557,6 +717,56 @@ export function makeServices(env) {
         });
         return ok(findings || []);
       } catch (e) { return err(`Preflight failed: ${message(e)}`, e); }
+    },
+
+    /**
+     * What a sweep checks, one entry per §4 finding code. Shown before the
+     * first sweep, so "no sweep has been run" is a list of what running one
+     * would tell you rather than an absence.
+     * @returns {{code: string, severity: 1|2|3, describe: string}[]}
+     */
+    preflightRules() {
+      if (!validateLane) return [];
+      try {
+        return (validateLane.RULES || []).map((rule) => ({
+          code: rule.code,
+          severity: rule.severity,
+          describe: rule.describe || rule.description || '',
+        }));
+      } catch { return []; }
+    },
+
+    /**
+     * Contrast findings for a brand, without running a whole sweep. §22.1 is
+     * the failure that makes a proof unreadable on a real palette, and it is
+     * cheapest to catch at the moment somebody types the hex.
+     * @param {any} brand
+     * @returns {any[]}
+     */
+    checkContrast(brand) {
+      if (!validateLane || !brand) return [];
+      try { return validateLane.checkContrast(brand) || []; } catch { return []; }
+    },
+
+    /**
+     * Text-overflow findings for one scene at one breakpoint, measured through
+     * L8's `measureScene` and L11's detector — the same two calls the sweep
+     * makes, so the scene editor and the rehearsal cannot disagree.
+     *
+     * §22.2 calls post-substitution overflow "the defect that makes a proof look
+     * amateur in front of a CMO, and it is invisible until it isn't". Showing it
+     * beside the headline being typed is the earliest it can possibly be seen.
+     * @param {any} scene
+     * @param {any} ctx      a `LayoutContext`
+     * @param {string} breakpoint
+     * @returns {any[]}
+     */
+    sceneOverflow(scene, ctx, breakpoint) {
+      if (!sceneLane || !validateLane || !scene || !ctx) return [];
+      try {
+        const measurement = sceneLane.measureScene(scene, ctx, breakpoint);
+        return validateLane.detectOverflow(measurement, ctx.brand) || [];
+      } catch { return []; }
     },
 
     /**
@@ -608,6 +818,29 @@ export function makeServices(env) {
     },
 
     /**
+     * Re-verify an emitted file against the two laws that matter most, with no
+     * emit involved: §13's zero-network scan and §9/§18's provenance assertion.
+     *
+     * The emitter already refuses on either, so this changes no outcome. It
+     * exists because a seller is sometimes asked to prove it — by a security
+     * reviewer, in a room — and "the tool says it checked" is weaker than
+     * running the scanner over the file that is about to be handed over.
+     * @param {any} proof
+     * @param {string} html
+     * @param {string} [css]
+     * @returns {{findings: any[], network: any[], provenance: any[], clean: boolean}}
+     */
+    verifyArtifact(proof, html, css = '') {
+      if (!emitLane) return { findings: [], network: [], provenance: [], clean: false };
+      let network = [];
+      let provenance = [];
+      try { network = emitLane.scanForNetworkReferences(html) || []; } catch { network = []; }
+      try { provenance = emitLane.assertProvenance(proof, html, css) || []; } catch { provenance = []; }
+      const findings = [...network, ...provenance];
+      return { findings, network, provenance, clean: findings.length === 0 };
+    },
+
+    /**
      * The size budget as line items, without emitting. §13 requires every
      * degradation reported, so the emit panel shows this before the user runs.
      * @param {any} proof
@@ -651,12 +884,33 @@ export function minterFor(seed) {
  * L5 does its own face, logo and shape detection given `doc`, `css` and
  * `assets`; L4 owns colour, so the palette is solved here with
  * `extractPalette` and handed over finished, along with the confidence it
- * computed. Imagery is deliberately left to L5's classifier with no samples:
- * decoding a page's images into RGBA belongs to a lane that owns image
- * decoding, and an imagery treatment guessed without pixels would be a
- * confident-looking fabrication. With no samples the classifier returns
- * `unknown` at zero confidence, which routes imagery straight into §7's review
- * gate — where a person decides it. See `docs/decisions/L12-ui.md`.
+ * computed.
+ *
+ * What goes into `css` is the part that decides whether an extraction produces
+ * anything at all. It is **stylesheet text**, assembled from three places, in
+ * the order a browser would apply them:
+ *
+ *   1. every `text/css` asset the capture brought back — the real stylesheets,
+ *      once L3 has fetched them, and already today for a saved page, a HAR or
+ *      an MHTML archive;
+ *   2. every `<style>` element in the document;
+ *   3. every `style="…"` attribute, wrapped in a synthetic rule so L4's
+ *      declaration scanner sees it as one.
+ *
+ * Handing L4 the raw HTML instead — as this did — technically works, because a
+ * `<style>` body is inside the text, but it also feeds it every attribute value
+ * and every word of prose, and it finds nothing at all when the page's colour
+ * lives in a linked stylesheet. Which is precisely the case that matters.
+ *
+ * `logos` carries the colours of any inline SVG mark, which L4 accepts as CSS
+ * colour strings (`decodePixels`). §7 asks for "a quantization pass over the
+ * hero imagery and the logo", and the logo is the half that needs no image
+ * decoder.
+ *
+ * `images` stays empty until a declared surface turns captured bytes into RGBA
+ * samples — see `docs/disputes/L12-ui.md` D-L12-3. Zero samples means L5's
+ * classifier says `unknown` at zero confidence, which §7's review gate then
+ * holds for a person. `imagerySamples` is the seam that fills it.
  *
  * @param {any[]} captures
  * @param {{seed: string}} options
@@ -664,19 +918,22 @@ export function minterFor(seed) {
  */
 function brandParts(captures, options) {
   const docs = captures.map((c) => c.doc).filter(Boolean);
-  const css = captures.map((c) => c.html || '').filter(Boolean);
   const assets = captures.flatMap((c) => c.assets || []);
   const sourceUrl = (captures.find((c) => c.sourceUrl) || {}).sourceUrl || null;
+
+  const css = stylesheetSources(captures, assets);
+  const logos = logoColorSources(captures, assets);
+  const images = imagerySamples(assets);
 
   /** @type {{colors: any[], confidence: number}} */
   let palette = { colors: [], confidence: 0 };
   try {
-    const solved = colorLane.extractPalette({ css }, { seed: options.seed });
+    const solved = colorLane.extractPalette({ css, logos, images }, { seed: options.seed });
     palette = { colors: solved.colors, confidence: solved.confidence };
   } catch {
     // §7: no colour could be collected. An empty palette with zero confidence
-    // is the honest result; the studio holds it for review and the user enters
-    // the roles by hand.
+    // is the honest result; the studio holds it for review, says the extraction
+    // found nothing, and the user enters the roles by hand.
     palette = { colors: [], confidence: 0 };
   }
 
@@ -685,10 +942,145 @@ function brandParts(captures, options) {
     doc: docs[0] || null,
     css,
     assets,
-    images: [],
+    images,
     colors: palette.colors,
-    confidence: { colors: palette.confidence, imagery: 0 },
+    confidence: { colors: palette.confidence },
   };
+}
+
+/**
+ * Every piece of stylesheet text a set of captures carries, in cascade order.
+ * @param {any[]} captures
+ * @param {{name?: string, mime?: string, bytes?: Uint8Array}[]} assets
+ * @returns {string[]}
+ */
+export function stylesheetSources(captures, assets) {
+  /** @type {string[]} */
+  const out = [];
+  for (const asset of assets || []) {
+    const isCss = /^text\/css/.test(asset.mime || '') || /\.css(\?|$)/i.test(asset.name || '');
+    if (!isCss || !asset.bytes) continue;
+    const text = decodeText(asset.bytes);
+    if (text.trim()) out.push(text);
+  }
+  for (const capture of captures || []) {
+    if (!capture || !capture.doc) continue;
+    out.push(...inlineStyleText(capture.doc));
+  }
+  return out;
+}
+
+/**
+ * `<style>` bodies and `style="…"` attributes from a parsed document. The
+ * attributes are wrapped in a synthetic rule so L4's declaration scanner reads
+ * them as declarations rather than as loose text.
+ * @param {any} doc
+ * @returns {string[]}
+ */
+export function inlineStyleText(doc) {
+  /** @type {string[]} */
+  const sheets = [];
+  /** @type {string[]} */
+  const inline = [];
+  if (!ingestLane || !doc) return sheets;
+  try {
+    for (const node of ingestLane.querySelectorAll(doc, 'style')) {
+      const text = ingestLane.textContent(node);
+      if (text && text.trim()) sheets.push(text);
+    }
+    ingestLane.walk(doc, (node) => {
+      const value = node && node.attrs ? node.attrs.style : null;
+      if (value && String(value).trim()) inline.push(String(value));
+      return undefined;
+    });
+  } catch { /* a document shape this lane does not recognise contributes nothing */ }
+  if (inline.length) sheets.push(inline.map((d) => `.pp-inline{${d}}`).join('\n'));
+  return sheets;
+}
+
+/**
+ * Colours declared inside inline SVG marks, as CSS colour strings. L4's
+ * `decodePixels` accepts those directly, so the logo contributes to the solve
+ * without an image decoder (§7).
+ * @param {any[]} captures
+ * @param {{name?: string, mime?: string, bytes?: Uint8Array}[]} assets
+ * @returns {string[][]}
+ */
+export function logoColorSources(captures, assets) {
+  /** @type {string[]} */
+  const svgText = [];
+  for (const asset of assets || []) {
+    const isSvg = /^image\/svg/.test(asset.mime || '') || /\.svg(\?|$)/i.test(asset.name || '');
+    if (isSvg && asset.bytes) svgText.push(decodeText(asset.bytes));
+  }
+  for (const capture of captures || []) {
+    if (capture && typeof capture.html === 'string') {
+      for (const match of capture.html.matchAll(/<svg[\s\S]*?<\/svg>/gi)) svgText.push(match[0]);
+    }
+  }
+  const colors = [];
+  for (const text of svgText) {
+    for (const match of String(text).matchAll(/(?:fill|stroke|stop-color|flood-color)\s*[=:]\s*["']?\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)|hsla?\([^)]*\)|[a-zA-Z]{3,20})/g)) {
+      const value = match[1];
+      if (/^(none|currentcolor|inherit|transparent|url)$/i.test(value)) continue;
+      colors.push(value);
+    }
+  }
+  return colors.length ? [colors] : [];
+}
+
+/**
+ * RGBA samples for L5's imagery classifier.
+ *
+ * Empty until a lane declares a surface that decodes captured bytes into
+ * `ImageSample`s (D-L12-3). When `brand/theme.js` re-exports `sampleFromPng`,
+ * this is the one function that changes: map the PNG assets through it and the
+ * imagery treatment stops being held at `unknown`.
+ * @param {{name?: string, mime?: string, bytes?: Uint8Array}[]} assets
+ * @returns {any[]}
+ */
+export function imagerySamples(assets) {
+  const sampler = themeLane && typeof themeLane.sampleFromPng === 'function' ? themeLane.sampleFromPng : null;
+  if (!sampler) return [];
+  const out = [];
+  for (const asset of assets || []) {
+    const isPng = /^image\/png/.test(asset.mime || '') || /\.png(\?|$)/i.test(asset.name || '');
+    if (!isPng || !asset.bytes) continue;
+    try { out.push(sampler(asset.bytes, { id: asset.name, role: 'content' })); }
+    catch { /* an image this build cannot decode contributes nothing */ }
+  }
+  return out;
+}
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+function decodeText(bytes) {
+  try {
+    if (typeof TextDecoder === 'function') return new TextDecoder('utf-8').decode(bytes);
+  } catch { /* fall through */ }
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return s;
+}
+
+/**
+ * Did an extraction actually find anything? §18: an extraction that yields
+ * nothing must say so rather than report success.
+ * @param {any} brand
+ * @returns {{empty: boolean, found: string[], missing: string[]}}
+ */
+export function brandYield(brand) {
+  const found = [];
+  const missing = [];
+  const check = (label, ok_) => (ok_ ? found : missing).push(label);
+  check('colour roles', (brand.colors || []).length > 0);
+  check('type faces', (brand.faces || []).length > 0);
+  check('logos', (brand.logos || []).length > 0);
+  check('shape', Number(brand.confidence?.shape || 0) > 0);
+  check('imagery', Number(brand.confidence?.imagery || 0) > 0);
+  return { empty: found.length === 0, found, missing };
 }
 
 /**

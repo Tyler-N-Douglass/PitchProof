@@ -37,8 +37,17 @@ export {
 // Strategies 1 and 2 — network, through an injected transport.
 export {
   fetchStrategies, strategyById, nextStepsMessage, proxyUrl,
-  fetchDirect, fetchViaProxy, ingestUrl, ingestFile, ingestFiles,
+  fetchDirect, fetchViaProxy, ingestUrl, ingestFile, ingestFiles, attachSubresources,
 } from './fetch.js';
+
+// Sub-resource collection: the stylesheet, logo and media a captured document
+// references, fetched through the same injected transport (§7, §8).
+export {
+  collectSubresources, subresourceCandidates, cssReferences, pickFromSrcset,
+  candidateAllowed, sameSite, applySubresourceReport,
+  SUBRESOURCE_LIMITS, SRCSET_TARGET_WIDTH, ROLE_ORDER,
+} from './subresources.js';
+export { parseRobots, robotsAllows, groupFor, ruleMatches, emptyRobots } from './robots.js';
 
 // Strategy 3 — saved page, HAR, MHTML.
 export { importSavedPage, relinkAssets, joinPath } from './saved-page.js';

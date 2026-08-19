@@ -459,25 +459,48 @@ const beatEmpty = {
   code: 'BEAT_EMPTY',
   severity: severityOf('BEAT_EMPTY'),
   title: 'Beat that reveals nothing',
-  inspects: 'every beat of every scene that uses reveals at all',
+  inspects: 'every beat of every scene that uses reveals at all, against the element ids the layout actually renders',
   autoFixable: true,
   run(ctx) {
     /** @type {any[]} */
     const out = [];
+    const rendered = ctx.renderedElementIds || new Map();
     for (const { scene, branchId } of allScenes(ctx.proof)) {
       // A scene where no beat reveals anything is the still-frame shape the
       // beat engine renders whole (runtime/beats.js `sceneRevealsNothing`).
       // That is a layout choice, not a defect.
       if (sceneRevealsNothing(scene)) continue;
+      const known = rendered.get(scene.id);
       (scene.beats || []).forEach((beat, i) => {
-        if ((beat.reveals || []).length > 0) return;
+        const reveals = beat.reveals || [];
+        const total = (scene.beats || []).length;
+        if (reveals.length === 0) {
+          out.push(makeFinding({
+            code: 'BEAT_EMPTY',
+            locus: { sceneId: scene.id, branchId: branchId || undefined },
+            key: `beat:${scene.id}:${beat.id || i}`,
+            autoFixAvailable: total > 1,
+            message: `Beat ${i + 1} of ${total} in scene ${scene.id} reveals nothing, while other beats in the same scene do. Pressing forward there changes nothing on screen — a dead keypress in front of the room. Auto-fix removes the beat.`,
+            detail: { sceneId: scene.id, beatId: beat.id || null, beatIndex: i, beatCount: total, kind: 'no-reveals' },
+          }));
+          return;
+        }
+        // A beat whose reveals all name elements the layout does not render is
+        // the same dead keypress, arrived at a different way: the ids drifted,
+        // or were hand-written against a layout the scene no longer uses.
+        if (!known) return;
+        const dangling = reveals.filter((id) => !known.has(id));
+        if (dangling.length < reveals.length) return;
         out.push(makeFinding({
           code: 'BEAT_EMPTY',
           locus: { sceneId: scene.id, branchId: branchId || undefined },
-          key: `beat:${scene.id}:${beat.id || i}`,
-          autoFixAvailable: true,
-          message: `Beat ${i + 1} of ${scene.beats.length} in scene ${scene.id} reveals nothing, while other beats in the same scene do. Pressing forward there changes nothing on screen — a dead keypress in front of the room. Auto-fix removes the beat.`,
-          detail: { sceneId: scene.id, beatId: beat.id || null, beatIndex: i, beatCount: scene.beats.length },
+          key: `beat-dangling:${scene.id}:${beat.id || i}`,
+          autoFixAvailable: total > 1,
+          message: `Beat ${i + 1} of ${total} in scene ${scene.id} reveals ${reveals.length} element id${reveals.length === 1 ? '' : 's'} the ${scene.layout} layout does not render (${dangling.slice(0, 3).join(', ')}${dangling.length > 3 ? ', …' : ''}), out of the ${known.size} it does. Pressing forward there changes nothing on screen. Re-point the beat at an element the layout renders, or auto-fix removes it.`,
+          detail: {
+            sceneId: scene.id, beatId: beat.id || null, beatIndex: i, beatCount: total,
+            kind: 'dangling-reveals', dangling, renderedCount: known.size, layout: scene.layout,
+          },
         }));
       });
     }

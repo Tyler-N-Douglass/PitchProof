@@ -27,10 +27,21 @@
  *      question, and it is answered by a different test —
  *      `overflow-browser.test.mjs` lays the same cases out in real Chromium and
  *      reports the residual.
- *   2. **The threshold constants** — 2% of the container for severity 1, 0.5%
- *      for the noise floor. The oracle states them itself and a test asserts
- *      they equal the detector's exported values, so a threshold change that
+ *   2. **The threshold constants and the grading policy** — 2% of the container
+ *      for severity 1, 0.5% for the noise floor, and "text cut with an ellipsis
+ *      warns, text cut with nothing blocks". The oracle states them itself and a
+ *      test asserts they equal the detector's exported values, so a change that
  *      would skew this measurement fails loudly instead of silently.
+ *
+ * **What that means, stated plainly.** The oracle proves the *arithmetic*, not
+ * the *policy*. It computes independently that a box is 27.7% past its
+ * container; it does not independently decide that 27.7% past an ellipsised
+ * container should warn rather than block. Agreement between the two therefore
+ * says the detector measures what it claims to measure — it does not say the
+ * severity policy is the right one. The policy is argued in
+ * `docs/decisions/L11-validate.md` (L11-D1, L11-D15), pinned by a separate
+ * table-driven test below that does not go through the oracle at all, and was
+ * set centrally after the §20 critic found the previous one wrong (F6).
  *
  * ## What is asserted
  *
@@ -50,9 +61,9 @@ import { AFM_TABLES, FAMILY_MODELS } from '../../src/core/text-metrics.js';
 import { FALLBACK_CANDIDATES } from '../../src/core/text-metrics.js';
 import { CORPUS, CORPUS_STATS } from '../fixtures/overflow/corpus.mjs';
 import {
-  detectOverflow,
+  detectOverflow, detectBoxOverflow, truncationMode,
   OVERFLOW_CLIP_RATIO, OVERFLOW_CLIP_MIN_PX, OVERFLOW_NOISE_RATIO, OVERFLOW_NOISE_PX,
-  CLAMP_BLOCKING_LOST_LINES,
+  DEFAULT_TEXT_OVERFLOW, TEXT_OVERFLOW_MODES,
 } from '../../src/validate/index.js';
 
 // ===========================================================================
@@ -64,10 +75,14 @@ const ORACLE_CLIP_RATIO = 0.02;
 const ORACLE_CLIP_MIN_PX = 2;
 const ORACLE_NOISE_RATIO = 0.005;
 const ORACLE_NOISE_PX = 0.5;
-const ORACLE_CLAMP_BLOCKING_LOST_LINES = 2;
+/** CSS's initial value: a box that declares no mode cuts text with no signal. */
+const ORACLE_DEFAULT_TEXT_OVERFLOW = 'clip';
 const UNITS = 1000;
 
-const ORACLE_GENERICS = new Set(['sans-serif', 'serif', 'monospace', 'system-ui', 'cursive', 'fantasy']);
+const ORACLE_GENERICS = new Set([
+  'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
+  'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded', 'math', 'emoji',
+]);
 
 /** Fold a family name to a comparison key. */
 function key(name) {
@@ -244,11 +259,25 @@ function oracleLayout(text, style, options) {
   return { widths, lineCount: widths.length, maxWidth: Math.max(...widths), unbreakable };
 }
 
-/** The severity an excess earns, restated independently. */
+/** The severity an excess earns from its magnitude alone, restated independently. */
 function oracleClassify(excessPx, extentPx) {
   if (!(excessPx > 0) || !(extentPx > 0)) return 0;
   if (excessPx <= Math.max(ORACLE_NOISE_PX, ORACLE_NOISE_RATIO * extentPx)) return 0;
   return excessPx > Math.max(ORACLE_CLIP_MIN_PX, ORACLE_CLIP_RATIO * extentPx) ? 1 : 2;
+}
+
+/** Does the box tell the viewer that text was cut? */
+function oracleSignalled(box) {
+  const mode = box.textOverflow === 'clip' || box.textOverflow === 'ellipsis'
+    ? box.textOverflow
+    : ORACLE_DEFAULT_TEXT_OVERFLOW;
+  return mode === 'ellipsis';
+}
+
+/** Truncation the viewer can see warns; truncation the viewer cannot see blocks. */
+function oracleNarrow(severity, signalled) {
+  if (severity === 0) return 0;
+  return signalled ? 2 : severity;
 }
 
 /** The face that will actually render, walked through the declared stack. */
@@ -278,19 +307,23 @@ function oracleVerdict(kase) {
     overflowWrap: box.overflowWrap,
   });
   const lineHeightPx = (style.lineHeight ?? 1.2) * style.fontSizePx;
+  const signalled = oracleSignalled(box);
 
-  const width = oracleClassify(laid.maxWidth - box.containerWidthPx, box.containerWidthPx);
+  const width = oracleNarrow(oracleClassify(laid.maxWidth - box.containerWidthPx, box.containerWidthPx), signalled);
 
   const cap = Number.isFinite(box.maxLines) && box.maxLines > 0 ? Math.floor(box.maxLines) : 0;
   const renderedLines = cap ? Math.min(laid.lineCount, cap) : laid.lineCount;
+  // The height axis is not narrowed: `text-overflow` is a horizontal property,
+  // and text that runs past the bottom of its box does so with no ellipsis
+  // anywhere.
   const height = box.containerHeightPx > 0
     ? oracleClassify(renderedLines * lineHeightPx - box.containerHeightPx, box.containerHeightPx)
     : 0;
 
   const lost = cap ? Math.max(0, laid.lineCount - cap) : 0;
-  const clamp = lost === 0 ? 0 : (lost >= ORACLE_CLAMP_BLOCKING_LOST_LINES ? 1 : 2);
+  const clamp = lost === 0 ? 0 : oracleNarrow(1, signalled);
 
-  return { width, height, clamp, lines: laid.lineCount, maxWidth: laid.maxWidth, resolved, lost };
+  return { width, height, clamp, lines: laid.lineCount, maxWidth: laid.maxWidth, resolved, lost, signalled };
 }
 
 // ===========================================================================
@@ -332,12 +365,133 @@ test('the corpus is large enough and covers every planted shape §17.4', () => {
   assert.equal(new Set(ids).size, ids.length, 'every case needs a unique id');
 });
 
+/**
+ * The distribution check the §20 critic ran by hand (F7) and this suite did not.
+ *
+ * The corpus reported recall 1.0000 over 93 cases that contained **zero**
+ * `maxLines: 1` boxes, while every severity-1 overflow the product produced on
+ * its own corpus was a one-line clamp. A figure measured over a distribution
+ * that excludes the failure mode is not a measurement of the detector, and the
+ * only way that stays fixed is if the distribution itself is asserted.
+ */
+test('the corpus covers the shapes the layouts actually emit §17.4', () => {
+  const boxes = CORPUS.map((c) => c.measurement.boxes[0]);
+  const count = (pred) => boxes.filter(pred).length;
+
+  // The class F7 found missing: a one-line clamp, which is what
+  // `data-pp-clamp="1"` becomes in `scenes.css` and what every panel title and
+  // panel meta row in four of the eight layouts carries.
+  assert.ok(count((b) => b.maxLines === 1) >= 10,
+    `the corpus must exercise the one-line clamp; it has ${count((b) => b.maxLines === 1)}`);
+
+  // Both truncation modes, in quantity, because the grading turns on them.
+  assert.ok(count((b) => b.textOverflow === 'ellipsis') >= 8, 'ellipsised boxes must be represented');
+  assert.ok(count((b) => b.textOverflow === 'clip') >= 5, 'clipping boxes must be represented');
+  assert.ok(count((b) => b.textOverflow === undefined) >= 5,
+    'and boxes that declare no mode at all, which must grade as CSS default');
+
+  // Both modes at a one-line clamp specifically — the F6 pair.
+  assert.ok(count((b) => b.maxLines === 1 && b.textOverflow === 'ellipsis') >= 6);
+  assert.ok(count((b) => b.maxLines === 1 && b.textOverflow === 'clip') >= 3);
+
+  // The roles the layouts give those boxes, by name.
+  for (const role of ['panelMeta', 'panelTitle']) {
+    assert.ok(count((b) => b.role === role) >= 3, `the corpus must carry the ${role} role`);
+  }
+
+  // At all three breakpoints, which is where a one-line clamp changes verdict.
+  for (const bp of ['sm', 'md', 'lg']) {
+    assert.ok(
+      CORPUS.some((c) => c.breakpoint === bp && c.measurement.boxes[0].maxLines === 1),
+      `no one-line clamp case at ${bp}`,
+    );
+  }
+
+  // Positive and negative on both sides of the discriminator.
+  const plantedFor = (pred, planted) => CORPUS.filter((c) => pred(c.measurement.boxes[0]) && c.planted === planted).length;
+  assert.ok(plantedFor((b) => b.maxLines === 1 && b.textOverflow === 'ellipsis', 'sev2') >= 4, 'ellipsised overflow must be planted as a warning');
+  assert.ok(plantedFor((b) => b.maxLines === 1 && b.textOverflow === 'ellipsis', 'fit') >= 3, 'and the same row fitting must be planted as silence');
+  assert.ok(plantedFor((b) => b.maxLines === 1 && b.textOverflow === 'clip', 'sev1') >= 3, 'clipped overflow must be planted as blocking');
+  assert.ok(plantedFor((b) => b.maxLines === 1 && b.textOverflow === 'clip', 'fit') >= 1);
+
+  // And the multi-line clamp the critic paired it against, on both settings.
+  assert.ok(count((b) => b.maxLines > 1 && b.textOverflow === 'ellipsis') >= 2);
+  assert.ok(count((b) => b.maxLines > 1 && b.textOverflow === 'clip') >= 1);
+});
+
+/**
+ * The policy, pinned without the oracle.
+ *
+ * The critic's second point about §17.4 is that an independently written oracle
+ * proves the *arithmetic* and not the *policy*: it recomputes that a box is 27.7%
+ * past its container, but it encodes the same decision about what that should
+ * mean. So the decision is stated once more here, as a table, checked straight
+ * against `detectBoxOverflow` with no oracle in the path. If the policy changes,
+ * this fails whether or not the oracle was changed to match.
+ */
+test('the grading policy is what it says it is, checked without the oracle', () => {
+  const brand = CORPUS[0].brand;
+  /** One box, one knob: only `textOverflow` differs between the rows. */
+  const box = (textOverflow, extra = {}) => ({
+    elementId: 'el_policy',
+    role: 'panelMeta',
+    text: 'www.northwind-industrial.example/insights/fouling-resistant-heat-exchangers',
+    style: { family: 'Arial', weight: 400, fontSizePx: 12, lineHeight: 1.3 },
+    containerWidthPx: 200,
+    containerHeightPx: 400,
+    whiteSpace: 'nowrap',
+    overflowWrap: 'normal',
+    ...(textOverflow === undefined ? {} : { textOverflow }),
+    ...extra,
+  });
+  const severityOfAxis = (b, axis) => {
+    const found = detectBoxOverflow(b, { sceneId: 'sc_p', breakpoint: 'md', index: 0 }, brand)
+      .filter((f) => f.detail.axis === axis);
+    return found.length ? found[0].severity : 0;
+  };
+
+  // Width axis: the same overflow, three declarations, three verdicts.
+  assert.equal(severityOfAxis(box('clip'), 'width'), 1, 'text cut with no signal blocks');
+  assert.equal(severityOfAxis(box('ellipsis'), 'width'), 2, 'text cut with an ellipsis warns');
+  assert.equal(severityOfAxis(box(undefined), 'width'), 1, "an undeclared mode grades as CSS's own default, which is clip");
+
+  // Clamp axis: the same discriminator, and no line-count rule anywhere in it.
+  const clamped = (to, maxLines) => box(to, {
+    text: PARAGRAPH_FOR_CLAMP, whiteSpace: 'normal', maxLines, containerWidthPx: 300, containerHeightPx: 400,
+  });
+  assert.equal(severityOfAxis(clamped('clip', 1), 'clamp'), 1);
+  assert.equal(severityOfAxis(clamped('ellipsis', 1), 'clamp'), 2);
+  assert.equal(severityOfAxis(clamped('clip', 2), 'clamp'), 1);
+  assert.equal(severityOfAxis(clamped('ellipsis', 2), 'clamp'), 2,
+    'losing several lines behind an ellipsis grades the same as losing one — the signal decides, not the quantity');
+  assert.equal(severityOfAxis(clamped('ellipsis', 3), 'clamp'), 2);
+
+  // Height axis is untouched by the mode: `text-overflow` is horizontal, and
+  // text running past the bottom of a box carries no ellipsis anywhere.
+  const tall = (to) => box(to, {
+    text: PARAGRAPH_FOR_CLAMP, whiteSpace: 'normal', containerWidthPx: 300, containerHeightPx: 40,
+  });
+  assert.equal(severityOfAxis(tall('clip'), 'height'), 1);
+  assert.equal(severityOfAxis(tall('ellipsis'), 'height'), 1);
+
+  // And `truncationMode` reports the default honestly rather than silently.
+  assert.deepEqual(truncationMode({}), { mode: 'clip', signalled: false, known: false });
+  assert.deepEqual(truncationMode({ textOverflow: 'ellipsis' }), { mode: 'ellipsis', signalled: true, known: true });
+  assert.deepEqual(truncationMode({ textOverflow: 'nonsense' }), { mode: 'clip', signalled: false, known: false });
+});
+
+/** A paragraph long enough to overflow every clamp the policy test applies. */
+const PARAGRAPH_FOR_CLAMP =
+  'A campaign that ships in nine markets today needs nine briefs, nine rounds of layout, nine review '
+  + 'threads and nine sets of corrections. The work is not the writing; the work is the retyping.';
+
 test('the oracle states the same thresholds the detector uses', () => {
   assert.equal(ORACLE_CLIP_RATIO, OVERFLOW_CLIP_RATIO);
   assert.equal(ORACLE_CLIP_MIN_PX, OVERFLOW_CLIP_MIN_PX);
   assert.equal(ORACLE_NOISE_RATIO, OVERFLOW_NOISE_RATIO);
   assert.equal(ORACLE_NOISE_PX, OVERFLOW_NOISE_PX);
-  assert.equal(ORACLE_CLAMP_BLOCKING_LOST_LINES, CLAMP_BLOCKING_LOST_LINES);
+  assert.equal(ORACLE_DEFAULT_TEXT_OVERFLOW, DEFAULT_TEXT_OVERFLOW);
+  assert.deepEqual(TEXT_OVERFLOW_MODES, ['clip', 'ellipsis']);
 });
 
 test('every planted defect is where the corpus says it is (oracle vs. intent)', () => {

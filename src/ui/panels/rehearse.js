@@ -72,14 +72,29 @@ function renderSweepHeader(app, sweep, findings) {
           : 'No blocking findings. The emit is open once nothing else is outstanding.'),
         h('p', { class: 'st-dim' }, `Swept ${formatDateTime(sweep.at)} · ${plural(findings.length, 'finding')} total.`)))
       : notice('info', 'No sweep has been run against this proof yet. The emit stays closed until one has been.'),
-  sweep.proofHash && app.ui.sweep.proofHash !== undefined && sweep.at
-    ? null
-    : null,
   pairs(
     pair('Scenes walked', h('span', { class: 'st-mono' }, String(countPositions(app)))),
     pair('Breakpoints', h('span', { class: 'st-mono' }, 'sm 390 · md 1024 · lg 1600')),
   ),
-  app.services.has('validate') ? null : notice('warn', 'The validation lane is not wired into this build. Until it lands, no sweep can run — and a proof that was never validated is not emitted.'));
+  app.services.has('validate') ? null : notice('warn', 'The validation lane is not wired into this build. Until it lands, no sweep can run — and a proof that was never validated is not emitted.'),
+  sweep.at ? null : renderRules(app));
+}
+
+/**
+ * What a sweep checks. Shown before the first one has run, because "no sweep
+ * has been run" tells a user nothing about what running one would buy them.
+ * @param {any} app
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderRules(app) {
+  const rules = app.services.preflightRules();
+  if (!rules.length) return null;
+  const bySeverity = [1, 2, 3].map((severity) => rules.filter((r) => r.severity === severity));
+  return h('details', { class: 'st-details' },
+    h('summary', null, `What a sweep checks · ${rules.length} rules, ${bySeverity[0].length} of them blocking`),
+    h('ul', { class: 'st-rules' }, rules.map((rule) => h('li', { class: 'st-rule', [KEY_ATTR]: rule.code },
+      badge(rule.code, rule.severity === 1 ? 'bad' : rule.severity === 2 ? 'warn' : 'dim'),
+      rule.describe ? h('span', { class: 'st-rule-describe' }, rule.describe) : null))));
 }
 
 /** @param {any} app @returns {number} */

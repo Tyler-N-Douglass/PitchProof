@@ -262,25 +262,201 @@ export function stripCssComments(css) {
 }
 
 /**
+ * Blank out the parts of a declaration value that are text rather than colour:
+ * quoted strings and the payload of `url(...)`. Replaced with spaces so offsets
+ * and token boundaries are preserved.
+ *
+ * Without this, `background: url("gold-bar.png")` contributes CSS `gold` and
+ * `fill: url(#navy-gradient)` contributes CSS `navy` — colours the page never
+ * paints.
+ * @param {string} value
+ * @returns {string}
+ */
+export function maskCssLiterals(value) {
+  return String(value)
+    .replace(/"[^"]*"|'[^']*'/g, (m) => ' '.repeat(m.length))
+    .replace(/\burl\(([^)]*)\)/gi, (m) => ' '.repeat(m.length));
+}
+
+/**
  * Every colour token inside a property value, including each stop of a
  * gradient and each entry of a comma-separated shorthand.
+ *
+ * The bare-keyword alternative is bounded on both sides so it can only match a
+ * whole CSS identifier. That boundary is load-bearing rather than cosmetic:
+ * without it `var(--nw-navy)` yielded the token `navy`, `parseCssColor` turned
+ * it into HTML navy `#000080`, and the extracted palette was a colour the site
+ * never renders. `navy` in `color: navy` is a colour; `navy` inside
+ * `--nw-navy` is part of a name. `-` is excluded on both sides for exactly
+ * that reason, since it is a legal CSS identifier character.
+ *
  * @param {string} value
  * @returns {ParsedColor[]}
  */
 export function colorTokensIn(value) {
   /** @type {ParsedColor[]} */
   const out = [];
-  const text = String(value);
-  const direct = parseCssColor(text);
+  const raw = String(value);
+  const direct = parseCssColor(raw);
   if (direct) return [direct];
-  const re = /#[0-9a-fA-F]{3,8}\b|(?:rgba?|hsla?|hwb|oklch|oklab)\([^()]*(?:\([^()]*\)[^()]*)*\)|[a-zA-Z]{3,20}/g;
+  const text = maskCssLiterals(raw);
+  // Functional and hex forms first; they cannot be confused with identifiers.
+  const fnRe = /#[0-9a-fA-F]{3,8}(?![0-9a-zA-Z-])|(?:rgba?|hsla?|hwb|oklch|oklab)\([^()]*(?:\([^()]*\)[^()]*)*\)/g;
   let m;
-  while ((m = re.exec(text)) !== null) {
+  /** @type {[number, number][]} */
+  const consumed = [];
+  while ((m = fnRe.exec(text)) !== null) {
+    consumed.push([m.index, m.index + m[0].length]);
     const parsed = parseCssColor(m[0]);
+    if (parsed) out.push(parsed);
+  }
+  // Then whole-identifier keywords, skipping anything already consumed.
+  // `(^|[^\w-])` rather than a lookbehind: lookbehind is ES2018 and the studio
+  // has to run in whatever browser the seller has open.
+  const wordRe = /(^|[^\w-])([a-zA-Z]{3,20})(?![\w-])/g;
+  while ((m = wordRe.exec(text)) !== null) {
+    const start = m.index + m[1].length;
+    if (consumed.some(([a, b]) => start >= a && start < b)) continue;
+    const parsed = parseCssColor(m[2]);
     if (parsed) out.push(parsed);
   }
   return out;
 }
+
+/** True for a CSS custom property name. */
+export function isCustomProperty(prop) {
+  return typeof prop === 'string' && prop.startsWith('--');
+}
+
+/**
+ * Build the custom-property environment from a declaration list.
+ *
+ * A modern site keeps its palette in `:root { --brand-navy: #0F2A47 }` and
+ * paints with `var(--brand-navy)`. Ignoring those declarations throws away the
+ * only place the real colours appear.
+ *
+ * Precedence, in the order CSS itself would resolve it as far as a static
+ * scanner can tell: an unconditional declaration beats one inside an at-rule
+ * (a `prefers-color-scheme: dark` override must not become the default
+ * palette), and within a tier the last declaration in source order wins, which
+ * is CSS's own rule at equal specificity.
+ *
+ * @param {readonly CssDeclaration[]} declarations
+ * @returns {Map<string, {value: string, conditional: boolean, selector: string}>}
+ */
+export function buildCustomPropertyEnv(declarations) {
+  /** @type {Map<string, {value: string, conditional: boolean, selector: string}>} */
+  const env = new Map();
+  for (const d of declarations || []) {
+    if (!isCustomProperty(d.prop)) continue;
+    const conditional = d.atRules.length > 0;
+    const prev = env.get(d.prop);
+    if (prev && prev.conditional === false && conditional === true) continue;
+    env.set(d.prop, { value: d.value, conditional, selector: d.selector });
+  }
+  return env;
+}
+
+/** Index of the parenthesis matching the one at `open`, or −1. */
+function matchParen(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+/** Split `--name, fallback` at its first top-level comma. */
+function splitVarArgs(body) {
+  let depth = 0;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === ',' && depth === 0) {
+      return { name: body.slice(0, i).trim(), fallback: body.slice(i + 1).trim() };
+    }
+  }
+  return { name: body.trim(), fallback: null };
+}
+
+/** Nesting depth of `var()` substitution before a value is declared unresolvable. */
+export const MAX_VAR_DEPTH = 16;
+
+/**
+ * Index of the next `var(` that begins a whole identifier, at or after `from`.
+ * @param {string} text
+ * @param {number} from
+ * @returns {number}
+ */
+function indexOfVar(text, from) {
+  const lower = text.toLowerCase();
+  for (let i = lower.indexOf('var(', from); i >= 0; i = lower.indexOf('var(', i + 1)) {
+    const before = i === 0 ? '' : text[i - 1];
+    if (before === '' || !/[\w-]/.test(before)) return i;
+  }
+  return -1;
+}
+
+/**
+ * @param {string} text
+ * @param {Map<string, {value: string}>} env
+ * @param {Set<string>} visited names currently being expanded on this branch
+ * @param {((name: string) => void)|undefined} onReference
+ * @param {number} depth
+ * @returns {string|null}
+ */
+function expandVars(text, env, visited, onReference, depth) {
+  if (depth > MAX_VAR_DEPTH) return null;
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const at = indexOfVar(text, i);
+    if (at < 0) return out + text.slice(i);
+    out += text.slice(i, at);
+    const close = matchParen(text, at + 3);
+    if (close < 0) return null;
+    const { name, fallback } = splitVarArgs(text.slice(at + 4, close));
+    if (!name.startsWith('--')) return null;
+    if (onReference) onReference(name);
+    const entry = env && typeof env.get === 'function' ? env.get(name) : undefined;
+    /** @type {string|null} */
+    let replacement = null;
+    // `visited` is per branch, not global: a value may legitimately use the
+    // same token twice (`linear-gradient(var(--a), var(--a))`), and only a
+    // token that expands into itself is a cycle.
+    if (entry && !visited.has(name)) {
+      const branch = new Set(visited);
+      branch.add(name);
+      replacement = expandVars(entry.value, env, branch, onReference, depth + 1);
+    }
+    if (replacement === null && fallback !== null) {
+      replacement = expandVars(fallback, env, visited, onReference, depth + 1);
+    }
+    if (replacement === null) return null;
+    out += replacement;
+    i = close + 1;
+  }
+}
+
+/**
+ * Substitute `var()` references against a custom-property environment.
+ *
+ * Returns `null` when a reference cannot be resolved and carries no fallback —
+ * which is what CSS does with it (the declaration becomes invalid at
+ * computed-value time), and the only honest answer here: an unresolved
+ * variable is a colour we cannot see, not a colour we may invent.
+ *
+ * @param {string} value
+ * @param {Map<string, {value: string}>} env
+ * @param {{onReference?: (name: string) => void, maxDepth?: number}} [options]
+ * @returns {string|null}
+ */
+export function resolveCssVars(value, env, options = {}) {
+  return expandVars(String(value), env, new Set(), options.onReference, 0);
+}
+
 
 /**
  * @typedef {object} CssDeclaration

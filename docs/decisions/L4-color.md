@@ -403,3 +403,102 @@ resolved without a live document, and the collector drops it.
 one and there is no way to tell them apart afterwards. Dropping it costs one
 sample; guessing it can move a cluster centroid and, through it, a role
 assignment — and the confidence number would not know to fall.
+
+---
+
+## L4-D18 — A bare colour keyword must be a whole identifier
+
+**Unsettled by:** §7 says to collect colours "from the raw CSS" but not how to
+tell a colour token from a word that merely looks like one.
+
+**Decision.** The bare-keyword alternative in `colorTokensIn` is bounded on both
+sides so it can only match a complete CSS identifier — not preceded by `-`, `--`
+or a word character, and not followed by one — and quoted strings and `url(...)`
+payloads are masked out before scanning.
+
+**Why.** This was a severity-1 defect, found by the §20 critic (CRITIQUE-1 F2),
+and it is the §22.1 failure in its most literal form. The unbounded pattern
+matched `navy` inside `var(--nw-navy)`, `parseCssColor` turned it into HTML navy
+`#000080`, and the corpus — whose declared brand is `#0F2A47` navy and `#E8622C`
+orange — extracted `primary #000080` and `accent #ffa500`. **Not one extracted
+role was a colour the site renders.** The emitted artifact wore HTML defaults
+while telling a client "this is your brand", which is a §18 honesty failure as
+much as a colour-science one. `-` is excluded on both sides specifically because
+it is a legal identifier character and is exactly how design tokens are named.
+The same masking stops `background: url("gold-bar.png")` contributing CSS `gold`
+and `fill: url(#navy-gradient)` contributing CSS `navy`.
+
+The boundary uses `(^|[^\w-])` with a capture rather than a lookbehind: lookbehind
+is ES2018 and the studio has to run in whatever browser the seller has open.
+
+**Test.** `test/brand/color-cluster.test.mjs` asserts twelve token names that
+each contain a colour keyword yield nothing. The assertion this replaced used
+`var(--y)`, which contains no colour keyword and so could never have caught the
+bug — a fixture chosen, accidentally, to miss the failure mode.
+
+---
+
+## L4-D19 — Custom properties are the palette, so they are collected and resolved
+
+**Unsettled by:** §7 lists computed styles, raw CSS and imagery as sources. It
+predates the fact that a modern stylesheet keeps its brand in
+`:root { --brand-navy: #0F2A47 }` and paints with `var(--brand-navy)`, so the
+declaration holding the real value is in neither place the naive reading looks.
+
+**Decision.** `collectFromCss` runs two passes. Pass one builds a
+custom-property environment from every sheet. Pass two walks the painting
+declarations, resolving `var()` against that environment before looking for
+colours. Then:
+
+- a token **referenced** by a painting declaration contributes only through its
+  usages, at the area of those usages;
+- a token **nothing references** still contributes, at `DECLARED_TOKEN_AREA` —
+  the smallest footprint the area model assigns to anything;
+- a `var()` that cannot be resolved and carries no fallback contributes
+  **nothing**.
+
+Precedence in the environment: an unconditional declaration beats one inside an
+at-rule, and within a tier the last in source order wins.
+
+**Why.** Resolving rather than merely harvesting is what makes §7's area
+weighting mean anything for a tokenised site: `background: var(--nw-navy)` on the
+header and hero should carry the area of a header and a hero, not the area of one
+line in `:root`. Counting both the declaration and the usage would double-count
+whichever colours happen to be tokenised, which is why a referenced token
+contributes only once. An unreferenced token still counts because a declared
+design token is the brand stating its own palette and the site may paint with it
+from a stylesheet this collector never sees — but it has no geometry at all, so
+it gets the weakest footprint in the model rather than an invented one. The
+precedence rule keeps a `prefers-color-scheme: dark` override from silently
+becoming the default palette; within a tier, last-wins is CSS's own rule at equal
+specificity. Refusing an unresolvable `var()` is not conservatism, it is what CSS
+itself does: the declaration becomes invalid at computed-value time.
+
+Cycle handling is per branch, not global — `linear-gradient(var(--a), var(--a))`
+is a legitimate double use, and only a token that expands into itself is a cycle.
+An early version conflated the two and dropped the second reference.
+
+**Test.** On `test/fixtures/corpus/northwind/assets/site.css`, an oracle in the
+test scans the file for `#rrggbb` literals and asserts that **every** collected
+colour is one of them, that all eight `CORPUS_BRAND` tokens are recovered by
+value, and that none of the HTML colours hiding in the token names appears. The
+solved palette is checked the same way: no extracted role may be a colour absent
+from the file.
+
+---
+
+## L4-D20 — The border and outline shorthands are line properties
+
+**Unsettled by:** nothing in the spec; a consequence of L4-D19.
+
+**Decision.** `border`, `border-top|right|bottom|left`, `border-block`,
+`border-inline`, `outline`, `column-rule` and `text-decoration` join the
+longhand `*-color` properties as line properties.
+
+**Why.** `border: 1px solid var(--nw-line)` is where a real stylesheet puts its
+border colour, and without the shorthands that token was never seen as *used* —
+it fell through to the declared-token floor and lost the area weight of every
+hairline it actually draws. None of the non-colour keywords a border shorthand
+can carry (`solid`, `dashed`, `dotted`, `double`, `groove`, `ridge`, `inset`,
+`outset`, `thin`, `medium`, `thick`, `none`, `hidden`) is a CSS named colour, so
+the bounded keyword scan of L4-D18 cannot misfire on them.

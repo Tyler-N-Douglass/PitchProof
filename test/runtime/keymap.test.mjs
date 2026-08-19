@@ -123,3 +123,36 @@ test('preventDefault is called only for keys the runtime actually consumed', () 
   runtime.handleKey({ key: 'q', preventDefault: () => { prevented += 1; } });
   assert.equal(prevented, 1);
 });
+
+test('Backspace pops one return frame, R unwinds the whole stack (§11)', () => {
+  const runtime = new Runtime(makeProof());
+  // Two levels deep: spine -> approvals -> legal.
+  runtime.run('goToScene', 'sc_spine_1');
+  runtime.run('jump', 'bn_approvals');
+  runtime.run('nextScene');
+  runtime.run('jump', 'bn_legal');
+  assert.equal(runtime.nav.sequenceId, 'bn_legal');
+  assert.equal(runtime.nav.stack.length, 2);
+
+  assert.equal(resolveKey(ev('Backspace')).command, 'returnOnce');
+  runtime.handleKey(ev('Backspace'));
+  assert.equal(runtime.nav.sequenceId, 'bn_approvals', 'one level, not all the way');
+  assert.equal(runtime.nav.stack.length, 1);
+
+  runtime.handleKey(ev('Backspace'));
+  assert.equal(runtime.nav.sequenceId, 'spine');
+  assert.equal(runtime.nav.stack.length, 0);
+  assert.equal(runtime.handleKey(ev('Backspace')), null, 'popping an empty stack does nothing');
+});
+
+test('R still unwinds every frame in one step, from any depth', () => {
+  const runtime = new Runtime(makeProof());
+  runtime.run('goToScene', 'sc_spine_1');
+  runtime.run('jump', 'bn_approvals');
+  runtime.run('nextScene');
+  runtime.run('jump', 'bn_legal');
+  assert.equal(runtime.nav.stack.length, 2);
+  runtime.handleKey(ev('r'));
+  assert.equal(runtime.nav.sequenceId, 'spine');
+  assert.equal(runtime.nav.stack.length, 0);
+});

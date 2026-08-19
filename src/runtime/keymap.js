@@ -39,6 +39,12 @@ export const BINDINGS = /** @type {Binding[]} */ ([
   { keys: ['/'], command: 'openJump', label: 'Jump to an objection', group: 'Branch' },
   { keys: ['m', 'M'], command: 'toggleMap', label: 'Branch map', group: 'Branch' },
   { keys: ['r', 'R'], command: 'returnToSpine', label: 'Return to the spine', group: 'Branch' },
+  // §11 keeps a return stack so nested jumps unwind correctly, and the reducer
+  // has always supported popping one frame — but nothing in the product could
+  // reach it, so a presenter two branches deep could only unwind all the way or
+  // not at all. Backspace pops one level, which is what "unwind correctly"
+  // means when you are inside a branch that was reached from another branch.
+  { keys: ['Backspace'], command: 'returnOnce', label: 'Back one branch level', group: 'Branch' },
   { keys: ['b', 'B'], command: 'toggleBlank', label: 'Blank the screen', group: 'Present' },
   { keys: ['p', 'P'], command: 'togglePresenter', label: 'Presenter view', group: 'Present' },
   { keys: ['c', 'C'], command: 'toggleContents', label: 'Contents', group: 'Present' },

@@ -18,10 +18,10 @@ import { join } from 'node:path';
 import { MAX_TRANSITION_MS, BREAKPOINTS } from '../../src/core/contracts.js';
 import {
   sceneVars, TYPE_ROLES, scenesCssRoles, cssRoleName, BP_QUERY, GEOM,
-  stagePadPx, fanColumns, SLOTS, boxGeometry,
+  stagePadPx, fanColumns, SLOTS, boxGeometry, textOverflowOf,
 } from '../../src/scene/index.js';
-import { buildScene, renderSceneTree } from '../../src/scene/index.js';
-import { layoutCases, contextFor } from '../fixtures/scene/content.mjs';
+import { buildScene, renderSceneTree, measureScene } from '../../src/scene/index.js';
+import { layoutCases, contextFor, specimen } from '../fixtures/scene/content.mjs';
 
 const SCENE_DIR = new URL('../../src/scene/', import.meta.url).pathname;
 const SCENES_CSS = readFileSync(join(SCENE_DIR, 'scenes.css'), 'utf8');
@@ -302,4 +302,46 @@ test('the sheet colours itself from the brand theme, never from a literal', () =
   const withoutComments = SCENES_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(withoutComments), 'a literal colour is in the scene stylesheet');
   assert.ok(!/\brgba?\(/.test(withoutComments), 'a literal colour is in the scene stylesheet');
+});
+
+test('the reported textOverflow is what the stylesheet declares for that clamp', () => {
+  // The grading policy for CRITIQUE-1 F6 rests on this field, so the value the
+  // measurement reports has to be the value the CSS produces — checked here per
+  // clamp value the layouts actually stamp, the same way the clamp itself is.
+  const base = rule('.pp-scene [data-pp-clamp]');
+  assert.ok(base, 'the clamp base rule exists');
+  assert.equal(base.decls.overflow, 'hidden', 'a clamped run hides its overflow');
+
+  const one = rule('.pp-scene [data-pp-clamp="1"]');
+  assert.ok(one, 'the one-line clamp rule exists');
+  assert.equal(one.decls['text-overflow'], 'ellipsis', 'a one-line clamp truncates visibly');
+  assert.equal(one.decls['white-space'], 'nowrap', 'and does not wrap — measureScene reports both');
+  assert.equal(textOverflowOf({ 'data-pp-clamp': '1' }), 'ellipsis');
+
+  // Every multi-line clamp goes through `-webkit-line-clamp`, which truncates
+  // with an ellipsis of its own; the base rule is what makes that true.
+  for (const r of RULES) {
+    const match = /^\.pp-scene \[data-pp-clamp="(\d+)"\]$/.exec(r.selector);
+    if (!match) continue;
+    assert.equal(r.decls['-webkit-line-clamp'], match[1], `clamp ${match[1]}`);
+    assert.equal(textOverflowOf({ 'data-pp-clamp': match[1] }), 'ellipsis', `clamp ${match[1]}`);
+  }
+  assert.equal(textOverflowOf({}), 'clip', 'an unclamped run has nothing on screen to mark a cut');
+});
+
+test('every declaration of overflow-wrap in the sheet is reported by a box that carries it', () => {
+  // `.pp-table th/td { overflow-wrap: break-word }` was declared and not
+  // reported, so the detector read a wrapped word as an unbreakable overflow.
+  const wrapping = RULES.filter((r) => r.decls['overflow-wrap'] && !r.selector.includes('[data-pp-ow'));
+  assert.ok(wrapping.length > 0, 'the sheet sets overflow-wrap somewhere outside the attribute rules');
+  for (const r of wrapping) {
+    assert.equal(r.decls['overflow-wrap'], 'break-word', r.selector);
+    assert.ok(/\.pp-table/.test(r.selector), `${r.selector}: only table cells wrap this way`);
+  }
+  const spec = specimen();
+  const scene = buildScene({ layout: 'splitBeforeAfter', specimen: spec, renditions: [], headline: 'T' });
+  const cells = measureScene(scene, contextFor(scene, { specimen: spec, renditions: [] }), 'md').boxes
+    .filter((b) => b.role === 'cell' || b.role === 'cellHead');
+  assert.ok(cells.length > 0 && cells.every((b) => b.overflowWrap === 'break-word'),
+    'the cells report the wrap the stylesheet gives them');
 });

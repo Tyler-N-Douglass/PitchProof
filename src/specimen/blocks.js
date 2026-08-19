@@ -75,6 +75,78 @@ export function mediaIndex(media) {
   return index;
 }
 
+/**
+ * Resolve one block `ref` against a media index, the way `<img src>` is
+ * resolved: exact key, then basename, then with a leading `./` or `/` trimmed,
+ * then percent-decoded. Importer-produced blocks reference a ZIP part name
+ * (`word/media/image1.png`) or a PDF object name (`page001-Im1.png`), and both
+ * arrive as the asset's `name`, so all four forms have to be tried.
+ * @param {Map<string, string>} index
+ * @param {string} ref
+ * @returns {string|null} the `MediaRef` id, or null when nothing captured it
+ */
+export function resolveMediaRef(index, ref) {
+  if (!ref || !index || index.size === 0) return null;
+  const raw = String(ref);
+  /** @type {string[]} */
+  const candidates = [raw, raw.replace(/^\.?\//, '')];
+  const base = raw.split(/[?#]/)[0].split('/').pop();
+  if (base) candidates.push(base);
+  try {
+    const decoded = decodeURIComponent(raw);
+    if (decoded !== raw) {
+      candidates.push(decoded, decoded.replace(/^\.?\//, ''));
+      const decodedBase = decoded.split(/[?#]/)[0].split('/').pop();
+      if (decodedBase) candidates.push(decodedBase);
+    }
+  } catch {
+    // A ref that is not valid percent-encoding is used as it stands.
+  }
+  for (const key of candidates) {
+    const hit = index.get(key);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * Rewrite every `media` block's `ref` to the id of the `MediaRef` that carries
+ * its bytes. Blocks produced from a parsed document are already resolved during
+ * blockification; blocks handed over by a document importer (§6.5 `.docx`,
+ * `.pdf`) are not, and an unresolved ref is a severity-1 `ASSET_MISSING` at
+ * emit even though the image is present and inlined.
+ * @param {any[]} blocks
+ * @param {any} media `MediaRef[]`, a Map, or anything `mediaIndex` accepts
+ * @returns {{blocks: any[], resolved: number, unresolved: string[]}}
+ */
+export function resolveBlockMedia(blocks, media) {
+  const index = mediaIndex(media);
+  const known = new Set();
+  for (const [, id] of index) known.add(id);
+  let resolved = 0;
+  /** @type {string[]} */
+  const unresolved = [];
+  const out = (blocks || []).map((block) => {
+    if (!block || block.type !== 'media') return { ...block };
+    const copy = { ...block };
+    if (known.has(copy.ref)) {
+      delete copy.unresolved;
+      return copy;
+    }
+    const id = resolveMediaRef(index, copy.ref);
+    if (id) {
+      copy.ref = id;
+      delete copy.unresolved;
+      resolved += 1;
+    } else {
+      copy.unresolved = true;
+      unresolved.push(String(copy.ref));
+    }
+    return copy;
+  });
+  return { blocks: out, resolved, unresolved };
+}
+
 /** @param {any} node @returns {boolean} */
 function isInline(node) {
   if (isText(node)) return true;

@@ -46,9 +46,9 @@ export function contentsIndex(ctx) {
         'data-pp-group': waveGroup('index', index, entries.length, 5),
         'data-pp-rendition': entry.rendition ? entry.rendition.id : null,
       },
-      h('div', { class: 'pp-index-num', 'data-pp-box': 'indexNumber', 'data-pp-n': String(entries.length) },
+      h('div', { class: 'pp-index-num', 'data-pp-box': 'indexNumber', 'data-pp-n': String(entries.length), 'data-pp-container': 'index' },
         h('span', { class: 'pp-index-num-text', 'data-pp-tx': 'indexNumber' }, pad2(index + 1))),
-      h('div', { class: 'pp-index-text', 'data-pp-box': 'indexRow', 'data-pp-n': String(entries.length) },
+      h('div', { class: 'pp-index-text', 'data-pp-box': 'indexRow', 'data-pp-n': String(entries.length), 'data-pp-container': 'index' },
         h('p', { class: 'pp-index-title', 'data-pp-tx': 'indexTitle', 'data-pp-clamp': '2' }, entry.title),
         entry.blurb
           ? h('p', { class: 'pp-index-blurb', 'data-pp-tx': 'indexBlurb', 'data-pp-clamp': '2' }, entry.blurb)

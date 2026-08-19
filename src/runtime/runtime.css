@@ -236,8 +236,21 @@ html, body {
   gap: 6px;
   padding: 3px 8px;
   border-radius: 4px;
-  background: var(--pp-warning);
-  color: var(--pp-on-primary);
+  /*
+   * The label wears `surfaceAlt`/`onSurfaceAlt` because that is the pair the
+   * role solver guarantees at >= 4.5:1 and the pair `src/validate/contrast.js`
+   * checks. It used to render `onPrimary` on `warning` — a pairing no solver
+   * post-condition covers — so rehearsal reported a clean provenance result and
+   * the emitter then refused the same proof with fifty severity-1
+   * PROVENANCE_UNLABELED findings, at 4.36:1. A rehearsal that clears what the
+   * emitter refuses is worse than no rehearsal (§14).
+   *
+   * Distinctiveness comes from the warning-coloured rule and the weight, not
+   * from a fill whose contrast nothing guarantees.
+   */
+  background: var(--pp-surface-alt);
+  color: var(--pp-on-surface-alt);
+  border-left: 3px solid var(--pp-warning);
   font-family: var(--pp-font-body);
   font-size: 12px;
   line-height: 1.35;

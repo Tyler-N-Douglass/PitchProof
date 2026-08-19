@@ -34,13 +34,17 @@ import {
 } from '../../../src/core/text-metrics.js';
 import {
   HEADLINES, SUBHEADS, PARAGRAPHS, GERMAN_COMPOUNDS, GERMAN_SENTENCES,
-  CJK, LABELS, LONG_TOKENS, BREAKABLE_TOKEN,
+  CJK, LABELS, LONG_TOKENS, BREAKABLE_TOKEN, PANEL_META, PANEL_TITLES,
 } from './copy.mjs';
 
 /** The three breakpoints §4 pins, by id. */
 export const BREAKPOINT_WIDTH = { sm: 390, md: 1024, lg: 1600 };
 
-const GENERICS = new Set(['sans-serif', 'serif', 'monospace', 'system-ui']);
+/** CSS generic families. Always available, and each resolves to a platform face. */
+const GENERICS = new Set([
+  'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
+  'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded', 'math', 'emoji',
+]);
 const AVAILABLE = new Set(FALLBACK_CANDIDATES.map(normalizeFamily));
 
 /**
@@ -118,6 +122,7 @@ const CASES = [];
  * @param {number} [spec.containerWidthPx]        for wrapped cases, the wrap width
  * @param {number} [spec.maxLines]
  * @param {number} [spec.lostLines]               for clamp cases
+ * @param {'clip'|'ellipsis'} [spec.textOverflow] L8's declared truncation mode
  * @param {string} [spec.role]
  * @param {boolean} [spec.embeddable]
  */
@@ -128,7 +133,7 @@ function plant(spec) {
     letterSpacingPx = 0, textTransform = 'none',
     whiteSpace = axis === 'width' ? 'nowrap' : 'normal',
     overflowWrap = 'normal', overBy = 0,
-    containerWidthPx, maxLines, lostLines, role = 'body', embeddable = false,
+    containerWidthPx, maxLines, lostLines, textOverflow, role = 'body', embeddable = false,
   } = spec;
 
   const declared = [family, ...stack];
@@ -145,6 +150,12 @@ function plant(spec) {
     whiteSpace,
     overflowWrap,
   };
+  // Declared only when the case is about the truncation mode. A case that leaves
+  // it out is measuring a box whose measurement predates L8's field, and must
+  // grade as CSS's own default — `clip`.
+  if (textOverflow) box.textOverflow = textOverflow;
+
+  if (axis === 'width' && maxLines) box.maxLines = maxLines;
 
   if (axis === 'width') {
     const width = whiteSpace === 'nowrap'
@@ -178,6 +189,7 @@ function plant(spec) {
     overBy,
     requestedFamily: family,
     resolvedFamily: resolved,
+    textOverflow: textOverflow || 'clip',
     breakpoint,
     brand: brandWith({ family, stack, role: role === 'headline' ? 'display' : 'body', weights: [weight], embeddable }),
     measurement: {
@@ -547,15 +559,17 @@ plant({
 // ---------------------------------------------------------------------------
 
 [
-  { text: PARAGRAPHS[0], lost: 1, planted: 'sev2' },
-  { text: PARAGRAPHS[1], lost: 1, planted: 'sev2' },
-  { text: PARAGRAPHS[2], lost: 3, planted: 'sev1' },
-  { text: SUBHEADS[0], lost: 2, planted: 'sev1' },
+  { text: PARAGRAPHS[0], lost: 1, to: 'ellipsis', planted: 'sev2' },
+  { text: PARAGRAPHS[1], lost: 1, to: 'clip', planted: 'sev1' },
+  { text: PARAGRAPHS[2], lost: 3, to: 'ellipsis', planted: 'sev2' },
+  { text: SUBHEADS[0], lost: 2, to: undefined, planted: 'sev1' },
 ].forEach((spec, i) => {
   plant({
     id: `I${i}`,
     group: 'line-clamp',
-    note: `Clamped ${spec.lost} line${spec.lost === 1 ? '' : 's'} short of the copy it was given.`,
+    note: spec.to === undefined
+      ? `Clamped ${spec.lost} lines short, with no text-overflow mode declared at all — CSS's default is \`clip\`, so it grades as silent loss.`
+      : `Clamped ${spec.lost} line${spec.lost === 1 ? '' : 's'} short of the copy it was given, ${spec.to === 'ellipsis' ? 'with an ellipsis' : 'with nothing to show for it'}.`,
     planted: /** @type {any} */ (spec.planted),
     axis: 'clamp',
     text: spec.text,
@@ -565,6 +579,7 @@ plant({
     fontSizePx: 16,
     containerWidthPx: 440,
     lostLines: spec.lost,
+    textOverflow: spec.to,
   });
 });
 
@@ -763,6 +778,169 @@ plant({
   embeddable: false,
   containerWidthPx: EMBED_CONTAINER,
 });
+
+// ---------------------------------------------------------------------------
+// M, N, O. The one-line clamp — the shape the layouts emit constantly, and the
+//    class the §20 critic (F7) found this corpus did not contain at all.
+//
+//    `splitBeforeAfter`, `sideNote` and `stack` render a panel title and a panel
+//    meta row under every column, both `data-pp-clamp="1"`, which `scenes.css`
+//    turns into `white-space: nowrap; text-overflow: ellipsis`. The text in them
+//    is the prospect's own `<title>` and source URL — nothing a seller wrote and
+//    nothing a seller can shorten (§18.3 presents their content unmodified) — so
+//    the grading of this exact box decides whether four of the eight layouts are
+//    usable on real content.
+//
+//    The geometry below is production geometry, read out of `measureScene` for a
+//    `splitBeforeAfter` scene at each breakpoint, rather than invented.
+// ---------------------------------------------------------------------------
+
+/** Panel column width at each breakpoint, from `measureScene`. */
+const PANEL_W = { sm: 320, md: 429.232, lg: 686.8 };
+/** Panel meta row: a monospace face, from `measureScene`. */
+const META_SIZE = { sm: 10, md: 11, lg: 12 };
+/** Panel title row, from `measureScene`. */
+const TITLE_SIZE = { sm: 13, md: 15, lg: 17 };
+
+/**
+ * @param {object} spec
+ */
+function plantPanelRow(spec) {
+  plant({
+    id: spec.id,
+    group: spec.group,
+    note: spec.note,
+    planted: spec.planted,
+    axis: 'width',
+    text: spec.text,
+    family: spec.family,
+    stack: spec.stack,
+    breakpoint: spec.breakpoint,
+    fontSizePx: spec.fontSizePx,
+    weight: spec.weight,
+    whiteSpace: 'nowrap',
+    maxLines: 1,
+    textOverflow: spec.textOverflow,
+    containerWidthPx: PANEL_W[spec.breakpoint],
+    role: spec.role,
+  });
+}
+
+// M — the ellipsised panel meta row. Designed truncation: the viewer sees the
+//     `…` and can ask what the rest of the URL is. A warning, never a block.
+[
+  { bp: 'sm', text: PANEL_META[0], planted: 'sev2', note: "The prospect's own URL, 40.6% past a 320px panel at sm, ellipsised." },
+  { bp: 'md', text: PANEL_META[0], planted: 'sev2', note: 'The same URL, 15.3% past the panel at md.' },
+  { bp: 'lg', text: PANEL_META[0], planted: 'fit', note: 'The same URL fits the wider panel at lg with room to spare.' },
+  { bp: 'sm', text: PANEL_META[1], planted: 'sev2', note: 'A product URL, 35% over at sm.' },
+  { bp: 'md', text: PANEL_META[3], planted: 'fit', note: 'A locale label in the same row: nothing to truncate.' },
+  { bp: 'sm', text: PANEL_META[5], planted: 'fit', note: 'The rendition provenance note in the same row, comfortably inside it.' },
+].forEach((c, i) => plantPanelRow({
+  id: `M${i}`,
+  group: 'panel-meta-ellipsis',
+  note: c.note,
+  planted: c.planted,
+  text: c.text,
+  family: 'ui-monospace',
+  stack: ['Consolas', 'monospace'],
+  breakpoint: c.bp,
+  fontSizePx: META_SIZE[c.bp],
+  weight: 400,
+  textOverflow: 'ellipsis',
+  role: 'panelMeta',
+}));
+
+// N — the same row with no ellipsis. Identical text, identical geometry, and a
+//     different verdict, because the viewer is told nothing.
+[
+  { bp: 'sm', text: PANEL_META[0], planted: 'sev1' },
+  { bp: 'md', text: PANEL_META[0], planted: 'sev1' },
+  { bp: 'sm', text: PANEL_META[1], planted: 'sev1' },
+  { bp: 'lg', text: PANEL_META[0], planted: 'fit' },
+].forEach((c, i) => plantPanelRow({
+  id: `N${i}`,
+  group: 'panel-meta-clip',
+  note: 'The same one-line row clipping instead of ellipsising: the text is cut with nothing to say so.',
+  planted: c.planted,
+  text: c.text,
+  family: 'ui-monospace',
+  stack: ['Consolas', 'monospace'],
+  breakpoint: c.bp,
+  fontSizePx: META_SIZE[c.bp],
+  weight: 400,
+  textOverflow: 'clip',
+  role: 'panelMeta',
+}));
+
+// O — the panel title row, same clamp, a proportional face, and the prospect's
+//     own page title rather than a URL.
+[
+  { bp: 'sm', text: PANEL_TITLES[0], planted: 'sev2' },
+  { bp: 'md', text: PANEL_TITLES[0], planted: 'sev2' },
+  { bp: 'lg', text: PANEL_TITLES[1], planted: 'fit' },
+  { bp: 'md', text: PANEL_TITLES[2], planted: 'fit' },
+].forEach((c, i) => plantPanelRow({
+  id: `O${i}`,
+  group: 'panel-title-ellipsis',
+  note: "The prospect's own page title in a one-line clamp, which §18.3 forbids the tool from shortening.",
+  planted: c.planted,
+  text: c.text,
+  family: 'Arial',
+  stack: ['Helvetica', 'sans-serif'],
+  breakpoint: c.bp,
+  fontSizePx: TITLE_SIZE[c.bp],
+  weight: 600,
+  textOverflow: 'ellipsis',
+  role: 'panelTitle',
+}));
+
+// P — a *wrapping* box clamped to one line. The width axis has nothing to say
+//     (it wraps); the clamp axis has everything to say, and the grading is the
+//     same discriminator.
+[
+  { to: 'ellipsis', planted: 'sev2', note: 'A single-line teaser clamp on a wrapping card: the ellipsis tells the viewer there is more.' },
+  { to: 'clip', planted: 'sev1', note: 'The same teaser clamp with no ellipsis: the rest of the sentence is simply gone.' },
+].forEach((c, i) => plant({
+  id: `P${i}`,
+  group: 'clamp-one-line',
+  note: c.note,
+  planted: /** @type {any} */ (c.planted),
+  axis: 'clamp',
+  text: SUBHEADS[1],
+  family: 'Lato',
+  stack: ['Arial'],
+  breakpoint: 'md',
+  fontSizePx: 16,
+  containerWidthPx: 440,
+  lostLines: 3,
+  textOverflow: c.to,
+  role: 'cardTeaser',
+}));
+
+// Q — the multi-line clamp the critic paired against the one-line case. Losing
+//     two or three lines of the client's own copy behind an ellipsis is graded
+//     the same way losing the tail of a URL behind one is: as a warning. The
+//     inconsistency the critic found was that the two disagreed.
+[
+  { lost: 2, to: 'ellipsis', planted: 'sev2' },
+  { lost: 3, to: 'ellipsis', planted: 'sev2' },
+  { lost: 2, to: 'clip', planted: 'sev1' },
+].forEach((c, i) => plant({
+  id: `Q${i}`,
+  group: 'clamp-multi-line',
+  note: `A ${c.to === 'ellipsis' ? 'signalled' : 'silent'} multi-line clamp losing ${c.lost} lines of the client's own copy.`,
+  planted: /** @type {any} */ (c.planted),
+  axis: 'clamp',
+  text: PARAGRAPHS[2],
+  family: 'Lato',
+  stack: ['Arial'],
+  breakpoint: 'md',
+  fontSizePx: 16,
+  containerWidthPx: 440,
+  lostLines: c.lost,
+  textOverflow: c.to,
+  role: 'body',
+}));
 
 // ---------------------------------------------------------------------------
 

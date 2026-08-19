@@ -20,6 +20,7 @@
 import { ok, err } from '../core/result.js';
 import { inflateRaw } from '../core/inflate.js';
 import { originOf, resolveUrl } from './capture.js';
+import { parseRobots } from './robots.js';
 
 /**
  * @typedef {object} SitemapEntry
@@ -62,14 +63,11 @@ export async function discoverSitemap(base, deps = /** @type {any} */ ({})) {
   /** @type {string[]} */
   const notes = [];
 
-  const robots = await fetchText(deps.http, `${origin}/robots.txt`);
-  if (robots !== null) {
-    for (const line of robots.split(/\r?\n/)) {
-      const m = line.match(/^\s*sitemap\s*:\s*(\S+)/i);
-      if (m) {
-        const url = resolveUrl(origin, m[1]);
-        if (url && !candidates.includes(url)) candidates.push(url);
-      }
+  const robotsText = await fetchText(deps.http, `${origin}/robots.txt`);
+  if (robotsText !== null) {
+    for (const declared of parseRobots(robotsText).sitemaps) {
+      const url = resolveUrl(origin, declared);
+      if (url && !candidates.includes(url)) candidates.push(url);
     }
     if (!candidates.length) notes.push('robots.txt named no sitemap');
   } else {

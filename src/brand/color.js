@@ -33,6 +33,8 @@ export {
 export {
   NAMED_COLORS, parseCssColor, hslToRgb, hwbToRgb, compositeOver,
   colorTokensIn, scanCssDeclarations, stripCssComments, UNRESOLVABLE_KEYWORDS,
+  maskCssLiterals, isCustomProperty, buildCustomPropertyEnv, resolveCssVars,
+  MAX_VAR_DEPTH,
 } from './color-css.js';
 
 export {
@@ -40,6 +42,7 @@ export {
   collectColors, collectFromComputedStyles, collectFromCss, collectFromPixels,
   normalizeSampleWeights, decodePixels, toSamples, textInkArea,
   SOURCE_WEIGHTS, INK_DUTY_CYCLE, REFERENCE_VIEWPORT_AREA, ASSUMED_CARD_FRACTION,
+  ASSUMED_LINE_AREA, DECLARED_TOKEN_AREA,
   ASSUMED_BORDER_PX, ASSUMED_FONT_SIZE_PX, ASSUMED_LINE_HEIGHT,
   ASSUMED_TEXT_CHARS, ASSUMED_TEXT_LINES, HELVETICA_STD_VW,
   KMEANS_STREAM, KMEANS_RESTARTS, MAX_KMEANS_ITERS, SILHOUETTE_MAX_POINTS,

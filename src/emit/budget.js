@@ -42,15 +42,67 @@ import { rescalePng, isPng, pngSize } from './png.js';
 /** Scale steps, applied in order. Step 0 is a lossless re-encode. */
 export const SCALE_LADDER = Object.freeze([1, 0.75, 0.5, 0.35, 0.25, 0.15]);
 
+/**
+ * The bytes a PNG spends before it has stored a single pixel: signature 8,
+ * IHDR 25, IDAT framing 12, IEND 12, zlib header and Adler-32 6.
+ *
+ * It is small, and at full size it is noise. At the bottom of the ladder it is
+ * most of the file — a 30×18 thumbnail is mostly container — which is why a
+ * prediction of `bytes × scale²` was out by 1200% on small assets while looking
+ * fine on large ones.
+ */
+export const PNG_CONTAINER_BYTES = 63;
+
+/**
+ * Predict the emitted cost of an asset at a new scale.
+ *
+ * The prediction is anchored to a **measurement of the same image**, not to a
+ * formula about images in general: the allocator has already encoded this asset
+ * at the previous ladder step, so it predicts the next step from that. That
+ * matters because downscaling changes entropy — area-averaging noise makes it
+ * compressible — and no closed form knows that about a particular picture.
+ *
+ * Two corrections on top of the area ratio, both of which the naive model
+ * missed entirely:
+ *   - the container floor above, subtracted before scaling and added back;
+ *   - base64, which is what the artifact actually pays: 4 bytes per 3, plus
+ *     the `data:<mime>;base64,` prefix.
+ *
+ * @param {number} previousEmittedBytes  measured emitted cost at `previousScale`
+ * @param {number} previousScale
+ * @param {number} nextScale
+ * @param {number} prefixBytes           length of `data:<mime>;base64,`
+ * @returns {number} predicted emitted bytes at `nextScale`
+ */
+export function predictEmittedBytes(previousEmittedBytes, previousScale, nextScale, prefixBytes) {
+  const previousPayloadBase64 = Math.max(0, previousEmittedBytes - prefixBytes);
+  const previousBinary = Math.max(PNG_CONTAINER_BYTES, Math.floor((previousPayloadBase64 * 3) / 4));
+  const previousPixels = previousBinary - PNG_CONTAINER_BYTES;
+  const ratio = previousScale > 0 ? (nextScale * nextScale) / (previousScale * previousScale) : 1;
+  const nextBinary = PNG_CONTAINER_BYTES + previousPixels * ratio;
+  return prefixBytes + 4 * Math.ceil(nextBinary / 3);
+}
+
+/**
+ * The `data:<mime>;base64,` prefix length for a data URI.
+ * @param {string} dataUri
+ * @returns {number}
+ */
+export function dataUriPrefixBytes(dataUri) {
+  const comma = String(dataUri).indexOf(',');
+  return comma < 0 ? 22 : comma + 1;
+}
+
 /** Attributes a rendered element can carry an asset in. */
 const ASSET_ATTRS = ['src', 'href', 'xlink:href', 'poster', 'data'];
 
 /**
  * @typedef {object} AssetEntry
- * @property {string} assetId
+ * @property {string} assetId          the first id carrying this payload
+ * @property {string[]} assetIds       every id carrying it — see `dedupeAssets`
  * @property {'media'|'logo'} kind
  * @property {string} dataUri
- * @property {number} bytes            emitted cost of the data URI
+ * @property {number} bytes            emitted cost of the data URI, counted once
  * @property {{w: number, h: number}} intrinsic
  * @property {number} order            position in the model, the last tiebreak
  * @property {string|null} ownerId
@@ -81,6 +133,7 @@ export function collectAssets(proof) {
     if (typeof dataUri !== 'string' || !dataUri.startsWith('data:')) return;
     out.push({
       assetId,
+      assetIds: [assetId],
       kind,
       dataUri,
       bytes: utf8Length(dataUri),
@@ -103,6 +156,57 @@ export function collectAssets(proof) {
     (rendition.media || []).forEach((m, i) => add(m.id, 'media', m.dataUri, m.intrinsic, rendition.id, i === 0));
   }
   return out;
+}
+
+/**
+ * Collapse assets that carry the same bytes into one budgeting unit.
+ *
+ * Two things make this necessary, and both are real:
+ *
+ *   - the same image can be referenced by more than one `MediaRef` (a capture
+ *     inlined once per specimen, a logo reused across scenes), and
+ *   - `splitMedia` already deduplicates the media table by exact URI, so the
+ *     artifact pays for those bytes **once**.
+ *
+ * Counting them per reference made the budgeter believe the proof was larger
+ * than it is, so it degraded further than it needed to, and it wrote one
+ * degradation line per reference — a seller reading the report saw the same
+ * image downscaled three times. One payload, one budgeting unit, one line.
+ *
+ * The surviving entry keeps the *earliest* placement of any reference, so an
+ * image that appears both on spine scene 1 and deep in a branch is ranked by
+ * the spine appearance, which is the one that matters.
+ *
+ * @param {AssetEntry[]} assets
+ * @returns {AssetEntry[]}
+ */
+export function dedupeAssets(assets) {
+  /** @type {Map<string, AssetEntry>} */
+  const byPayload = new Map();
+  for (const asset of assets) {
+    const hit = byPayload.get(asset.dataUri);
+    if (!hit) {
+      byPayload.set(asset.dataUri, { ...asset, assetIds: [asset.assetId] });
+      continue;
+    }
+    if (!hit.assetIds.includes(asset.assetId)) hit.assetIds.push(asset.assetId);
+    if (earlier(asset.placement, hit.placement)) hit.placement = asset.placement;
+    if (asset.kind === 'logo') hit.kind = 'logo';
+    if (asset.hero) hit.hero = true;
+    if (asset.order < hit.order) { hit.order = asset.order; hit.assetId = asset.assetId; }
+  }
+  return [...byPayload.values()];
+}
+
+/**
+ * @param {{sequence: number, sceneIndex: number, beatIndex: number}} a
+ * @param {{sequence: number, sceneIndex: number, beatIndex: number}} b
+ * @returns {boolean} true when `a` appears before `b`
+ */
+function earlier(a, b) {
+  if (a.sequence !== b.sequence) return a.sequence < b.sequence;
+  if (a.sceneIndex !== b.sceneIndex) return a.sceneIndex < b.sceneIndex;
+  return a.beatIndex < b.beatIndex;
 }
 
 /**
@@ -301,14 +405,20 @@ export function minifySvg(svg) {
 
 /**
  * Apply degraded assets back into the proof, without mutating the input.
+ *
+ * Keyed by the original payload rather than by asset id: when the same image is
+ * referenced by several `MediaRef`s, degrading it has to update all of them, or
+ * the artifact would carry both the degraded copy and the original and the
+ * budget maths would be a fiction.
+ *
  * @param {import('../core/contracts.d.ts').Proof} proof
- * @param {Map<string, {dataUri: string, width: number, height: number, bytes: number}>} replacements
+ * @param {Map<string, {dataUri: string, width: number, height: number, bytes: number}>} byPayload
  * @returns {import('../core/contracts.d.ts').Proof}
  */
-export function applyReplacements(proof, replacements) {
-  if (replacements.size === 0) return proof;
+export function applyReplacements(proof, byPayload) {
+  if (byPayload.size === 0) return proof;
   const media = (list) => (list || []).map((m) => {
-    const hit = replacements.get(m.id);
+    const hit = byPayload.get(m.dataUri);
     if (!hit) return m;
     const decoded = parseDataUri(hit.dataUri);
     return { ...m, dataUri: hit.dataUri, intrinsic: { w: hit.width, h: hit.height }, bytes: decoded ? decoded.bytes : m.bytes };
@@ -318,7 +428,7 @@ export function applyReplacements(proof, replacements) {
     brand: {
       ...proof.brand,
       logos: (proof.brand.logos || []).map((l) => {
-        const hit = replacements.get(l.id);
+        const hit = byPayload.get(l.data);
         return hit ? { ...l, data: hit.dataUri, intrinsic: { w: hit.width, h: hit.height } } : l;
       }),
     },
@@ -340,6 +450,9 @@ export function applyReplacements(proof, replacements) {
  * @property {number} afterBytes
  * @property {number} savedBytes      exactly `beforeBytes - afterBytes`
  * @property {number} steps
+ * @property {string[]} assetIds      every asset id carrying this payload; one
+ *                                    line covers all of them, because degrading
+ *                                    the payload degrades every reference to it
  */
 
 /**
@@ -359,12 +472,13 @@ export function budgetAssets(proof, maxBytes, options = {}) {
   const reserve = Math.max(0, Number(options.reserveBytes) || 0);
   const budget = Math.max(0, (Number(maxBytes) || 0) - reserve);
 
-  const assets = collectAssets(proof);
+  const assets = dedupeAssets(collectAssets(proof));
   locateAssets(proof, assets, options.renderScene);
   rankAssets(assets);
 
-  const originalBytes = new Map(assets.map((a) => [a.assetId, a.bytes]));
-  const originalSize = new Map(assets.map((a) => [a.assetId, { ...a.intrinsic }]));
+  /** Keyed by the original payload, which is what the artifact pays for once. */
+  const originalBytes = new Map(assets.map((a) => [a.dataUri, a.bytes]));
+  const originalSize = new Map(assets.map((a) => [a.dataUri, { ...a.intrinsic }]));
   let total = assets.reduce((sum, a) => sum + a.bytes, 0);
 
   /** @type {Map<string, {dataUri: string, width: number, height: number, bytes: number}>} */
@@ -384,7 +498,10 @@ export function budgetAssets(proof, maxBytes, options = {}) {
     const order = assets.slice().sort((a, b) => b.rank - a.rank);
     // -1, so the first step attempted is ladder index 0: a lossless re-encode.
     /** @type {Map<string, number>} */
-    const stepIndex = new Map(assets.map((a) => [a.assetId, -1]));
+    const stepIndex = new Map(assets.map((a) => [a.dataUri, -1]));
+    /** The scale and measured cost the last successful step left behind. */
+    /** @type {Map<string, {scale: number, bytes: number}>} */
+    const lastGood = new Map(assets.map((a) => [a.dataUri, { scale: 1, bytes: a.bytes }]));
     /** @type {Set<string>} */
     const exhausted = new Set();
 
@@ -393,29 +510,34 @@ export function budgetAssets(proof, maxBytes, options = {}) {
       advanced = false;
       for (const asset of order) {
         if (total <= budget) break;
-        if (exhausted.has(asset.assetId)) continue;
-        const next = /** @type {number} */ (stepIndex.get(asset.assetId)) + 1;
-        if (next >= SCALE_LADDER.length) { exhausted.add(asset.assetId); continue; }
+        const key = asset.dataUri;
+        if (exhausted.has(key)) continue;
+        const next = /** @type {number} */ (stepIndex.get(key)) + 1;
+        if (next >= SCALE_LADDER.length) { exhausted.add(key); continue; }
 
-        stepIndex.set(asset.assetId, next);
+        stepIndex.set(key, next);
         advanced = true;
-        if (next === SCALE_LADDER.length - 1) exhausted.add(asset.assetId);
+        if (next === SCALE_LADDER.length - 1) exhausted.add(key);
 
         const scale = SCALE_LADDER[next];
-        const current = replacements.get(asset.assetId);
+        const current = replacements.get(key);
         const currentBytes = current ? current.bytes : asset.bytes;
-        const baseBytes = /** @type {number} */ (originalBytes.get(asset.assetId));
-        // The prediction: emitted bytes scale with pixel count. Step 0 is a
-        // lossless re-encode, whose gain we do not pretend to know in advance.
-        const predicted = next === 0 ? Math.round(baseBytes * 0.97) : Math.round(baseBytes * scale * scale);
+        const anchor = /** @type {{scale: number, bytes: number}} */ (lastGood.get(key));
 
-        const produced = degradeAsset({ ...asset, bytes: baseBytes }, scale, { quality, resample: options.resample });
+        // Predicted before the work, from the last measurement of this same
+        // image. `predictEmittedBytes` explains why that beats a formula.
+        const predicted = next === 0
+          ? Math.round(asset.bytes * 0.97)
+          : predictEmittedBytes(anchor.bytes, anchor.scale, scale, dataUriPrefixBytes(asset.dataUri));
+
+        const produced = degradeAsset({ ...asset, bytes: /** @type {number} */ (originalBytes.get(key)) }, scale, { quality, resample: options.resample });
         if (!produced) continue;
         if (produced.bytes >= currentBytes) continue;
 
         total -= currentBytes - produced.bytes;
-        replacements.set(asset.assetId, produced);
-        progress.set(asset.assetId, { steps: next, how: produced.how, predicted });
+        replacements.set(key, produced);
+        lastGood.set(key, { scale, bytes: produced.bytes });
+        progress.set(key, { steps: next, how: produced.how, predicted });
       }
     }
 
@@ -425,7 +547,7 @@ export function budgetAssets(proof, maxBytes, options = {}) {
     // needed to touch.
     if (total > budget) {
       for (const asset of assets) {
-        if (replacements.has(asset.assetId)) continue;
+        if (replacements.has(asset.dataUri)) continue;
         const parsed = parseDataUri(asset.dataUri);
         const mime = parsed ? parsed.mime : 'unknown';
         undegradable.push({
@@ -440,13 +562,14 @@ export function budgetAssets(proof, maxBytes, options = {}) {
   /** @type {DegradationLine[]} */
   const plan = [];
   for (const asset of assets) {
-    const replacement = replacements.get(asset.assetId);
+    const replacement = replacements.get(asset.dataUri);
     if (!replacement) continue;
-    const step = progress.get(asset.assetId);
-    const before = /** @type {number} */ (originalBytes.get(asset.assetId));
-    const fromSize = /** @type {{w: number, h: number}} */ (originalSize.get(asset.assetId));
+    const step = progress.get(asset.dataUri);
+    const before = /** @type {number} */ (originalBytes.get(asset.dataUri));
+    const fromSize = /** @type {{w: number, h: number}} */ (originalSize.get(asset.dataUri));
     plan.push({
       assetId: asset.assetId,
+      assetIds: asset.assetIds.slice(),
       rank: asset.rank,
       from: { w: fromSize.w, h: fromSize.h, quality },
       to: { w: replacement.width, h: replacement.height, quality },

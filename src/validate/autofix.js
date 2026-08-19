@@ -158,8 +158,11 @@ const FIXERS = {
   BEAT_EMPTY(proof, finding) {
     const d = finding.detail || {};
     if (!d.sceneId) return null;
+    const dangling = d.kind === 'dangling-reveals';
     return {
-      label: `Trim beat ${(d.beatIndex ?? 0) + 1} of scene ${d.sceneId}, which reveals nothing`,
+      label: dangling
+        ? `Trim beat ${(d.beatIndex ?? 0) + 1} of scene ${d.sceneId}, whose reveals name nothing the layout renders`
+        : `Trim beat ${(d.beatIndex ?? 0) + 1} of scene ${d.sceneId}, which reveals nothing`,
       apply(current) {
         const next = clone(current);
         const scenes = [...(next.spine || [])];
@@ -169,9 +172,14 @@ const FIXERS = {
           const i = scene.beats.findIndex((b) => (d.beatId ? b.id === d.beatId : false));
           const at = i >= 0 ? i : d.beatIndex;
           const beat = scene.beats[at];
-          // Only ever remove a beat that is still empty, and never the last one:
-          // a scene with no beats has no position for the navigator to stand on.
-          if (!beat || (beat.reveals || []).length > 0 || scene.beats.length <= 1) continue;
+          // Only ever remove a beat that still reveals nothing, and never the
+          // last one: a scene with no beats has no position for the navigator to
+          // stand on.
+          if (!beat || scene.beats.length <= 1) continue;
+          const stillDead = dangling
+            ? (beat.reveals || []).length > 0 && (beat.reveals || []).every((id) => (d.dangling || []).includes(id))
+            : (beat.reveals || []).length === 0;
+          if (!stillDead) continue;
           scene.beats.splice(at, 1);
         }
         return next;

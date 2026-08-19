@@ -104,9 +104,12 @@ export const HEADER_CONTEXT_RE = /\b(header|masthead|navbar|nav-?bar|topbar|top-
  * Evidence rank per source tier, used by `logosConfidence`. The numbers are the
  * §7 preference order expressed as a scalar: an inline SVG is the mark itself,
  * an og:image is a social card that may be a photograph with the logo in a
- * corner.
+ * corner. A `schema.org` declaration outranks all of them because it is the only
+ * source where the site states which asset is its logo rather than the extractor
+ * inferring it (L5-D23).
  */
 export const SOURCE_RANK = {
+  'ld-logo': 1,
   'inline-svg': 1,
   'link-icon-svg': 0.85,
   'header-raster': 0.6,
@@ -114,6 +117,42 @@ export const SOURCE_RANK = {
   'og-image': 0.45,
   supplied: 1,
 };
+
+/**
+ * How much each signal contributes to being the brand's **primary** asset.
+ *
+ * §7's preference order answers "where do I look for a logo"; it does not answer
+ * "which of the things I found is the logo". Those are different questions, and
+ * conflating them is how a 320x180 og:image of an industrial plant ends up as
+ * the asset every layout renders by default. Discovery order is untouched;
+ * this table decides the role.
+ *
+ * The penalties matter as much as the bonuses: an og:image nobody else
+ * corroborates is a social card until proven otherwise, and a 48px icon is not a
+ * lockup.
+ */
+export const IDENTITY_WEIGHTS = {
+  /** The site declared this asset as its logo in schema.org JSON-LD. */
+  declared: 3,
+  /** The asset's own filename or alt text says "logo"/"brand"/"wordmark". */
+  named: 2,
+  /** It was found in the page header — where a site puts its identity. */
+  inHeader: 1.5,
+  /** Vector: the mark itself rather than a rendering of it. */
+  vector: 1,
+  /** A full lockup or wordmark is the primary; a bare symbol is the secondary. */
+  lockupForm: 0.5,
+  /** Found only as an og:image: a social card until something corroborates it. */
+  ogOnly: -1.5,
+  /** Favicon proportions: an icon, not a lockup. */
+  faviconForm: -2.5,
+};
+
+/**
+ * JSON-LD property paths that name an organisation's logo. `logo` may be a URL
+ * string or an `ImageObject` with a `url`; both are handled.
+ */
+export const LD_LOGO_TYPES = new Set(['organization', 'corporation', 'localbusiness', 'ngo', 'educationalorganization', 'governmentorganization', 'website', 'webpage', 'newsmediaorganization', 'onlinebusiness']);
 
 // ------------------------------------------------------------ byte utilities
 
@@ -1201,6 +1240,34 @@ export function contextText(node, ancestors) {
 }
 
 /**
+ * The identity words that belong to *this element* — its own class, id and
+ * aria-label — plus those of the nearest ancestor `<a>`, because
+ * `<a class="site-logo"><svg/></a>` is the link that *is* the logo.
+ *
+ * Deliberately narrower than `contextText`: the full ancestor chain makes every
+ * image inside a `.masthead` look equally logo-like, which is how a partner
+ * badge and the real logo become indistinguishable.
+ *
+ * @param {any} node
+ * @param {any[]} ancestors
+ * @returns {string}
+ */
+export function ownIdentityText(node, ancestors) {
+  const bits = [];
+  const own = node.attrs || {};
+  bits.push(own.class || '', own.id || '', own['aria-label'] || '');
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const a = ancestors[i];
+    if (a.type !== 'element') continue;
+    if (String(a.tag || '').toLowerCase() !== 'a') continue;
+    const attrs = a.attrs || {};
+    bits.push(attrs.class || '', attrs.id || '', attrs['aria-label'] || '', attrs.title || '');
+    break;                       // only the innermost link wrapper
+  }
+  return bits.filter(Boolean).join(' ');
+}
+
+/**
  * Index an asset list by every name it can be found under: the full name, the
  * name without a query string, and the basename. Captured pages reference the
  * same file all three ways.
@@ -1245,8 +1312,78 @@ export function lookupAsset(index, href) {
 // ---------------------------------------------------------------- extraction
 
 /**
+ * Every URL a page's schema.org JSON-LD declares as an organisation's logo.
+ *
+ * This is the one place on a page where a site says, unambiguously and in its
+ * own words, *this asset is my logo*. Every other signal in this module is an
+ * inference from placement, filename or proportions. The URLs are read and
+ * matched against the assets the caller supplied; nothing is fetched.
+ *
+ * @param {any} doc   an L3 DocNode tree, or null
+ * @returns {string[]}   declared logo URLs, in document order, deduplicated
+ */
+export function declaredLogoUrls(doc) {
+  /** @type {string[]} */
+  const out = [];
+  if (!doc) return out;
+  walkDoc(doc, (node) => {
+    if (node.type !== 'element') return;
+    if (String(node.tag || '').toLowerCase() !== 'script') return;
+    const type = String((node.attrs || {}).type || '').toLowerCase();
+    if (!type.includes('ld+json')) return;
+    const text = docText(node).trim();
+    if (!text) return;
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { return; }      // malformed LD is not an error
+    collectLdLogos(parsed, out, 0);
+  });
+  return [...new Set(out)];
+}
+
+/**
+ * Walk a parsed JSON-LD value for `logo` properties on organisation-like nodes,
+ * following `@graph`, arrays, and the `publisher` chain a `WebSite` or
+ * `NewsArticle` hangs its organisation off.
+ * @param {any} value @param {string[]} out @param {number} depth
+ */
+function collectLdLogos(value, out, depth) {
+  if (depth > 8 || value === null || typeof value !== 'object') return;
+  if (Array.isArray(value)) { for (const item of value) collectLdLogos(item, out, depth + 1); return; }
+
+  const types = [];
+  const rawType = value['@type'];
+  if (typeof rawType === 'string') types.push(rawType.toLowerCase());
+  else if (Array.isArray(rawType)) for (const t of rawType) if (typeof t === 'string') types.push(t.toLowerCase());
+
+  // `logo` is only meaningful on a node that could own one. An untyped node in a
+  // `publisher` slot counts, because sites routinely omit the type there.
+  if (value.logo !== undefined && (types.length === 0 || types.some((t) => LD_LOGO_TYPES.has(t)))) {
+    const url = ldImageUrl(value.logo);
+    if (url) out.push(url);
+  }
+  for (const key of ['@graph', 'publisher', 'sourceOrganization', 'brand', 'provider', 'parentOrganization', 'mainEntity', 'about', 'author']) {
+    if (value[key] !== undefined) collectLdLogos(value[key], out, depth + 1);
+  }
+}
+
+/**
+ * A JSON-LD image value: either a URL string or an `ImageObject` carrying one.
+ * @param {any} value @returns {string|null}
+ */
+function ldImageUrl(value) {
+  if (typeof value === 'string') return value.trim() || null;
+  if (Array.isArray(value)) { for (const item of value) { const url = ldImageUrl(item); if (url) return url; } return null; }
+  if (value && typeof value === 'object') {
+    for (const key of ['url', 'contentUrl', '@id']) {
+      if (typeof value[key] === 'string' && value[key].trim()) return value[key].trim();
+    }
+  }
+  return null;
+}
+
+/**
  * @typedef {object} LogoCandidate
- * @property {'inline-svg'|'link-icon-svg'|'link-icon-raster'|'og-image'|'header-raster'|'supplied'} source
+ * @property {'ld-logo'|'inline-svg'|'link-icon-svg'|'link-icon-raster'|'og-image'|'header-raster'|'supplied'} source
  * @property {number} rank            §7 preference order, 1 is best
  * @property {'svg'|'raster'} kind
  * @property {string} data            inline SVG markup, or a data URI
@@ -1254,10 +1391,17 @@ export function lookupAsset(index, href) {
  * @property {string} name
  * @property {string} alt
  * @property {string} context
+ * @property {boolean} [declared]     named by schema.org JSON-LD as the logo
+ * @property {string[]} [sources]     every source that found this same asset
+ * @property {boolean} [inHeader]     found inside the page header region
+ * @property {string} [ownContext]    identity words belonging to the element itself
  */
 
-/** §7's preference order as an integer rank. */
-const SOURCE_ORDER = { 'inline-svg': 1, 'link-icon-svg': 2, 'og-image': 3, 'header-raster': 4, 'link-icon-raster': 4, supplied: 0 };
+/**
+ * §7's preference order as an integer rank, with the schema.org declaration
+ * ahead of it (L5-D23): the site naming its own logo is not an inference.
+ */
+const SOURCE_ORDER = { supplied: 0, 'ld-logo': 0, 'inline-svg': 1, 'link-icon-svg': 2, 'og-image': 3, 'header-raster': 4, 'link-icon-raster': 4 };
 
 /**
  * Collect every logo candidate in a document, in §7 preference order.
@@ -1288,7 +1432,8 @@ export function collectLogoCandidates(doc, assets) {
         const markup = serializeNode(node);
         out.push({
           source: 'inline-svg', rank: SOURCE_ORDER['inline-svg'], kind: 'svg', data: markup,
-          info: imageInfo(markup), name: String(attrs.id || ''), alt: String(attrs['aria-label'] || docText(node).trim()), context,
+          info: imageInfo(markup), name: String(attrs.id || ''), alt: String(attrs['aria-label'] || docText(node).trim()),
+          context, inHeader: inHeaderRegion(node, ancestors), ownContext: ownIdentityText(node, ancestors),
         });
         return;
       }
@@ -1349,7 +1494,8 @@ export function collectLogoCandidates(doc, assets) {
       source: 'header-raster', rank: SOURCE_ORDER['header-raster'],
       kind: info.format === 'svg' ? 'svg' : 'raster',
       data: info.format === 'svg' ? new TextDecoder().decode(asset.bytes) : dataUri(asset.bytes, info.mime),
-      info, name: asset.name || src, alt: String(attrs.alt || ''), context,
+      info, name: asset.name || src, alt: String(attrs.alt || ''),
+      context, inHeader: inHeaderRegion(node, ancestors), ownContext: ownIdentityText(node, ancestors),
     });
   }
   // §7 asks for the *largest* raster in the header region; a named logo beats a
@@ -1358,10 +1504,35 @@ export function collectLogoCandidates(doc, assets) {
   // not, because every image inside a `.masthead` inherits the same words and
   // the tie-break would stop discriminating.
   headerRasters.sort((a, b) => {
-    const named = (c) => (LOGO_CONTEXT_RE.test(`${c.name} ${c.alt}`) ? 1 : 0);
+    const named = (c) => (LOGO_CONTEXT_RE.test(`${c.name} ${c.alt} ${c.ownContext || ''}`) ? 1 : 0);
     return (named(b) - named(a)) || ((b.info.w * b.info.h) - (a.info.w * a.info.h)) || a.name.localeCompare(b.name);
   });
   out.push(...headerRasters);
+
+  // The site's own declaration. It never displaces anything §7 names — the same
+  // assets are still found — it only records which of them the site called its
+  // logo, and adds the declared asset when no other tier reached it.
+  const declared = declaredLogoUrls(doc);
+  if (declared.length) {
+    const declaredKeys = new Set();
+    for (const url of declared) for (const key of assetKeys(url)) declaredKeys.add(key);
+    const isDeclared = (candidate) => assetKeys(candidate.name).some((k) => declaredKeys.has(k))
+      || assetKeys(candidate.context).some((k) => declaredKeys.has(k));
+    for (const candidate of out) if (isDeclared(candidate)) candidate.declared = true;
+
+    for (const url of declared) {
+      if (out.some((c) => c.declared && assetKeys(c.name).concat(assetKeys(c.context)).some((k) => assetKeys(url).includes(k)))) continue;
+      const asset = lookupAsset(index, url);
+      if (!asset) continue;
+      const info = imageInfo(asset.bytes);
+      out.push({
+        source: 'ld-logo', rank: SOURCE_ORDER['ld-logo'],
+        kind: info.format === 'svg' ? 'svg' : 'raster',
+        data: info.format === 'svg' ? new TextDecoder().decode(asset.bytes) : dataUri(asset.bytes, info.mime),
+        info, name: asset.name, alt: '', context: url, declared: true, inHeader: false,
+      });
+    }
+  }
 
   return out;
 }
@@ -1384,26 +1555,151 @@ export function extractLogos(doc, assets, deps) {
     throw new Error('extractLogos: an injected idMinter is required (determinism, §5)');
   }
   const maxLogos = deps.maxLogos ?? 8;
-  const candidates = collectLogoCandidates(doc, assets);
+  const { selected } = selectLogos(collectLogoCandidates(doc, assets), { maxLogos });
+  return selected.map((entry) => logoFromCandidate(entry.candidate, deps.idMinter, entry.variant));
+}
 
-  /** @type {Set<string>} */
-  const seen = new Set();
-  /** @type {object[]} */
-  const logos = [];
-  // Stable order: §7 preference tier first, then painted area, then name.
+/**
+ * Merge candidates that are the same asset found more than once, keeping every
+ * source that found it. Two tiers agreeing on one file is the strongest evidence
+ * available without a human, and dropping the duplicate used to throw it away.
+ * @param {LogoCandidate[]} candidates
+ * @returns {LogoCandidate[]}
+ */
+export function mergeCandidates(candidates) {
+  /** @type {Map<string, LogoCandidate>} */
+  const byContent = new Map();
+  // §7 preference tier first, so the survivor keeps the best source.
   const ordered = candidates.slice().sort((a, b) =>
     (a.rank - b.rank)
     || ((b.info.w * b.info.h) - (a.info.w * a.info.h))
-    || a.name.localeCompare(b.name));
+    || String(a.name).localeCompare(String(b.name)));
 
   for (const candidate of ordered) {
-    if (logos.length >= maxLogos) break;
     const fingerprint = contentHash({ kind: candidate.kind, data: candidate.data });
-    if (seen.has(fingerprint)) continue;
-    seen.add(fingerprint);
-    logos.push(logoFromCandidate(candidate, deps.idMinter));
+    const hit = byContent.get(fingerprint);
+    if (!hit) {
+      byContent.set(fingerprint, { ...candidate, sources: [candidate.source] });
+      continue;
+    }
+    if (!hit.sources.includes(candidate.source)) hit.sources.push(candidate.source);
+    hit.declared = hit.declared || candidate.declared === true;
+    hit.inHeader = hit.inHeader || candidate.inHeader === true;
+    if (!hit.alt && candidate.alt) hit.alt = candidate.alt;
+    if (!hit.name && candidate.name) hit.name = candidate.name;
+    if (!hit.ownContext && candidate.ownContext) hit.ownContext = candidate.ownContext;
   }
-  return logos;
+  return [...byContent.values()];
+}
+
+/**
+ * How strongly a candidate claims to be the brand's **primary** asset.
+ *
+ * §7's preference order says where to look; it does not say which of the things
+ * found is the logo, and treating "first tier that produced something" as the
+ * answer promotes an og:image over the SVG sitting in the site header. Every
+ * term is named in `IDENTITY_WEIGHTS` and returned alongside the score so the
+ * studio can show why an asset was chosen.
+ *
+ * @param {LogoCandidate} candidate
+ * @returns {{score: number, terms: Record<string, number>}}
+ */
+export function identityScore(candidate) {
+  const w = IDENTITY_WEIGHTS;
+  const sources = candidate.sources || [candidate.source];
+  const form = classifyVariant({
+    w: candidate.info.w, h: candidate.info.h,
+    name: candidate.name, alt: candidate.alt, context: candidate.context, source: candidate.source,
+  });
+  /** @type {Record<string, number>} */
+  const terms = {};
+  if (candidate.declared) terms.declared = w.declared;
+  // The asset's own filename, alt text and element identity — never the whole
+  // inherited context: every image inside a `.masthead` shares the same
+  // surrounding words, and the term would stop discriminating.
+  if (LOGO_CONTEXT_RE.test(`${candidate.name} ${candidate.alt} ${candidate.ownContext || ''}`)) terms.named = w.named;
+  if (candidate.inHeader || sources.includes('inline-svg') || sources.includes('header-raster')) terms.inHeader = w.inHeader;
+  if (candidate.kind === 'svg') terms.vector = w.vector;
+  if (form === 'primary' || form === 'wordmark') terms.lockupForm = w.lockupForm;
+  if (sources.length === 1 && sources[0] === 'og-image') terms.ogOnly = w.ogOnly;
+  if (form === 'favicon') terms.faviconForm = w.faviconForm;
+
+  let score = 0;
+  for (const value of Object.values(terms)) score += value;
+  return { score: Math.round(score * 1e6) / 1e6, terms };
+}
+
+/**
+ * Decide which candidates are logo assets and which one is the primary.
+ *
+ * Three rules, in order:
+ *
+ *  1. **Exactly one asset is `primary`** — the highest `identityScore`. A
+ *     non-empty result always has one, because `logoFor(brand)` defaults to it
+ *     and a layout that asks for the brand's logo must get the brand's logo.
+ *  2. **Every other asset keeps its shape-and-name variant** — favicon,
+ *     wordmark, mark or inverse.
+ *  3. **An asset that is neither the primary nor recognisably a variant is not a
+ *     logo** and is rejected with a reason. That is the og:image case: a
+ *     320x180 photograph that is not square, not wide, not small and not named,
+ *     sitting beside a real header logo, is a social card. Rejecting it is what
+ *     keeps a picture of an industrial plant out of every layout.
+ *
+ * @param {LogoCandidate[]} candidates
+ * @param {{maxLogos?: number}} [options]
+ * @returns {{selected: {candidate: LogoCandidate, variant: string, score: number, terms: Record<string, number>}[], rejected: {candidate: LogoCandidate, reason: string}[]}}
+ */
+export function selectLogos(candidates, options = {}) {
+  const maxLogos = options.maxLogos ?? 8;
+  const merged = mergeCandidates(candidates || []);
+  if (merged.length === 0) return { selected: [], rejected: [] };
+
+  const scored = merged.map((candidate) => {
+    const { score, terms } = identityScore(candidate);
+    const variant = classifyVariant({
+      w: candidate.info.w, h: candidate.info.h,
+      name: candidate.name, alt: candidate.alt, context: candidate.context, source: candidate.source,
+    });
+    return { candidate, variant, score, terms };
+  });
+
+  // Highest identity score wins the primary role; ties fall back to §7's own
+  // preference order, then painted area, then name, so the choice never depends
+  // on iteration order (§5).
+  const ranked = scored.slice().sort((a, b) =>
+    (b.score - a.score)
+    || (a.candidate.rank - b.candidate.rank)
+    || ((b.candidate.info.w * b.candidate.info.h) - (a.candidate.info.w * a.candidate.info.h))
+    || String(a.candidate.name).localeCompare(String(b.candidate.name)));
+  const primary = ranked[0];
+
+  /** @type {{candidate: LogoCandidate, variant: string, score: number, terms: Record<string, number>}[]} */
+  const selected = [];
+  /** @type {{candidate: LogoCandidate, reason: string}[]} */
+  const rejected = [];
+
+  for (const entry of scored) {
+    if (entry === primary) { selected.push({ ...entry, variant: 'primary' }); continue; }
+    if (entry.variant === 'primary') {
+      // No shape or name signal, and it is not the identity: not a logo.
+      rejected.push({
+        candidate: entry.candidate,
+        reason: `no variant signal and not the primary identity (score ${entry.score} against ${primary.score})`,
+      });
+      continue;
+    }
+    selected.push(entry);
+  }
+
+  // Emit in §7 preference order, primary first, so the artifact's asset list
+  // reads the way the studio presents it.
+  selected.sort((a, b) => {
+    const rank = (e) => (e.variant === 'primary' ? -1 : e.candidate.rank);
+    return (rank(a) - rank(b))
+      || ((b.candidate.info.w * b.candidate.info.h) - (a.candidate.info.w * a.candidate.info.h))
+      || String(a.candidate.name).localeCompare(String(b.candidate.name));
+  });
+  return { selected: selected.slice(0, maxLogos), rejected };
 }
 
 /**
@@ -1411,14 +1707,16 @@ export function extractLogos(doc, assets, deps) {
  * decides whether an inverse can be generated at all.
  * @param {LogoCandidate} candidate
  * @param {{next: (kind: string) => string}} idMinter
+ * @param {string} [assignedVariant]  the role `selectLogos` gave it, if any
  * @returns {object}
  */
-export function logoFromCandidate(candidate, idMinter) {
+export function logoFromCandidate(candidate, idMinter, assignedVariant) {
   const verdict = monochromeOf(candidate);
-  const variant = classifyVariant({
+  const formVariant = classifyVariant({
     w: candidate.info.w, h: candidate.info.h,
     name: candidate.name, alt: candidate.alt, context: candidate.context, source: candidate.source,
   });
+  const variant = assignedVariant || formVariant;
   return {
     id: idMinter.next('logo'),
     kind: candidate.kind,
@@ -1428,6 +1726,10 @@ export function logoFromCandidate(candidate, idMinter) {
     hasTransparency: candidate.info.hasTransparency,
     // --- optional lane extensions (§4 permits added optional fields) --------
     source: candidate.source,
+    sources: (candidate.sources || [candidate.source]).slice().sort(),
+    declared: candidate.declared === true,
+    inHeader: candidate.inHeader === true,
+    formVariant,
     format: candidate.info.format,
     mime: candidate.info.mime,
     transparencyChecked: candidate.info.transparencyChecked,
@@ -1726,9 +2028,10 @@ export function invertPixels(image) {
  *   evidence  — the best source tier found, from `SOURCE_RANK`. An inline SVG
  *               is the mark; an og:image is a social card that might be a
  *               photograph.
- *   agreement — whether a second, independent source produced a mark of the
- *               same proportions. Two sources agreeing on the aspect ratio is
- *               the strongest signal available without a human.
+ *   agreement — a schema.org declaration naming the asset, or failing that,
+ *               whether a second independent source produced a mark of the same
+ *               proportions. Two sources agreeing on the aspect ratio is the
+ *               strongest signal available when the site declares nothing.
  *   read      — the share of logos whose transparency was read from the pixels
  *               rather than inferred from a header, because an unverified
  *               transparency flag is the field most likely to be wrong.
@@ -1738,17 +2041,29 @@ export function invertPixels(image) {
  */
 export function logosConfidence(logos) {
   if (!logos || logos.length === 0) return 0;
-  let best = 0;
-  for (const l of logos) best = Math.max(best, SOURCE_RANK[l.source] ?? 0.4);
 
-  const sources = new Set(logos.map((l) => l.source));
+  /** @type {Set<string>} */
+  const sources = new Set();
+  let best = 0;
+  let declared = false;
+  for (const l of logos) {
+    for (const source of (l.sources && l.sources.length ? l.sources : [l.source])) {
+      sources.add(source);
+      best = Math.max(best, SOURCE_RANK[source] ?? 0.4);
+    }
+    if (l.declared) declared = true;
+  }
+
   const aspects = logos
     .filter((l) => l.intrinsic && l.intrinsic.h > 0 && l.variant !== 'favicon')
     .map((l) => l.intrinsic.w / l.intrinsic.h);
   let agreement = 0;
-  if (sources.size >= 2) {
+  // A schema.org declaration is not corroboration, it is the site saying which
+  // asset is its logo — nothing else available without a human is stronger.
+  if (declared) agreement = 1;
+  else if (sources.size >= 2) {
     agreement = 0.5;
-    for (let i = 0; i < aspects.length; i++) {
+    for (let i = 0; i < aspects.length && agreement < 1; i++) {
       for (let j = i + 1; j < aspects.length; j++) {
         if (Math.abs(aspects[i] - aspects[j]) / Math.max(aspects[i], aspects[j]) <= 0.1) { agreement = 1; break; }
       }

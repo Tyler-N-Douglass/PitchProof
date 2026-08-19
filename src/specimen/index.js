@@ -22,12 +22,13 @@ export {
 } from './chrome.js';
 
 export {
-  toBlocks, blocksWithTrace, mediaIndex, splitOnBreaks, isEmptyBlock,
-  repairHeadingLevels, unrepairHeadingLevels,
+  toBlocks, blocksWithTrace, mediaIndex, resolveMediaRef, resolveBlockMedia,
+  splitOnBreaks, isEmptyBlock, repairHeadingLevels, unrepairHeadingLevels,
 } from './blocks.js';
 
 export {
-  captureMedia, toDataUri, paletteFor, MAX_EDGE, RESIZABLE_FORMATS,
+  captureMedia, dedupeMedia, MediaLedger, toDataUri, paletteFor, MAX_EDGE,
+  RESIZABLE_FORMATS,
 } from './media.js';
 
 export { imageInfo, jpegSize, webpSize, svgSize, mimeForFormat } from './imageinfo.js';

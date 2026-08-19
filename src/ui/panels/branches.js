@@ -193,8 +193,28 @@ function renderBranch(app, branch, coverage) {
   pairs(
     pair('Branch id', h('code', { class: 'st-mono' }, branch.id)),
     pair('Reachable', coverage.unreachable.includes(branch.id) ? badge('no', 'bad') : badge('yes', 'ok')),
-    pair('Returns', coverage.noReturn.includes(branch.id) ? badge('unresolved', 'bad') : badge('resolved', 'ok')),
+    pair('Returns to', renderReturnTarget(app, branch, coverage)),
   ));
+}
+
+/**
+ * Where this branch actually lands when it exits, resolved against the live
+ * deck rather than inferred from the policy. §22.4: an unwind that does not
+ * resolve strands the presenter mid-pitch, and "resolved" is a weaker thing to
+ * read than the name of the scene they will be standing in.
+ * @param {any} app
+ * @param {any} branch
+ * @param {{noReturn: string[]}} coverage
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderReturnTarget(app, branch, coverage) {
+  if (coverage.noReturn.includes(branch.id)) return badge('nowhere — the presenter would be stranded', 'bad');
+  const model = app.preview.model(app.proof);
+  const target = model ? app.services.returnTargetFor(model.deck, branch.id) : null;
+  if (!target) return badge('resolved', 'ok');
+  const where = target.sequenceId === 'spine' ? `spine scene ${target.sceneIndex + 1}` : target.sequenceId;
+  const title = target.scene ? truncate(target.scene.headline || target.scene.id, 30) : null;
+  return h('span', null, title ? `${title} · ` : '', h('span', { class: 'st-mono' }, where));
 }
 
 /**

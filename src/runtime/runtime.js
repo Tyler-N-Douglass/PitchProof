@@ -163,6 +163,7 @@ export class Runtime extends Emitter {
       case 'firstScene': return this.go({ type: 'firstScene' });
       case 'lastScene': return this.go({ type: 'lastScene' });
       case 'returnToSpine': return this.go({ type: 'returnToSpine' });
+      case 'returnOnce': return this.go({ type: 'return' });
       case 'jump': return this.go({ type: 'jump', branchId: payload });
       case 'goToScene': return this.go({ type: 'goToScene', sceneId: payload });
 

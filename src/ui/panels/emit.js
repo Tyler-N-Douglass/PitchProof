@@ -172,6 +172,30 @@ function renderBudget(app) {
       : empty('The budget has not been computed yet.', button({ act: 'emit.budget', variant: 'primary' }, 'Compute it')));
 }
 
+/**
+ * The independent verification, when it has been run. §18.4 says the no-network
+ * law is "verified at emit, not asserted in a README" — this is the same scan,
+ * re-run on demand over the file itself, for the moment somebody in the room
+ * asks how you know.
+ * @param {any} app
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderVerification(app) {
+  const report = app.draft('emit.verify', null);
+  if (!report) return null;
+  return h('div', { class: 'st-subsection' },
+    h('h4', { class: 'st-subsection-title' }, 'Independent verification'),
+    report.clean
+      ? notice('ok', 'The network scanner found nothing to fetch, and every illustrative rendition carries a label the stylesheet cannot hide. Scanned over the emitted bytes, not over the model they came from.')
+      : notice('bad', h('div', null,
+        h('p', null, 'The emitted file violates a product law. Do not send it — and tell the integrator, because the emitter should have refused it.'),
+        h('ul', { class: 'st-paths' }, report.findings.map((f, i) => h('li', { [KEY_ATTR]: `${f.code}:${i}` }, `${f.code}: ${f.message}`))))),
+    pairs(
+      pair('Network references', report.network.length ? badge(String(report.network.length), 'bad') : badge('none', 'ok')),
+      pair('Provenance', report.provenance.length ? badge(String(report.provenance.length), 'bad') : badge('every label present', 'ok')),
+    ));
+}
+
 /** @param {{w?: number, h?: number, quality?: number}} box @returns {string} */
 function sizeOf(box) {
   if (!box) return '—';
@@ -204,9 +228,10 @@ function renderResult(app) {
   return section({
     title: 'The file',
     subtitle: `Emitted ${formatDateTime(state.at)}.`,
-    actions: toolbar(button({
-      act: 'emit.download', variant: 'primary', disabled: blocking.length > 0,
-    }, 'Save the file')),
+    actions: toolbar(
+      button({ act: 'emit.verify', variant: 'ghost', title: 'Re-run the network scan and the provenance assertion over these exact bytes' }, 'Verify'),
+      button({ act: 'emit.download', variant: 'primary', disabled: blocking.length > 0 }, 'Save the file'),
+    ),
   },
   blocking.length
     ? notice('bad', h('div', null,
@@ -225,6 +250,7 @@ function renderResult(app) {
       badge(`${(result.findings || []).length} total`, 'dim'),
       blocking.length ? badge(`${blocking.length} blocking`, 'bad') : badge('none blocking', 'ok'))),
   ),
+  renderVerification(app),
   (result.degradations || []).length
     ? h('p', { class: 'st-note' }, `${plural(result.degradations.length, 'asset')} were degraded to fit the budget. Every one is listed above with the bytes it actually saved.`)
     : h('p', { class: 'st-note' }, 'Nothing was degraded: the project fitted its budget as captured.'));

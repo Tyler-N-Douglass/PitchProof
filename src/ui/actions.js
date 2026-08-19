@@ -27,9 +27,11 @@
 
 import { ok, err } from '../core/result.js';
 import { QUALITY_STEPS, COLOR_ROLES, SPECIMEN_KINDS, SCENE_LAYOUTS } from '../core/contracts.js';
+import { plural } from './format.js';
 import { exportProjectJson, importProjectJson, makeRecord } from '../core/storage.js';
 import { downloadText, readFiles, pickFiles, safeFilename } from './io.js';
 import { emitBlockers, proofDigest } from './gate.js';
+import { brandYield } from './services.js';
 import { SETTING_KEYS } from './constants.js';
 import * as M from './model.js';
 import { planBeats, revealableElements } from './reveal.js';
@@ -366,7 +368,7 @@ export const ACTIONS = [
       const brand = app.services.buildBrand([capture.value], { seed: app.doc.seed });
       if (!brand.ok) { app.notify('bad', brand.error, { sticky: true }); return; }
       app.mutate('Extract brand system', (doc) => M.replaceBrand(doc, brand.value), { scope: 'brand' });
-      app.notify('ok', 'Brand extracted. Every group below its confidence floor is held for your review before an emit can use it.');
+      reportExtraction(app, brand.value, capture.value);
     },
   },
   {
@@ -382,6 +384,7 @@ export const ACTIONS = [
       const brand = app.services.buildBrand(captured.value.captures, { seed: app.doc.seed });
       if (!brand.ok) { app.notify('bad', brand.error, { sticky: true }); return; }
       app.mutate('Extract brand system from files', (doc) => M.replaceBrand(doc, brand.value), { scope: 'brand' });
+      reportExtraction(app, brand.value, captured.value.captures[0]);
       if (ctx.element) ctx.element.value = '';
     },
   },
@@ -527,21 +530,44 @@ export const ACTIONS = [
   {
     id: 'brand.review', label: 'Mark a brand group reviewed', group: 'Brand', palette: false, control: true,
     mutates: true, sample: () => ({ arg: 'colors', value: true }),
-    run: (app, arg, ctx) => app.mutate(
-      checked(ctx) ? `Mark ${arg} reviewed` : `Un-review ${arg}`,
-      (doc) => M.setBrandReviewed(doc, String(arg), checked(ctx)),
-      { scope: 'brand' },
-    ),
+    run: (app, arg, ctx) => {
+      const group = String(arg);
+      if (checked(ctx) && !M.brandGroupEvidence(app.proof.brand, group).hasContent) {
+        app.notify('warn', `${group} holds nothing, so there is nothing to review. Extract the brand, or enter the fields by hand — §7 will not accept a sign-off on an empty set.`);
+        return undefined;
+      }
+      return app.mutate(
+        checked(ctx) ? `Mark ${group} reviewed` : `Un-review ${group}`,
+        (doc) => M.setBrandReviewed(doc, group, checked(ctx)),
+        { scope: 'brand' },
+      );
+    },
   },
   {
     id: 'brand.reviewAll', label: 'Mark every low-confidence brand field reviewed', group: 'Brand',
     mutates: true, sample: () => ({}),
     run: (app) => {
-      const groups = M.unreviewedBrandGroups(app.proof.brand).map((g) => g.group);
-      if (!groups.length) { app.notify('ok', 'Nothing is waiting for review.'); return undefined; }
-      return app.transaction('Review brand fields', () => {
+      // §7: only a group that holds something can be reviewed. A bulk control
+      // that cleared empty groups would be the fastest possible way to defeat
+      // the gate, so this one cannot reach them.
+      const groups = M.reviewableBrandGroups(app.proof.brand).map((g) => g.group);
+      const empty = M.emptyBrandGroups(app.proof.brand).map((g) => g.group);
+      if (!groups.length) {
+        app.notify(
+          empty.length ? 'warn' : 'ok',
+          empty.length
+            ? `Nothing here can be reviewed yet: ${empty.join(', ')} ${empty.length === 1 ? 'is' : 'are'} empty. Extract the brand, or enter the fields by hand.`
+            : 'Nothing is waiting for review.',
+        );
+        return undefined;
+      }
+      const next = app.transaction('Review brand fields', () => {
         for (const group of groups) app.mutate(`Mark ${group} reviewed`, (doc) => M.setBrandReviewed(doc, group, true), { scope: 'brand' });
       }, { scope: 'brand' });
+      if (empty.length) {
+        app.notify('warn', `${groups.length} reviewed. ${empty.join(', ')} still ${empty.length === 1 ? 'holds' : 'hold'} nothing, so ${empty.length === 1 ? 'it' : 'they'} cannot be signed off — and the emit stays closed until ${empty.length === 1 ? 'it has' : 'they have'} something in ${empty.length === 1 ? 'it' : 'them'}.`);
+      }
+      return next;
     },
   },
   {
@@ -779,6 +805,53 @@ export const ACTIONS = [
     id: 'recipe.remove', label: 'Remove a recipe', group: 'Recipes', palette: false, control: true,
     mutates: true, sample: (app) => ({ arg: (app.proof.recipes[0] || {}).id || 'rc_none' }),
     run: (app, arg) => app.mutate('Remove recipe', (doc) => M.removeRecipe(doc, String(arg)), { scope: 'recipes' }),
+  },
+  {
+    id: 'recipe.run', label: 'Run this recipe on the selected specimen', group: 'Recipes',
+    mutates: true,
+    sample: (app) => ({ arg: (app.proof.recipes[0] || {}).id || 'rc_none' }),
+    run: (app, arg, ctx) => {
+      const recipeId = String(value(ctx) || arg || sel(app).recipeId || '');
+      const specimen = currentSpecimen(app) || (app.proof.specimens || [])[0];
+      const recipe = (app.proof.recipes || []).find((r) => r.id === recipeId);
+      if (!specimen) { app.notify('warn', 'Capture a specimen first — a recipe transforms their content, it does not invent any.'); return undefined; }
+      if (!recipe) { app.notify('warn', 'Load the recipe library and pick a recipe first.'); return undefined; }
+      if (!app.services.recipeAccepts(recipe, specimen)) {
+        app.notify('warn', `“${recipe.name}” takes ${(recipe.inputKinds || []).join(', ')}, and “${specimen.title}” is a ${specimen.kind}. Change the specimen's kind, or pick a recipe that fits it.`);
+        return undefined;
+      }
+      const rendered = app.services.renderRecipe(recipe.id, specimen, { seed: app.doc.seed });
+      if (!rendered.ok) { app.notify('bad', rendered.error, { sticky: true }); return undefined; }
+      const added = rendered.value;
+      app.select({ renditionId: added[0].id, recipeId: recipe.id });
+      app.notify('ok', `${recipe.name} produced ${plural(added.length, 'rendition')}. Every one is stamped illustrative until you check it (§9).`);
+      return app.mutate(`Run ${recipe.name}`, (doc) => {
+        let next = doc;
+        for (const rendition of added) next = M.addRendition(next, rendition);
+        return next;
+      }, { scope: 'recipes' });
+    },
+  },
+  {
+    id: 'recipe.runAll', label: 'Run every recipe that fits this specimen', group: 'Recipes',
+    mutates: true, sample: () => ({}),
+    run: (app) => {
+      const specimen = currentSpecimen(app) || (app.proof.specimens || [])[0];
+      if (!specimen) { app.notify('warn', 'Capture a specimen first.'); return undefined; }
+      if (!(app.proof.recipes || []).length) { app.notify('warn', 'Load the recipe library first.'); return undefined; }
+      const rendered = app.services.renderAllRecipes(specimen, { seed: app.doc.seed });
+      if (!rendered.ok) { app.notify('bad', rendered.error, { sticky: true }); return undefined; }
+      const { renditions, failures } = rendered.value;
+      for (const failure of failures || []) app.notify('warn', `${failure.recipeId}: ${failure.error}`);
+      if (!renditions.length) { app.notify('warn', 'No seed recipe accepts this specimen. Check its kind in Specimens.'); return undefined; }
+      app.select({ renditionId: renditions[0].id });
+      app.notify('ok', `${plural(renditions.length, 'rendition')} from ${plural(new Set(renditions.map((r) => r.recipeId)).size, 'recipe')}. Every one is illustrative until you check it (§9).`);
+      return app.mutate('Run the recipe library', (doc) => {
+        let next = doc;
+        for (const rendition of renditions) next = M.addRendition(next, rendition);
+        return next;
+      }, { scope: 'recipes' });
+    },
   },
   {
     id: 'rendition.pasteDraft', label: 'Paste a rendition', group: 'Recipes', palette: false, control: true,
@@ -1383,6 +1456,20 @@ export const ACTIONS = [
     },
   },
   {
+    id: 'emit.verify', label: 'Verify the emitted file', group: 'Emit',
+    enabled: (app) => !!(app.ui.emit.result && app.ui.emit.result.html),
+    run: (app) => {
+      const emitted = app.ui.emit.result;
+      if (!emitted) { app.notify('warn', 'Emit a file first.'); return; }
+      const report = app.services.verifyArtifact(app.proof, emitted.html, emitted.css || '');
+      app.setDraft('emit.verify', report);
+      app.notify(report.clean ? 'ok' : 'bad', report.clean
+        ? `Scanned ${(emitted.bytes / 1000).toFixed(0)} kB: zero network references, every illustrative rendition labelled. This is the scan re-run over the exact bytes you are about to hand over, not a claim about them.`
+        : `${plural(report.findings.length, 'violation')} in the emitted file: ${report.findings.slice(0, 2).map((f) => f.code).join(', ')}. Do not send it.`,
+      { sticky: !report.clean });
+    },
+  },
+  {
     id: 'emit.budget', label: 'Recompute the size budget', group: 'Emit',
     run: (app) => {
       const plan = app.services.budgetAssets(app.proof, app.proof.emitOptions.maxBytes);
@@ -1484,6 +1571,37 @@ function stepSection(app, delta) {
   const ids = ['project', 'brand', 'specimens', 'recipes', 'scenes', 'branches', 'rehearse', 'emit', 'settings'];
   const at = ids.indexOf(app.ui.section);
   app.setUi({ section: ids[(at + delta + ids.length) % ids.length] });
+}
+
+
+/**
+ * Say what an extraction actually produced.
+ *
+ * §18 is about not implying more than is true, and "Brand extracted." over a
+ * panel reading "No colour roles yet / No faces detected yet / No logo
+ * captured" at 0% confidence is precisely that. The message names what was
+ * found, what was not, and — when nothing was — the most likely reason and the
+ * way round it.
+ *
+ * @param {any} app
+ * @param {any} brand
+ * @param {any} capture
+ */
+function reportExtraction(app, brand, capture) {
+  const yielded = brandYield(brand);
+  const assets = capture && Array.isArray(capture.assets) ? capture.assets.length : 0;
+  if (yielded.empty) {
+    app.notify('bad', assets === 0
+      ? 'That page came back on its own — no stylesheet, no images, no logo — so there was nothing to extract a brand from. A direct fetch usually returns only the document. Set a CORS proxy in Settings, or save the page from your browser (with its assets folder) and drop it here.'
+      : `Nothing could be extracted from ${plural(assets, 'file')}. Enter the brand by hand below — every field is editable, and the review gate treats a hand-entered field exactly like an extracted one.`,
+      { sticky: true });
+    return;
+  }
+  if (yielded.missing.length) {
+    app.notify('warn', `Extracted ${yielded.found.join(', ')}. Nothing was found for ${yielded.missing.join(', ')} — enter those by hand, or re-run with the page's assets. Everything below its confidence floor is held for your review before an emit can use it.`);
+    return;
+  }
+  app.notify('ok', `Extracted ${yielded.found.join(', ')}. Every group below its confidence floor is held for your review before an emit can use it.`);
 }
 
 /**

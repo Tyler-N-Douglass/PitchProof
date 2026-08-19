@@ -12,6 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { CONTRAST_AA_BODY, CONTRAST_AA_LARGE, FOREGROUND_ROLES, ROLE_PAIR } from '../../src/core/contracts.js';
 import { checkContrast, contrastReport, displayTextIsLarge, PROVENANCE_PAIR } from '../../src/validate/index.js';
@@ -160,6 +161,32 @@ test('contrast findings are deterministic and content-addressed', () => {
   assert.equal(a, b);
   const ids = checkContrast(hostile).map((f) => f.id);
   assert.equal(new Set(ids).size, ids.length, 'two findings must never share an id');
+});
+
+test('the pair this lane checks the provenance label against is the pair the artifact renders it in', () => {
+  // §20 critic F5: rehearsal reported zero PROVENANCE_UNLABELED while the
+  // emitter refused with fifty, because `runtime.css` rendered the label in one
+  // colour pair and this check measured another. The two must name the same
+  // pair, and the runtime stylesheet is the thing that decides.
+  const css = readFileSync(new URL('../../src/runtime/runtime.css', import.meta.url), 'utf8');
+  const rule = /\.pp-provenance\s*\{([^}]*)\}/.exec(css);
+  assert.ok(rule, 'runtime.css must carry a .pp-provenance rule for this check to mean anything');
+
+  const vars = [...rule[1].matchAll(/var\(\s*(--pp-[a-z0-9-]+)/g)].map((m) => m[1]);
+  const roleVar = (role) => `--pp-${role.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+  assert.ok(
+    vars.includes(roleVar(PROVENANCE_PAIR.fg)),
+    `the label's colour is ${vars.join(', ')}, but checkContrast measures ${PROVENANCE_PAIR.fg}`,
+  );
+  assert.ok(
+    vars.includes(roleVar(PROVENANCE_PAIR.bg)),
+    `the label's background is ${vars.join(', ')}, but checkContrast measures ${PROVENANCE_PAIR.bg}`,
+  );
+
+  // And the pair it names is one the solver guarantees, so a compliant palette
+  // never produces a label the emitter then refuses.
+  assert.ok(FOREGROUND_ROLES.includes(PROVENANCE_PAIR.fg));
+  assert.equal(ROLE_PAIR[PROVENANCE_PAIR.fg], PROVENANCE_PAIR.bg);
 });
 
 test('WCAG ratios are exact — the W3C worked values, not an approximation', () => {

@@ -50,7 +50,10 @@ import { BREAKPOINTS } from '../core/contracts.js';
 import { Pcg32, DEFAULT_SEED, SeedBook } from '../core/prng.js';
 import { AFM_TABLES, metricsFor, measureText, UNITS_PER_EM } from '../core/text-metrics.js';
 import { rgbToOklab, oklabToOklch, rgbToHex, deltaEok, clampChromaToGamut, oklchToOklab, oklabToRgb } from './oklab.js';
-import { parseCssColor, colorTokensIn, scanCssDeclarations, compositeOver } from './color-css.js';
+import {
+  parseCssColor, colorTokensIn, scanCssDeclarations, compositeOver,
+  buildCustomPropertyEnv, resolveCssVars, isCustomProperty,
+} from './color-css.js';
 
 /* ---------------------------------------------------------------------------
  * Area-model constants — every one traceable
@@ -102,6 +105,29 @@ export const ASSUMED_TEXT_LINES = 3;
  */
 export const ASSUMED_CARD_FRACTION = 1 / 12;
 
+/** The side of that assumed card. */
+const ASSUMED_CARD_SIDE = Math.sqrt(REFERENCE_VIEWPORT_AREA * ASSUMED_CARD_FRACTION);
+
+/** The ring a `thin` border paints around that card — the smallest painted footprint in the model. */
+export const ASSUMED_LINE_AREA = 4 * ASSUMED_CARD_SIDE * ASSUMED_BORDER_PX;
+
+/**
+ * Footprint of a custom-property declaration that nothing in the stylesheet
+ * paints with — `:root { --brand-teal: #0E7C86 }` where no rule references
+ * `--brand-teal`.
+ *
+ * It still counts: a declared design token is the brand stating its own
+ * palette, and the site may paint with it from another stylesheet or from
+ * inline styles this collector never sees. But it has no geometry whatsoever,
+ * so it gets `ASSUMED_LINE_AREA` — the smallest footprint the area model
+ * assigns to anything — because it is the weakest evidence in the model.
+ *
+ * A token that *is* referenced contributes only through its usages, at the
+ * area of those usages. That is the point of §7's area weighting, and counting
+ * it twice would inflate whichever colours happen to be tokenised.
+ */
+export const DECLARED_TOKEN_AREA = ASSUMED_LINE_AREA;
+
 /**
  * Evidential weight per source, applied after each source's own areas have been
  * normalised. The ordering is the justification: computed styles are what the
@@ -123,6 +149,13 @@ const LINE_PROPS = new Set([
   'border-color', 'border-top-color', 'border-right-color', 'border-bottom-color',
   'border-left-color', 'border-block-color', 'border-inline-color', 'outline-color',
   'stroke', 'text-decoration-color', 'column-rule-color', 'caret-color', 'accent-color',
+  // The shorthands, because `border: 1px solid var(--nw-line)` is where a real
+  // stylesheet puts its border colour. None of the non-colour keywords a
+  // shorthand can carry (`solid`, `dashed`, `dotted`, `double`, `groove`,
+  // `ridge`, `inset`, `outset`, `thin`, `medium`, `thick`, `none`, `hidden`)
+  // is a CSS named colour, so the bare-keyword scan cannot misfire on them.
+  'border', 'border-top', 'border-right', 'border-bottom', 'border-left',
+  'border-block', 'border-inline', 'outline', 'column-rule', 'text-decoration',
 ]);
 
 /**
@@ -266,8 +299,28 @@ export function collectFromComputedStyles(entries, options = {}) {
  * Collection — raw CSS
  * ------------------------------------------------------------------------ */
 
+/** The assumed text-run footprint: a 60-character measure over three lines at 16px. */
+function assumedTextArea() {
+  const advance = measureText('n'.repeat(ASSUMED_TEXT_CHARS), { family: 'Helvetica', fontSizePx: ASSUMED_FONT_SIZE_PX });
+  const xHeightPx = AFM_TABLES.Helvetica.xHeight / UNITS_PER_EM * ASSUMED_FONT_SIZE_PX;
+  return advance * xHeightPx * INK_DUTY_CYCLE * ASSUMED_TEXT_LINES;
+}
+
 /**
  * Collect samples from raw stylesheet text, using the assumed-footprint model.
+ *
+ * Two passes, because a modern stylesheet does not put its colours where it
+ * paints them. Pass one builds the custom-property environment from every
+ * sheet, so `:root { --nw-navy: #0F2A47 }` is available to a rule in a later
+ * sheet. Pass two walks the painting declarations, resolving `var()` against
+ * that environment before looking for colours — so `background: var(--nw-navy)`
+ * contributes `#0F2A47` with the area weight of its real usage, which is the
+ * whole point of §7's area weighting.
+ *
+ * A declared token nothing references still contributes, at
+ * `DECLARED_TOKEN_AREA`. A `var()` that cannot be resolved and carries no
+ * fallback contributes nothing at all — never a guess.
+ *
  * @param {string|readonly string[]} cssText one stylesheet or several
  * @param {{backdrop?: readonly number[]}} [options]
  * @returns {ColorSample[]}
@@ -275,36 +328,64 @@ export function collectFromComputedStyles(entries, options = {}) {
 export function collectFromCss(cssText, options = {}) {
   const backdrop = options.backdrop || [255, 255, 255];
   const sheets = Array.isArray(cssText) ? cssText : [cssText];
-  /** @type {ColorSample[]} */
-  const out = [];
+  /** @type {import('./color-css.js').CssDeclaration[]} */
+  const declarations = [];
   for (const sheet of sheets) {
     if (typeof sheet !== 'string' || sheet === '') continue;
-    for (const decl of scanCssDeclarations(sheet)) {
-      if (decl.atRules.some((a) => NON_PAINTING_AT_RULES.test(a))) continue;
-      const prop = decl.prop;
-      const tokens = colorTokensIn(decl.value);
-      if (tokens.length === 0) continue;
-      const isGround = PAGE_GROUND_RE.test(` ${decl.selector}`);
-      /** @type {number} */
-      let base;
-      if (FILL_PROPS.has(prop)) {
-        base = isGround ? REFERENCE_VIEWPORT_AREA : REFERENCE_VIEWPORT_AREA * ASSUMED_CARD_FRACTION;
-      } else if (LINE_PROPS.has(prop)) {
-        const side = Math.sqrt(REFERENCE_VIEWPORT_AREA * ASSUMED_CARD_FRACTION);
-        base = 4 * side * ASSUMED_BORDER_PX;
-      } else if (TEXT_PROPS.has(prop)) {
-        const advance = measureText('n'.repeat(ASSUMED_TEXT_CHARS), { family: 'Helvetica', fontSizePx: ASSUMED_FONT_SIZE_PX });
-        const xHeightPx = AFM_TABLES.Helvetica.xHeight / UNITS_PER_EM * ASSUMED_FONT_SIZE_PX;
-        base = advance * xHeightPx * INK_DUTY_CYCLE * ASSUMED_TEXT_LINES;
-      } else continue;
-      const share = base / tokens.length;
-      for (const token of tokens) {
-        if (token.alpha <= 0) continue;
-        const rgb = compositeOver(token, backdrop);
-        const area = share * token.alpha;
-        if (area <= 0) continue;
-        out.push(makeSample(rgb, area, 'css', prop, true));
-      }
+    for (const decl of scanCssDeclarations(sheet)) declarations.push(decl);
+  }
+  const env = buildCustomPropertyEnv(declarations);
+  /** @type {Set<string>} */
+  const referenced = new Set();
+  /** @type {ColorSample[]} */
+  const out = [];
+
+  for (const decl of declarations) {
+    if (decl.atRules.some((a) => NON_PAINTING_AT_RULES.test(a))) continue;
+    const prop = decl.prop;
+    // Custom properties are the palette, not a painted surface; they are
+    // handled after the painting pass so that usage areas win over declaration.
+    if (isCustomProperty(prop)) continue;
+    const isGround = PAGE_GROUND_RE.test(` ${decl.selector}`);
+    /** @type {number} */
+    let base;
+    if (FILL_PROPS.has(prop)) {
+      base = isGround ? REFERENCE_VIEWPORT_AREA : REFERENCE_VIEWPORT_AREA * ASSUMED_CARD_FRACTION;
+    } else if (LINE_PROPS.has(prop)) {
+      base = ASSUMED_LINE_AREA;
+    } else if (TEXT_PROPS.has(prop)) {
+      base = assumedTextArea();
+    } else continue;
+    // Resolution happens only for properties that paint, so a `var()` read by
+    // a `box-shadow` never counts as "used" and never suppresses the token's
+    // own declared-palette sample.
+    const resolved = resolveCssVars(decl.value, env, { onReference: (n) => referenced.add(n) });
+    if (resolved === null) continue;
+    const tokens = colorTokensIn(resolved);
+    if (tokens.length === 0) continue;
+    const share = base / tokens.length;
+    for (const token of tokens) {
+      if (token.alpha <= 0) continue;
+      const rgb = compositeOver(token, backdrop);
+      const area = share * token.alpha;
+      if (area <= 0) continue;
+      out.push(makeSample(rgb, area, 'css', prop, true));
+    }
+  }
+
+  for (const [name, entry] of env) {
+    if (referenced.has(name)) continue;
+    const resolved = resolveCssVars(entry.value, env);
+    if (resolved === null) continue;
+    const tokens = colorTokensIn(resolved);
+    if (tokens.length === 0) continue;
+    const share = DECLARED_TOKEN_AREA / tokens.length;
+    for (const token of tokens) {
+      if (token.alpha <= 0) continue;
+      const rgb = compositeOver(token, backdrop);
+      const area = share * token.alpha;
+      if (area <= 0) continue;
+      out.push(makeSample(rgb, area, 'css', name, true));
     }
   }
   return out;

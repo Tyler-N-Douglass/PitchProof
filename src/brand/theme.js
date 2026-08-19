@@ -29,12 +29,13 @@ import { cssFontFamily, FALLBACK_CANDIDATES } from '../core/text-metrics.js';
 import { detectFaces, facesConfidence } from './type.js';
 import { extractLogos, inverseVariant, logosConfidence } from './logo.js';
 import { collectShapeEvidence, shapeFromEvidence, shapeConfidence } from './shape.js';
-import { classifyImagery } from './imagery.js';
+import { classifyImagery, sampleFromPng } from './imagery.js';
+import { sniffFormat } from './logo.js';
 
 export { detectFaces, attachUserFont, facesConfidence } from './type.js';
-export { extractLogos, inverseVariant, logosConfidence } from './logo.js';
+export { extractLogos, inverseVariant, logosConfidence, selectLogos, identityScore, declaredLogoUrls } from './logo.js';
 export { detectShape, shapeConfidence } from './shape.js';
-export { classifyImagery } from './imagery.js';
+export { classifyImagery, sampleFromPng, classifyImage, normalizeSample } from './imagery.js';
 
 // ------------------------------------------------------------- theme tables
 
@@ -357,7 +358,7 @@ export function buildBrandSystem(parts, deps) {
     : shapeFromEvidence(shapeEvidence);
 
   // --- imagery -----------------------------------------------------------
-  const imageryResult = p.imagery ? null : classifyImagery(p.images || []);
+  const imageryResult = p.imagery ? null : classifyImagery(toImageSamples(p.images));
   const imagery = p.imagery
     ? {
       treatment: ['photographic', 'illustrative', 'mixed', 'unknown'].includes(p.imagery.treatment) ? p.imagery.treatment : 'unknown',
@@ -476,6 +477,44 @@ export function normalizeColor(token) {
     source: t.source,
     contrastWithPair: Number.isFinite(t.contrastWithPair) ? t.contrastWithPair : null,
   };
+}
+
+/**
+ * Accept either decoded `ImageSample`s or the raw `{name, bytes, mime}` asset
+ * records L3's ingest produces, so a caller that has bytes does not have to know
+ * which of them this build can decode.
+ *
+ * Entries already carrying pixel `data` pass through untouched. Entries carrying
+ * `bytes` are decoded when they are PNG — the one format this repository decodes
+ * (L5-D10) — and skipped otherwise, because a format we cannot read is better
+ * left out of the evidence than guessed at. A caller with JPEG pixels decodes
+ * them with the platform and passes samples.
+ *
+ * @param {any[]|undefined} images
+ * @returns {any[]}
+ */
+export function toImageSamples(images) {
+  if (!Array.isArray(images)) return [];
+  /** @type {any[]} */
+  const out = [];
+  images.forEach((entry, index) => {
+    if (!entry || typeof entry !== 'object') return;
+    if (entry.data && entry.width && entry.height) { out.push(entry); return; }
+    const bytes = entry.bytes;
+    if (!bytes || typeof bytes.length !== 'number') return;
+    if (sniffFormat(bytes) !== 'png') return;
+    try {
+      out.push(sampleFromPng(bytes, {
+        id: typeof entry.id === 'string' ? entry.id : (typeof entry.name === 'string' ? entry.name : `image-${index}`),
+        role: entry.role,
+        weight: entry.weight,
+      }));
+    } catch {
+      // An undecodable PNG is not evidence; it is also not an error worth
+      // failing a whole brand extraction over.
+    }
+  });
+  return out;
 }
 
 /**

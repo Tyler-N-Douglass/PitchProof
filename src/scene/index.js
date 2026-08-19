@@ -12,8 +12,11 @@
 
 export { registerAllLayouts, LAYOUT_FUNCTIONS, layoutFunction } from './layouts/all.js';
 export { sceneTemplates, buildScene, collectGroups, presenterNote, mediaMap } from './plan.js';
-export { measureScene, collectTextBoxes, renderSceneTree, normalizeContext, plainText } from './measure.js';
-export { PROVENANCE_LABEL_CLASS, PROVENANCE_LABEL_TEXT, needsProvenanceLabel, provenanceLabel, presentableNotes } from './parts.js';
+export { measureScene, collectTextBoxes, renderSceneTree, normalizeContext, plainText, textOverflowOf } from './measure.js';
+export {
+  PROVENANCE_LABEL_CLASS, PROVENANCE_LABEL_TEXT, needsProvenanceLabel, provenanceLabel,
+  presentableNotes, displayUrl, URL_LABEL_BUDGET,
+} from './parts.js';
 
 // -- extensions ------------------------------------------------------------
 // Geometry, tokens and the type scale, so L11 can reason about a box it was

@@ -313,6 +313,31 @@ export function fakeServices(options = {}) {
     }],
     alignBlocks: (a, b) => ({ pairs: (a || []).map((_, i) => [i, i < (b || []).length ? i : null]), score: 0.8 }),
     parsePasted: (text) => String(text).split(/\n{2,}/).filter(Boolean).map((t) => ({ type: 'paragraph', text: t.trim() })),
+    recipesFor: (specimen) => (specimen ? [fixtureRecipe()] : []),
+    recipeAccepts: (recipe, specimen) => !!(recipe && specimen && (recipe.inputKinds || []).includes(specimen.kind)),
+    renderRecipe: (recipe, specimen) => {
+      const id = typeof recipe === 'string' ? recipe : recipe.id;
+      if (!specimen || !(specimen.blocks || []).length) return err(`renderRecipe: ${id} cannot run on an empty specimen`);
+      return ok([{
+        id: contentId('rendition', `tpl-${id}-${calls.length}`),
+        specimenId: specimen.id, recipeId: id, label: 'de-DE',
+        blocks: [{ type: 'paragraph', text: 'from a seed recipe' }], media: [],
+        provenance: 'illustrative', producedBy: 'template', notes: null,
+      }]);
+    },
+    renderAllRecipes: (specimen) => {
+      record('renderAllRecipes', [specimen && specimen.id]);
+      if (!specimen) return err('renderAll: a specimen is required');
+      return ok({
+        renditions: [{
+          id: contentId('rendition', `all-${calls.length}`),
+          specimenId: specimen.id, recipeId: fixtureRecipe().id, label: 'fr-FR',
+          blocks: [{ type: 'paragraph', text: 'from the library' }], media: [],
+          provenance: 'illustrative', producedBy: 'template', notes: null,
+        }],
+        failures: [],
+      });
+    },
     buildRendition: (args) => ok({
       id: contentId('rendition', `fake-${args.label}-${calls.length}`),
       specimenId: args.specimen.id,
@@ -364,6 +389,23 @@ export function fakeServices(options = {}) {
     branchCoverage: () => ({ unreachable: [], noReturn: [] }),
     registerBranchOverlays: () => () => {},
 
+    fetchStrategies: () => [
+      { id: 'direct-fetch', label: 'Direct fetch', describe: 'Ask the browser for the page.', kind: 'network', automatic: true, requires: ['http', 'clock'] },
+      { id: 'saved-page', label: 'Saved page', describe: 'Save the page from your browser and drop it here.', kind: 'file', automatic: false, requires: ['clock'] },
+    ],
+    preflightRules: () => [
+      { code: 'CONTRAST_FAIL', severity: 1, describe: 'Every text/background pair, computed.' },
+      { code: 'TEXT_OVERFLOW', severity: 1, describe: 'Text measured against its container post-substitution.' },
+      { code: 'STALE_CAPTURE', severity: 3, describe: 'A specimen older than 30 days at emit time.' },
+    ],
+    checkContrast: (brand) => ((brand && (brand.colors || []).some((c) => c.role === 'onAccent' && c.contrastWithPair !== null && c.contrastWithPair < 4.5))
+      ? [{ id: 'fd_contrast', severity: 1, code: 'CONTRAST_FAIL', message: 'onAccent on accent measures 4.10:1.', locus: {}, autoFixAvailable: true }]
+      : []),
+    sceneOverflow: () => [],
+    returnTargetFor: (deck, branchId) => ({ sequenceId: 'spine', sceneIndex: 0, scene: { id: 'sc_ui_0', headline: 'Headline for sc_ui_0' } }),
+    verifyArtifact: (proof, html) => ({
+      findings: [], network: [], provenance: [], clean: !String(html).includes('http'),
+    }),
     async runPreflight() {
       if (!status.validate) return err('validate is not wired');
       return ok(options.findings || []);

@@ -837,7 +837,17 @@ export function resolveFace(family, options = {}) {
 
   const isAvailable = availKeys.has(reqKey);
   const resolved = isAvailable ? family : (ranked[0]?.name || generic);
-  const delta = metricDelta(family, resolved, weight);
+
+  // A delta is only meaningful when we hold published metrics for the family
+  // that was asked for. For an unknown family, `metricsFor` already fell back
+  // to a category model — so comparing it to the family it fell back to would
+  // divide a number by itself and report the substitution as metrically
+  // perfect. That is exactly backwards for the §22.2 case: a prospect's custom
+  // webfont is precisely the family we do not know, and telling the seller a
+  // condensed display face and Times New Roman are the same width is worse
+  // than telling them nothing. §4 permits `metricDelta: null`, which is the
+  // honest answer, and `approximate` says why.
+  const delta = known ? metricDelta(family, resolved, weight) : null;
 
   // Confidence: a family we have exact tables for, that is itself available, is
   // certain. Anything else loses confidence in proportion to how far the
@@ -846,10 +856,23 @@ export function resolveFace(family, options = {}) {
   let confidence = 1;
   if (!known) confidence -= 0.35;
   else if (!reqMetrics.exact) confidence -= 0.12;
-  if (!isAvailable) confidence -= Math.min(0.4, Math.abs(delta.avgAdvance - 1) * 2 + 0.05);
+  if (!isAvailable) {
+    // With no published metrics there is no measured movement to price in, so
+    // the unknown-family penalty above already carries the whole cost.
+    confidence -= delta ? Math.min(0.4, Math.abs(delta.avgAdvance - 1) * 2 + 0.05) : 0.05;
+  }
   confidence = Math.max(0, Math.min(1, round6(confidence)));
 
-  return { requested: family, resolved, stack, metricDelta: delta, available: isAvailable, known, confidence };
+  return {
+    requested: family,
+    resolved,
+    stack,
+    metricDelta: delta,
+    available: isAvailable,
+    known,
+    approximate: !known,
+    confidence,
+  };
 }
 
 /**

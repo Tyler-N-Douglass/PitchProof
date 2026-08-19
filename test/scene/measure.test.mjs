@@ -16,6 +16,7 @@ import { BREAKPOINTS } from '../../src/core/contracts.js';
 import { measureText, resolveFace } from '../../src/core/text-metrics.js';
 import {
   buildScene, renderSceneTree, measureScene, stageBox, boxGeometry, TYPE_ROLES, styleForRole,
+  textOverflowOf, displayUrl,
 } from '../../src/scene/index.js';
 import { layoutCases, contextFor, brandFixture, specimen, localeFanout } from '../fixtures/scene/content.mjs';
 
@@ -264,5 +265,96 @@ test('the type scale is legible at every breakpoint', () => {
       assert.ok(style.fontSizePx >= 9, `${role} @${bp} is ${style.fontSizePx}px`);
       if (role === 'body' || role === 'listItem') assert.ok(style.fontSizePx >= 12, `${role} @${bp}`);
     }
+  }
+});
+
+test('every box says whether an overflow would be visible or silent', () => {
+  // CRITIQUE-1 F6: the detector graded a designed ellipsis as data lost
+  // silently, because nothing in the measurement told the two apart.
+  for (const { testCase, scene, ctx } of cases()) {
+    for (const bp of BPS) {
+      for (const box of measureScene(scene, ctx, bp).boxes) {
+        const where = `${testCase.layout} @${bp} ${box.role}`;
+        assert.ok(box.textOverflow === 'clip' || box.textOverflow === 'ellipsis', `${where}: textOverflow`);
+        if (box.maxLines !== undefined) {
+          assert.equal(box.textOverflow, 'ellipsis', `${where}: a clamped run truncates visibly`);
+        } else {
+          assert.equal(box.textOverflow, 'clip', `${where}: an unclamped run has nothing to mark a cut`);
+        }
+      }
+    }
+  }
+});
+
+test('textOverflowOf reads the attribute the stylesheet is written from', () => {
+  assert.equal(textOverflowOf({}), 'clip');
+  assert.equal(textOverflowOf({ 'data-pp-clamp': '1' }), 'ellipsis');
+  assert.equal(textOverflowOf({ 'data-pp-clamp': 3 }), 'ellipsis');
+  assert.equal(textOverflowOf({ 'data-pp-clamp': null }), 'clip');
+  // A layout may state it directly where it knows better than the derivation.
+  assert.equal(textOverflowOf({ 'data-pp-to': 'ellipsis' }), 'ellipsis');
+  assert.equal(textOverflowOf({ 'data-pp-to': 'clip', 'data-pp-clamp': '2' }), 'clip');
+});
+
+test('a table cell reports the break-word its stylesheet gives it', () => {
+  const spec = specimen();
+  const scene = buildScene({ layout: 'splitBeforeAfter', specimen: spec, renditions: [], headline: 'Spec' });
+  const ctx = contextFor(scene, { specimen: spec, renditions: [] });
+  const cells = measureScene(scene, ctx, 'sm').boxes.filter((b) => b.role === 'cell' || b.role === 'cellHead');
+  assert.ok(cells.length > 0);
+  for (const cell of cells) assert.equal(cell.overflowWrap, 'break-word', cell.text);
+});
+
+test('the boxes of one column share a container, so a column can be summed', () => {
+  const testCase = layoutCases()[0];
+  const scene = buildScene(testCase);
+  const ctx = contextFor(scene, { specimen: testCase.specimen, renditions: testCase.renditions });
+  const boxes = measureScene(scene, ctx, 'md').boxes.filter((b) => b.slot === 'splitCell');
+  const containers = new Set(boxes.map((b) => b.containerId));
+  assert.deepEqual([...containers].sort(), ['splitCell:after/0', 'splitCell:before'],
+    'one container per column, not one per cell');
+  for (const id of containers) {
+    const inColumn = boxes.filter((b) => b.containerId === id);
+    assert.ok(inColumn.length > 1, `${id} holds several blocks`);
+    const heights = new Set(inColumn.map((b) => b.containerHeightPx));
+    assert.equal(heights.size, 1, `${id}: every box in a column reports the same column height`);
+  }
+});
+
+test('a column is afforded the frame, not a share of it, however many it has', () => {
+  // CRITIQUE-1 F6: dividing the body height between stacked columns at `sm`
+  // claimed a five-rendition scene gave its source column a fifth of the
+  // screen, and turned ordinary prose into blocking findings.
+  const spec = specimen();
+  for (const bp of BPS) {
+    const one = boxGeometry('splitCell', bp, { n: 1 });
+    const five = boxGeometry('splitCell', bp, { n: 5 });
+    assert.equal(one.heightPx, five.heightPx, `${bp}: column height is independent of the column count`);
+    // Width is not: at md and lg the columns share the frame side by side; at
+    // sm they stack, so each keeps the full width and the scene scrolls.
+    if (bp === 'sm') assert.equal(five.widthPx, one.widthPx, 'sm stacks rather than divides');
+    else assert.ok(five.widthPx < one.widthPx, `${bp}: columns divide the width`);
+    const rendered = measureScene(
+      buildScene({ layout: 'splitBeforeAfter', specimen: spec, renditions: [], headline: 'H' }),
+      contextFor(buildScene({ layout: 'splitBeforeAfter', specimen: spec, renditions: [], headline: 'H' }), { specimen: spec, renditions: [] }),
+      bp,
+    ).boxes.find((b) => b.slot === 'splitCell');
+    assert.ok(rendered.containerHeightPx > 200, `${bp}: a column affords real height (${rendered.containerHeightPx})`);
+  }
+});
+
+test('a source URL label elides its middle, keeping the host and the slug', () => {
+  assert.equal(displayUrl('https://acme.example/a/b'), 'acme.example/a/b');
+  assert.equal(
+    displayUrl('https://www.northwind-industrial.example/equipment/heat-exchangers/hx-400/'),
+    'www.northwind-industrial.example/…/hx-400',
+  );
+  assert.equal(displayUrl('https://www.northwind-industrial.example/'), 'www.northwind-industrial.example');
+  assert.equal(displayUrl(null), null);
+  // Never longer than what it replaced, and never carrying a scheme.
+  for (const url of ['https://a.example/one/two/three/four', 'https://a-very-long-host-name.example/x/y']) {
+    const label = displayUrl(url);
+    assert.ok(label.length <= url.replace(/^https:\/\//, '').length);
+    assert.ok(!label.includes('//'));
   }
 });

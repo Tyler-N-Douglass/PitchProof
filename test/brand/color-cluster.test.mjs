@@ -21,12 +21,15 @@ import {
   collectColors, collectFromComputedStyles, collectFromCss, collectFromPixels,
   normalizeSampleWeights, decodePixels, textInkArea,
   scanCssDeclarations, colorTokensIn, parseCssColor, compositeOver,
+  maskCssLiterals, isCustomProperty, buildCustomPropertyEnv, resolveCssVars,
+  MAX_VAR_DEPTH, ASSUMED_LINE_AREA, DECLARED_TOKEN_AREA,
   SOURCE_WEIGHTS, INK_DUTY_CYCLE, REFERENCE_VIEWPORT_AREA, ASSUMED_CARD_FRACTION,
   ASSUMED_FONT_SIZE_PX, ASSUMED_BORDER_PX, HELVETICA_STD_VW,
   inGamut, deltaEok, hexToOklab, rgbToHex, hexToOklch, oklchToHex,
-  extractPalette,
+  extractPalette, paletteContrastReport, contrastRatio,
 } from '../../src/brand/color.js';
 import { syntheticPixels, KNOWN_K_CENTERS } from '../fixtures/brand/palettes.mjs';
+import { assetBytes, CORPUS_BRAND } from '../fixtures/corpus/index.mjs';
 
 /* ------------------------------------------------------- the area model */
 
@@ -166,6 +169,114 @@ test('the assumed CSS footprints are the documented ones and are marked estimate
   assert.equal(collectFromCss('@font-face { font-family: X }').length, 0);
   // Unresolvable values are skipped rather than guessed.
   assert.equal(collectFromCss('.x { color: var(--y) } .z { color: currentColor }').length, 0);
+});
+
+test('a colour name inside a custom-property name is never mistaken for a colour', () => {
+  // The §22.1 defect this test exists for. `[a-zA-Z]{3,20}` with no boundary
+  // guard matched `navy` inside `var(--nw-navy)`, `parseCssColor` turned it
+  // into HTML navy `#000080`, and the extracted palette was a colour the site
+  // does not use — with the area weight of a full-bleed page ground.
+  //
+  // The earlier version of this assertion used `var(--y)`, which contains no
+  // colour keyword and so could never have caught it. Every name below does.
+  const NAMES = [
+    '--nw-navy', '--brand-orange', '--text-gold', '--accent-teal',
+    '--tomato-sauce', '--color-salmon', '--ui-plum', '--bg-linen',
+    '--navy', '--orange-500', '--gold', '--silver-border',
+  ];
+  for (const name of NAMES) {
+    assert.deepEqual(colorTokensIn(`var(${name})`), [],
+      `var(${name}) must not yield a colour`);
+    assert.equal(collectFromCss(`.x { color: var(${name}) }`).length, 0,
+      `${name} must contribute nothing when it is undeclared`);
+    assert.equal(collectFromCss(`.x { color: var(${name}) ; background: var(${name}) }`).length, 0);
+  }
+  // A colour keyword that really is a whole identifier still resolves.
+  assert.equal(colorTokensIn('navy')[0].hex, '#000080');
+  assert.equal(colorTokensIn('1px solid red')[0].hex, '#ff0000');
+  assert.deepEqual(colorTokensIn('linear-gradient(90deg, navy, orange)').map((t) => t.hex),
+    ['#000080', '#ffa500']);
+  assert.equal(colorTokensIn('  tomato  ')[0].hex, '#ff6347');
+  // …and a keyword buried in a string or a url() does not.
+  assert.deepEqual(colorTokensIn('url("gold-bar.png")'), []);
+  assert.deepEqual(colorTokensIn("url('/img/navy-hero.jpg')"), []);
+  assert.deepEqual(colorTokensIn('url(#navy-gradient)'), []);
+  assert.deepEqual(colorTokensIn('"tomato"'), []);
+  assert.deepEqual(colorTokensIn('--text-gold'), []);
+  assert.deepEqual(colorTokensIn('gold-standard'), []);
+  assert.deepEqual(colorTokensIn('standard-gold'), []);
+  assert.equal(maskCssLiterals('url("gold.png") navy').trim().endsWith('navy'), true);
+});
+
+test('the palette is read from custom-property declarations, where sites keep it', () => {
+  // A modern stylesheet declares its brand in `:root` and paints with `var()`.
+  // Ignoring the declaration throws away the only place the real colour appears.
+  const css = ':root { --nw-navy: #0F2A47; --nw-orange: #E8622C; } '
+    + '.header { background: var(--nw-navy) } .cta { color: var(--nw-orange) }';
+  const samples = collectFromCss(css);
+  const hexes = samples.map((s) => s.hex).sort();
+  assert.deepEqual(hexes, ['#0f2a47', '#e8622c'], 'the declared values, not the names');
+  assert.ok(!hexes.includes('#000080') && !hexes.includes('#ffa500'), 'nothing fabricated');
+  // A referenced token is weighted by where it is painted, not by its
+  // declaration: a page ground carries far more area than a text colour.
+  const ground = samples.find((s) => s.hex === '#0f2a47');
+  const text = samples.find((s) => s.hex === '#e8622c');
+  assert.ok(ground.area > text.area * 10, `${ground.area} vs ${text.area}`);
+  assert.equal(samples.filter((s) => s.hex === '#0f2a47').length, 1, 'and is not counted twice');
+});
+
+test('var() resolves through chains and fallbacks, and refuses what it cannot see', () => {
+  const env = buildCustomPropertyEnv(scanCssDeclarations(
+    ':root { --base: #0F2A47; --alias: var(--base); --deep: var(--alias) }',
+  ));
+  assert.equal(resolveCssVars('var(--base)', env), '#0F2A47');
+  assert.equal(resolveCssVars('var(--deep)', env), '#0F2A47', 'chains resolve');
+  assert.equal(resolveCssVars('1px solid var(--base)', env), '1px solid #0F2A47');
+  assert.equal(resolveCssVars('linear-gradient(var(--base), var(--base))', env),
+    'linear-gradient(#0F2A47, #0F2A47)');
+  // Undefined with no fallback is invalid at computed-value time in CSS too.
+  assert.equal(resolveCssVars('var(--missing)', env), null);
+  assert.equal(resolveCssVars('var(--missing, #ff0000)', env), '#ff0000', 'fallbacks are honoured');
+  assert.equal(resolveCssVars('var(--missing, var(--base))', env), '#0F2A47');
+  assert.equal(resolveCssVars('#0F2A47', env), '#0F2A47', 'a value with no var is returned as is');
+  assert.equal(resolveCssVars('var(--base', env), null, 'an unbalanced var is not a colour');
+  assert.equal(resolveCssVars('var(notaname)', env), null);
+  // A self-referential token terminates rather than spinning.
+  const cyclic = buildCustomPropertyEnv(scanCssDeclarations(':root{--a:var(--b);--b:var(--a)}'));
+  assert.equal(resolveCssVars('var(--a)', cyclic), null);
+  assert.equal(collectFromCss(':root{--a:var(--b);--b:var(--a)} .x{color:var(--a)}').length, 0);
+  assert.ok(MAX_VAR_DEPTH >= 8);
+});
+
+test('an unconditional custom property beats one inside an at-rule', () => {
+  // A `prefers-color-scheme: dark` override must not become the default palette.
+  const env = buildCustomPropertyEnv(scanCssDeclarations(
+    ':root { --ground: #FFFFFF } @media (prefers-color-scheme: dark) { :root { --ground: #000000 } }',
+  ));
+  assert.equal(env.get('--ground').value, '#FFFFFF');
+  // Declared after the at-rule, unconditionally, it still wins.
+  const env2 = buildCustomPropertyEnv(scanCssDeclarations(
+    '@media (x) { :root { --g: #000000 } } :root { --g: #FFFFFF }',
+  ));
+  assert.equal(env2.get('--g').value, '#FFFFFF');
+  // Two unconditional declarations: the last wins, as CSS itself resolves it.
+  const env3 = buildCustomPropertyEnv(scanCssDeclarations(':root{--g:#111111} .a{--g:#222222}'));
+  assert.equal(env3.get('--g').value, '#222222');
+  assert.equal(isCustomProperty('--x'), true);
+  assert.equal(isCustomProperty('color'), false);
+});
+
+test('a declared token nothing paints with still counts, at the weakest footprint', () => {
+  const samples = collectFromCss(':root { --unused-teal: #0E7C86 }');
+  assert.equal(samples.length, 1, 'a declared token is the brand stating its palette');
+  assert.equal(samples[0].hex, '#0e7c86');
+  assert.equal(samples[0].area, DECLARED_TOKEN_AREA);
+  assert.equal(samples[0].area, ASSUMED_LINE_AREA, 'the smallest footprint in the model');
+  assert.equal(samples[0].estimated, true);
+  // A painted fill of the same colour outweighs it by orders of magnitude.
+  const painted = collectFromCss(':root{--a:#0E7C86} body{background:var(--a)}');
+  assert.equal(painted.length, 1);
+  assert.ok(painted[0].area > samples[0].area * 100);
 });
 
 /* ------------------------------------------------------------- pixels */
@@ -363,4 +474,94 @@ test('the whole pipeline runs from mixed sources and is deterministic', () => {
   assert.ok(a.sampleCount > 0);
   assert.equal(a.colors.length, 14);
   assert.throws(() => extractPalette({}), /no colours/);
+});
+
+/* ------------------------------------------------- the corpus is the test */
+
+/**
+ * Ground truth, read out of the fixture stylesheet by an oracle that shares no
+ * code with the collector: every `#rrggbb` literal the file contains.
+ * `site.css` uses no shorthand hexes and its only `rgba()` is inside a
+ * `box-shadow`, which the area model does not treat as a painted surface.
+ * @param {string} css
+ * @returns {Set<string>}
+ */
+function literalHexesIn(css) {
+  return new Set((css.match(/#[0-9a-fA-F]{6}\b/g) || []).map((h) => h.toLowerCase()));
+}
+
+test('extraction from the corpus yields only colours the corpus actually contains', () => {
+  // §22.1 and §18 in one assertion. The brand is declared as custom properties
+  // and painted through `var()`; before the fix, `var(--nw-navy)` produced HTML
+  // navy `#000080` and `var(--nw-orange)` produced HTML orange `#ffa500`, with
+  // page-ground area weight, and the emitted artifact wore colours the client
+  // does not use.
+  const css = Buffer.from(assetBytes('/assets/site.css')).toString('utf8');
+  const literals = literalHexesIn(css);
+  assert.ok(literals.size >= 8, `the fixture should declare a real palette, found ${literals.size}`);
+
+  const { samples, origins } = collectColors({ css: [css] });
+  assert.deepEqual(origins, ['css']);
+  assert.ok(samples.length > 0, 'the stylesheet must yield colours at all');
+
+  const collected = [...new Set(samples.map((s) => s.hex))].sort();
+  const invented = collected.filter((h) => !literals.has(h));
+  assert.deepEqual(invented, [],
+    `these colours are not in the stylesheet: ${invented.join(', ')}`);
+
+  // Every declared brand token is recovered, by value.
+  for (const [name, value] of Object.entries(CORPUS_BRAND)) {
+    if (typeof value !== 'string' || !value.startsWith('#')) continue;
+    assert.ok(collected.includes(value.toLowerCase()),
+      `the declared brand colour ${name} (${value}) was not extracted`);
+  }
+
+  // And specifically none of the HTML colour names hiding in the token names.
+  for (const fabricated of ['#000080', '#ffa500', '#ff6347', '#008080', '#ffd700']) {
+    assert.ok(!collected.includes(fabricated), `${fabricated} is fabricated from an identifier`);
+  }
+});
+
+test('the corpus palette is weighted by where its colours are actually painted', () => {
+  // The point of resolving `var()` rather than merely collecting declarations:
+  // navy paints the header and the hero, so it must outrank the line colour
+  // that only ever draws a hairline — even though both are declared identically
+  // in `:root`.
+  const css = Buffer.from(assetBytes('/assets/site.css')).toString('utf8');
+  const { samples } = collectColors({ css: [css] });
+  const areaOf = (hex) => samples.filter((s) => s.hex === hex.toLowerCase())
+    .reduce((a, s) => a + s.area, 0);
+  assert.ok(areaOf(CORPUS_BRAND.navy) > areaOf(CORPUS_BRAND.line) * 10,
+    `navy ${areaOf(CORPUS_BRAND.navy)} must outrank line ${areaOf(CORPUS_BRAND.line)}`);
+  assert.ok(areaOf(CORPUS_BRAND.paper) > areaOf(CORPUS_BRAND.steel));
+  assert.ok(areaOf(CORPUS_BRAND.orange) > 0, 'the accent is painted somewhere');
+});
+
+test('the solved corpus palette wears the prospect\'s brand, not HTML defaults', () => {
+  const css = Buffer.from(assetBytes('/assets/site.css')).toString('utf8');
+  const literals = literalHexesIn(css);
+  const result = extractPalette({ css: [css] }, { seed: 'corpus' });
+
+  for (const token of result.colors) {
+    if (token.source !== 'extracted') continue;
+    assert.ok(literals.has(token.hex),
+      `role ${token.role} was extracted as ${token.hex}, which is not in the stylesheet`);
+  }
+  const byRole = {};
+  for (const t of result.colors) byRole[t.role] = t.hex;
+  // The corpus's own description of its brand: a deep navy ground that can
+  // carry white text, and a mid-orange accent that cannot.
+  assert.ok([CORPUS_BRAND.navy.toLowerCase(), CORPUS_BRAND.navyDeep.toLowerCase()].includes(byRole.primary),
+    `primary should be one of the brand navies, got ${byRole.primary}`);
+  assert.equal(byRole.accent, CORPUS_BRAND.orange.toLowerCase(), 'the accent is the brand orange');
+  assert.equal(byRole.surface, CORPUS_BRAND.paper.toLowerCase(), 'the ground is the brand paper');
+  // §7's post-condition still holds on the real thing.
+  for (const row of paletteContrastReport(result.colors)) {
+    assert.ok(row.ok, `${row.role} on ${row.pair} is ${row.ratio.toFixed(3)}:1`);
+  }
+  // The corpus notes that #E8622C cannot carry white text at 4.5:1 — so
+  // onAccent must not be white, and must have been solved rather than assumed.
+  assert.ok(contrastRatio('#ffffff', CORPUS_BRAND.orange) < 4.5,
+    'the fixture premise: white on the brand orange fails AA');
+  assert.ok(contrastRatio(byRole.onAccent, byRole.accent) >= 4.5);
 });

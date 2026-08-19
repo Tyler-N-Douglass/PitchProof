@@ -24,7 +24,8 @@ import {
   inverseVariant, invertInk, invertSvgPaints, invertPixels, isLightInk,
   logosConfidence, serializeNode, inHeaderRegion, contextText, indexAssets,
   lookupAsset, dataUri, parseLogoDataUri, monochromeOf,
-  FAVICON_MAX_PX, WORDMARK_ASPECT, DEFAULT_REPLACED_SIZE, FORMAT_MIME,
+  selectLogos, identityScore, mergeCandidates, declaredLogoUrls,
+  FAVICON_MAX_PX, WORDMARK_ASPECT, DEFAULT_REPLACED_SIZE, FORMAT_MIME, IDENTITY_WEIGHTS,
 } from '../../src/brand/logo.js';
 
 // ------------------------------------------------------------ byte builders
@@ -119,6 +120,37 @@ const solidPng = (w, h, rgba) => {
 
 const el = (tag, attrs = {}, children = []) => ({ type: 'element', tag, attrs, children });
 const txt = (text) => ({ type: 'text', text });
+
+/**
+ * A home page carrying all four §7 tiers at once: an inline SVG in the header,
+ * a `<link rel=icon>` SVG, an og:image, and header rasters — one of them the
+ * real logo, one of them a partner badge, plus a hero photograph outside the
+ * header that must never be a candidate.
+ */
+function homePage() {
+  const doc = el('html', {}, [
+    el('head', {}, [
+      el('link', { rel: 'icon', href: '/favicon.svg' }, []),
+      el('meta', { property: 'og:image', content: 'https://cdn.example.com/og-card.png' }, []),
+    ]),
+    el('body', {}, [
+      el('header', { class: 'site-header' }, [
+        el('a', { class: 'site-logo', href: '/' }, [
+          el('svg', { class: 'site-logo__svg', viewBox: '0 0 120 40' }, [el('path', { fill: '#0b1220', d: 'M0 0h120v40z' }, [])]),
+        ]),
+        el('img', { src: '/img/wordmark.png', alt: 'Acme wordmark' }, []),
+      ]),
+      el('main', {}, [el('img', { src: '/img/hero.jpg', alt: 'A hero photograph' }, [])]),
+    ]),
+  ]);
+  const assets = [
+    { name: '/favicon.svg', bytes: new TextEncoder().encode('<svg viewBox="0 0 32 32"><path fill="#0b1220" d="M0 0h32v32z"/></svg>'), mime: 'image/svg+xml' },
+    { name: 'https://cdn.example.com/og-card.png', bytes: makePng({ w: 1200, h: 630, colorType: 2 }), mime: 'image/png' },
+    { name: '/img/wordmark.png', bytes: makePng({ w: 300, h: 60, colorType: 2 }), mime: 'image/png' },
+    { name: '/img/hero.jpg', bytes: makeJpeg({ w: 2000, h: 1200 }), mime: 'image/jpeg' },
+  ];
+  return { doc, assets };
+}
 
 // ---------------------------------------------------------------- sniffing
 
@@ -323,41 +355,166 @@ test('shape classifies whatever the name does not', () => {
 
 // ------------------------------------------------------------- extraction
 
-test('extraction follows the §7 preference order', () => {
-  const logoSvg = '<svg class="site-logo" viewBox="0 0 120 40" xmlns="http://www.w3.org/2000/svg"><path fill="#0b1220" d="M0 0h120v40z"/></svg>';
+test('discovery follows the §7 preference order', () => {
+  const { doc, assets } = homePage();
+  const candidates = collectLogoCandidates(doc, assets);
+  // §7: inline SVG, then <link rel=icon> SVG, then og:image, then the largest
+  // raster in the header region. Discovery finds all four, in that order.
+  assert.deepEqual(candidates.map((c) => c.source), ['inline-svg', 'link-icon-svg', 'og-image', 'header-raster']);
+  assert.deepEqual(candidates[0].info, { format: 'svg', w: 120, h: 40, hasTransparency: true, transparencyChecked: true, mime: FORMAT_MIME.svg });
+  // The hero image outside the header is not named as a logo and is never found.
+  assert.equal(candidates.some((c) => c.info.w === 2000), false);
+});
+
+test('the primary role goes to the identity, not to whichever tier fired first', () => {
+  // The regression the §20 critic found (F10): §7's order is about *finding* a
+  // logo. Reading it as an ordering over the `primary` variant promotes a
+  // 320x180 og:image of an industrial plant over the SVG in the site header,
+  // and `logoFor(brand)` defaults to `primary`.
+  const { doc, assets } = homePage();
+  const logos = extractLogos(doc, assets, { idMinter: new IdMinter('seed-a', 'brand/logos') });
+
+  const primaries = logos.filter((l) => l.variant === 'primary');
+  assert.equal(primaries.length, 1, 'exactly one asset carries the primary role');
+  assert.equal(primaries[0].source, 'inline-svg');
+  assert.deepEqual(primaries[0].intrinsic, { w: 120, h: 40 });
+
+  // The og:image had no variant signal and lost the identity: it is not a logo.
+  assert.equal(logos.some((l) => l.intrinsic.w === 1200), false, 'the social card is not a brand asset');
+  assert.deepEqual(logos.map((l) => l.variant), ['primary', 'favicon', 'wordmark']);
+  for (const logo of logos) assert.match(logo.id, /^lg_[0-9a-f]{12}$/);
+});
+
+test('a non-empty logo set always contains exactly one primary', () => {
+  // `logoFor(brand)` (L8) defaults to `primary`; a layout that asks for the
+  // brand's logo must always get one.
+  const cases = [
+    homePage().doc,
+    el('header', {}, [el('img', { src: '/logo.png', alt: 'Acme logo' }, [])]),
+    el('head', {}, [el('link', { rel: 'icon', href: '/favicon.svg' }, [])]),
+    el('head', {}, [el('meta', { property: 'og:image', content: '/og-card.png' }, [])]),
+  ];
+  const assets = homePage().assets.concat([
+    { name: '/logo.png', bytes: makePng({ w: 180, h: 60, colorType: 2 }), mime: 'image/png' },
+    { name: '/og-card.png', bytes: makePng({ w: 1200, h: 630, colorType: 2 }), mime: 'image/png' },
+  ]);
+  for (const doc of cases) {
+    const logos = extractLogos(doc, assets, { idMinter: new IdMinter('s') });
+    assert.ok(logos.length > 0, 'a candidate was found');
+    assert.equal(logos.filter((l) => l.variant === 'primary').length, 1, JSON.stringify(logos.map((l) => l.variant)));
+  }
+});
+
+test('an og:image alone is still the primary — degradation, not rejection', () => {
+  // §7 lists og:image precisely so extraction degrades gracefully. When nothing
+  // else was found, the social card is the best evidence there is.
+  const doc = el('head', {}, [el('meta', { property: 'og:image', content: '/og-card.png' }, [])]);
+  const assets = [{ name: '/og-card.png', bytes: makePng({ w: 1200, h: 630, colorType: 2 }), mime: 'image/png' }];
+  const logos = extractLogos(doc, assets, { idMinter: new IdMinter('s') });
+  assert.equal(logos.length, 1);
+  assert.equal(logos[0].variant, 'primary');
+  assert.equal(logos[0].source, 'og-image');
+});
+
+test('schema.org Organization.logo is read, and decides the primary', () => {
+  const ld = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    name: 'Acme',
+    logo: 'https://acme.example/assets/brandfile.svg',
+  });
   const doc = el('html', {}, [
     el('head', {}, [
-      el('link', { rel: 'icon', href: '/favicon.svg' }, []),
-      el('meta', { property: 'og:image', content: 'https://cdn.example.com/og-card.png' }, []),
+      el('script', { type: 'application/ld+json' }, [txt(ld)]),
+      el('meta', { property: 'og:image', content: '/og-card.png' }, []),
     ]),
-    el('body', {}, [
-      el('header', { class: 'site-header' }, [
-        el('a', { class: 'site-logo', href: '/' }, [
-          el('svg', { class: 'site-logo__svg', viewBox: '0 0 120 40' }, [el('path', { fill: '#0b1220', d: 'M0 0h120v40z' }, [])]),
-        ]),
-        el('img', { src: '/img/partner-badge.png', alt: 'Partner badge' }, []),
-      ]),
-      el('main', {}, [el('img', { src: '/img/hero.jpg', alt: 'A hero photograph' }, [])]),
-    ]),
+    el('body', {}, [el('header', {}, [el('img', { src: '/assets/brandfile.svg', alt: '' }, [])])]),
   ]);
   const assets = [
-    { name: '/favicon.svg', bytes: new TextEncoder().encode('<svg viewBox="0 0 32 32"><path fill="#0b1220" d="M0 0h32v32z"/></svg>'), mime: 'image/svg+xml' },
-    { name: 'https://cdn.example.com/og-card.png', bytes: makePng({ w: 1200, h: 630, colorType: 2 }), mime: 'image/png' },
-    { name: '/img/partner-badge.png', bytes: makePng({ w: 300, h: 120, colorType: 2 }), mime: 'image/png' },
-    { name: '/img/hero.jpg', bytes: makeJpeg({ w: 2000, h: 1200 }), mime: 'image/jpeg' },
+    { name: '/assets/brandfile.svg', bytes: new TextEncoder().encode('<svg viewBox="0 0 300 90"><path fill="#0b1220" d="M0 0h300v90z"/></svg>'), mime: 'image/svg+xml' },
+    { name: '/og-card.png', bytes: makePng({ w: 1200, h: 630, colorType: 2 }), mime: 'image/png' },
   ];
+  assert.deepEqual(declaredLogoUrls(doc), ['https://acme.example/assets/brandfile.svg']);
 
-  const logos = extractLogos(doc, assets, { idMinter: new IdMinter('seed-a', 'brand/logos') });
-  assert.deepEqual(logos.map((l) => l.source), ['inline-svg', 'link-icon-svg', 'og-image', 'header-raster']);
-  assert.equal(logos[0].kind, 'svg');
-  assert.deepEqual(logos[0].intrinsic, { w: 120, h: 40 });
-  assert.equal(logos[0].hasTransparency, true);
-  assert.equal(logos[1].variant, 'favicon');
-  assert.deepEqual(logos[2].intrinsic, { w: 1200, h: 630 });
-  // The hero image is outside the header and is not named as a logo, so it is
-  // never a candidate.
-  assert.equal(logos.some((l) => l.intrinsic.w === 2000), false);
-  for (const logo of logos) assert.match(logo.id, /^lg_[0-9a-f]{12}$/);
+  const logos = extractLogos(doc, assets, { idMinter: new IdMinter('s') });
+  const primary = logos.find((l) => l.variant === 'primary');
+  // The asset is named neither "logo" nor anything else recognisable; only the
+  // JSON-LD says what it is.
+  assert.deepEqual(primary.intrinsic, { w: 300, h: 90 });
+  assert.equal(primary.declared, true);
+  assert.equal(logos.some((l) => l.intrinsic.w === 1200), false);
+});
+
+test('JSON-LD is read through @graph and publisher, and survives malformed blocks', () => {
+  const graph = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@graph': [
+      { '@type': 'WebPage', name: 'Home' },
+      { '@type': 'Organization', logo: { '@type': 'ImageObject', url: '/a.svg' } },
+    ],
+  });
+  assert.deepEqual(declaredLogoUrls(el('head', {}, [el('script', { type: 'application/ld+json' }, [txt(graph)])])), ['/a.svg']);
+
+  const publisher = JSON.stringify({ '@type': 'NewsArticle', publisher: { '@type': 'Organization', logo: '/b.png' } });
+  assert.deepEqual(declaredLogoUrls(el('head', {}, [el('script', { type: 'application/ld+json' }, [txt(publisher)])])), ['/b.png']);
+
+  // Malformed JSON-LD is ignored, not thrown on: half the web ships broken LD.
+  assert.deepEqual(declaredLogoUrls(el('head', {}, [el('script', { type: 'application/ld+json' }, [txt('{not json')])])), []);
+  assert.deepEqual(declaredLogoUrls(null), []);
+  // `logo` on a node that could not own one is not a logo declaration.
+  const recipe = JSON.stringify({ '@type': 'Recipe', logo: '/nope.png' });
+  assert.deepEqual(declaredLogoUrls(el('head', {}, [el('script', { type: 'application/ld+json' }, [txt(recipe)])])), []);
+});
+
+test('the identity score is the named terms and nothing else', () => {
+  const declared = identityScore({
+    source: 'header-raster', sources: ['header-raster'], rank: 4, kind: 'svg',
+    declared: true, inHeader: true, name: '/assets/logo.svg', alt: 'Acme', context: '',
+    info: { w: 240, h: 48 },
+  });
+  assert.deepEqual(declared.terms, {
+    declared: IDENTITY_WEIGHTS.declared, named: IDENTITY_WEIGHTS.named,
+    inHeader: IDENTITY_WEIGHTS.inHeader, vector: IDENTITY_WEIGHTS.vector,
+    lockupForm: IDENTITY_WEIGHTS.lockupForm,
+  });
+  assert.equal(declared.score, 8);
+
+  const social = identityScore({
+    source: 'og-image', sources: ['og-image'], rank: 3, kind: 'raster',
+    name: '/assets/hero-plant.png', alt: '', context: '', info: { w: 320, h: 180 },
+  });
+  assert.deepEqual(social.terms, { lockupForm: IDENTITY_WEIGHTS.lockupForm, ogOnly: IDENTITY_WEIGHTS.ogOnly });
+  assert.ok(social.score < declared.score);
+
+  const icon = identityScore({
+    source: 'link-icon-svg', sources: ['link-icon-svg'], rank: 2, kind: 'svg',
+    name: '/favicon.svg', alt: '', context: '', info: { w: 32, h: 32 },
+  });
+  assert.equal(icon.terms.faviconForm, IDENTITY_WEIGHTS.faviconForm);
+});
+
+test('the same asset found twice keeps both sources instead of losing one', () => {
+  const svg = '<svg viewBox="0 0 200 50"><path fill="#0b1220" d="M0 0h200v50z"/></svg>';
+  const doc = el('html', {}, [
+    el('head', {}, [el('link', { rel: 'icon', href: '/logo.svg' }, [])]),
+    el('body', {}, [el('header', {}, [el('img', { src: '/logo.svg', alt: 'Acme logo' }, [])])]),
+  ]);
+  const assets = [{ name: '/logo.svg', bytes: new TextEncoder().encode(svg), mime: 'image/svg+xml' }];
+  const merged = mergeCandidates(collectLogoCandidates(doc, assets));
+  assert.equal(merged.length, 1);
+  assert.deepEqual(merged[0].sources.slice().sort(), ['header-raster', 'link-icon-svg']);
+  const [logo] = extractLogos(doc, assets, { idMinter: new IdMinter('s') });
+  assert.deepEqual(logo.sources, ['header-raster', 'link-icon-svg']);
+});
+
+test('selectLogos reports what it rejected and why', () => {
+  const { doc, assets } = homePage();
+  const { selected, rejected } = selectLogos(collectLogoCandidates(doc, assets));
+  assert.equal(selected.length, 3);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].candidate.source, 'og-image');
+  assert.match(rejected[0].reason, /no variant signal and not the primary identity/);
+  assert.deepEqual(selectLogos([]), { selected: [], rejected: [] });
 });
 
 test('an inline SVG that is not the identity is not a logo candidate', () => {

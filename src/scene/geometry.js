@@ -216,20 +216,31 @@ export function boxGeometry(slot, bpIn, params = {}) {
       // `repeat(--pp-sc-split-cols, minmax(0,1fr))` with `--pp-sc-split-gap` at
       // md/lg; one column, stacked, at sm. `n` is the column count: the source
       // column plus one per rendition the scene carries.
+      //
+      // The *height* is the frame's, not a share of it, at every breakpoint.
+      // At md/lg the columns sit side by side and each has the body box. At sm
+      // they stack and the scene scrolls, so each still has the body box —
+      // dividing it by the column count would claim a five-rendition scene
+      // affords its source column a fifth of the screen, which is a fiction
+      // that turns ordinary prose into blocking findings (CRITIQUE-1 F6).
       const gap = geom(bp, 'split-gap');
       const cols = Math.max(1, n);
       const w = stacked ? s.contentWidthPx : trackWidth(s.contentWidthPx, cols, gap);
-      const hOuter = stacked ? trackWidth(s.bodyHeightPx, cols, gap) : s.bodyHeightPx;
-      return inset(w, hOuter, geom(bp, 'panel-pad'));
+      return inset(w, s.bodyHeightPx, geom(bp, 'panel-pad'));
     }
     case 'splitPanelHead': {
+      // `--pp-sc-panel-head-h` is a `min-height`, not a cap: the header grows
+      // into the column when its title wraps or a provenance label sits under
+      // it. What bounds it is the column, so that is what it is measured
+      // against — with the nominal head height charged to the cells below.
       const col = boxGeometry('splitCol', bp, { n });
-      return { widthPx: col.widthPx, heightPx: geom(bp, 'panel-head-h') };
+      return { widthPx: col.widthPx, heightPx: col.heightPx };
     }
     case 'splitCell': {
       // The rows region below the panel header. Reported per cell as the space
-      // the column affords it; `containerId` on every box lets L11 sum the
-      // siblings that share a column (docs/decisions/L8-scenes.md).
+      // the column affords it; the cells of one column share a `containerId`,
+      // so L11 can also sum them for cumulative overflow
+      // (docs/decisions/L8-scenes.md, docs/disputes/L8-scenes.md L8-D2).
       const col = boxGeometry('splitCol', bp, { n });
       return {
         widthPx: col.widthPx,
@@ -294,9 +305,11 @@ export function boxGeometry(slot, bpIn, params = {}) {
       return { widthPx: w, heightPx: s.bodyHeightPx };
     }
     case 'sideNote': {
+      // Notes are auto-height and the margin scrolls with the scene, so a note
+      // is bounded by the frame rather than by a share of it. The notes of one
+      // scene share a `containerId` for the cumulative check.
       const w = isProportional(bp, 'note-w') ? s.contentWidthPx : geom(bp, 'note-w');
-      const h = trackWidth(s.bodyHeightPx, n, geom(bp, 'row-gap'));
-      return inset(w, h, geom(bp, 'note-pad'));
+      return inset(w, s.bodyHeightPx, geom(bp, 'note-pad'));
     }
 
     // -------------------------------------------------------------- quoteCard
@@ -310,14 +323,12 @@ export function boxGeometry(slot, bpIn, params = {}) {
 
     // ---------------------------------------------------------- contentsIndex
     case 'indexRow': {
+      // Index rows are auto-height in a scrolling column, like margin notes.
       const w = Math.max(0, s.contentWidthPx - geom(bp, 'index-num-w') - geom(bp, 'index-gap'));
-      const h = trackWidth(s.bodyHeightPx, n, geom(bp, 'index-row-gap'));
-      return { widthPx: w, heightPx: h };
+      return { widthPx: w, heightPx: s.bodyHeightPx };
     }
-    case 'indexNumber': {
-      const h = trackWidth(s.bodyHeightPx, n, geom(bp, 'index-row-gap'));
-      return { widthPx: geom(bp, 'index-num-w'), heightPx: h };
-    }
+    case 'indexNumber':
+      return { widthPx: geom(bp, 'index-num-w'), heightPx: s.bodyHeightPx };
 
     // -------------------------------------------------------------- systemMap
     case 'mapCanvas': {

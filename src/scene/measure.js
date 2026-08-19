@@ -23,7 +23,16 @@
  *
  *   data-pp-ws="nowrap"     white-space
  *   data-pp-ow="break-word" overflow-wrap
- *   data-pp-clamp="3"       -webkit-line-clamp
+ *   data-pp-clamp="3"       -webkit-line-clamp, and with it `text-overflow`
+ *
+ * From that last one comes `textOverflow`, the field that tells the detector
+ * whether an overflow is *silent* or *visible* (CRITIQUE-1 F6). A clamped run
+ * is truncated with an ellipsis the viewer can see — one line clamps declare
+ * `text-overflow: ellipsis` outright, multi-line clamps get the ellipsis from
+ * `-webkit-line-clamp` — so a clamp is graded as a visible truncation.
+ * Everything else is `clip`: if that text does not fit, it is cut or pushed off
+ * the frame with nothing on screen to say so, which is the case §22.2 exists to
+ * block. A layout may override with `data-pp-to` where it knows better.
  *
  * @module scene/measure
  */
@@ -46,6 +55,7 @@ import { layoutFunction } from './layouts/all.js';
  * @property {string} [whiteSpace]
  * @property {string} [overflowWrap]
  * @property {number} [maxLines]
+ * @property {'clip'|'ellipsis'} textOverflow   what the viewer sees when it does not fit
  * @property {string[]} [fontStack]           extension: the stack `style.family` heads
  * @property {string} [containerId]           extension: boxes sharing one container
  * @property {string} [slot]                  extension: the geometry slot's name
@@ -152,10 +162,15 @@ export function collectTextBoxes(node, env) {
       const size = boxGeometry(slot, bp, params);
       const ordinal = (slotCounts.get(slot) || 0) + 1;
       slotCounts.set(slot, ordinal);
+      // A layout that stacks several boxes inside one scrolling column names
+      // that column with `data-pp-container`, so every box in it reports the
+      // same `containerId` and the detector can sum them for the cumulative
+      // case as well as checking each one on its own.
+      const group = typeof attrs['data-pp-container'] === 'string' ? attrs['data-pp-container'] : null;
       next = {
         ...next,
         slot,
-        containerId: `${slot}#${ordinal}`,
+        containerId: group ? `${slot}:${group}` : `${slot}#${ordinal}`,
         widthPx: size.widthPx,
         heightPx: size.heightPx,
         scaleN: params.n || next.scaleN,
@@ -203,6 +218,7 @@ export function collectTextBoxes(node, env) {
           // the detector should be checking its width, not its line count.
           if (box.maxLines === 1 && box.whiteSpace === undefined) box.whiteSpace = 'nowrap';
         }
+        box.textOverflow = textOverflowOf(attrs);
         box.fontStack = resolved.fontStack;
         box.containerId = next.containerId;
         box.slot = next.slot;
@@ -226,6 +242,29 @@ export function collectTextBoxes(node, env) {
     scaleN: 1,
   });
   return boxes;
+}
+
+/**
+ * What the viewer sees where a run does not fit its box.
+ *
+ * Derived from the same attribute that produces the CSS, so the reported value
+ * cannot drift from the stylesheet: `[data-pp-clamp]` truncates with an
+ * ellipsis (declared outright at one line, produced by `-webkit-line-clamp`
+ * above it), and everything else is clipped or pushed out of frame with no mark
+ * on screen. `data-pp-to` lets a layout state the answer directly.
+ *
+ * The two values carry the grading policy §22.2 rests on: `'clip'` is content
+ * lost with nothing to show for it; `'ellipsis'` is content truncated where the
+ * viewer can see that it was.
+ * @param {Record<string, unknown>} attrs
+ * @returns {'clip'|'ellipsis'}
+ */
+export function textOverflowOf(attrs) {
+  const declared = attrs['data-pp-to'];
+  if (declared === 'ellipsis' || declared === 'clip') return declared;
+  const clamp = attrs['data-pp-clamp'];
+  if (clamp !== undefined && clamp !== null && Number(clamp) > 0) return 'ellipsis';
+  return 'clip';
 }
 
 /**

@@ -501,3 +501,102 @@ not add a sixth file.
 would have made this lane's tests unrunnable until L3 landed, and the node shape —
 which is the actual contract — is three fields wide. Nothing here duplicates L3's
 parser; it only reads the tree L3 produces.
+
+---
+
+## L5-D23 — `primary` is a role decided by an identity score, not the leftover of shape classification
+
+**Unsettled by:** §7 gives a preference order for *finding* a logo — "inline SVG,
+then `<link rel=icon>` SVG, then og:image, then the largest raster in the header
+region" — and §4 gives a closed variant set including `primary`. Neither says
+which of the assets found is the brand's primary asset.
+
+**Raised by:** the §20 critic, F10. On the corpus home page the extractor found
+the real logo (`/assets/logo.svg`, 240×48, in the site header) and correctly
+called it a `wordmark`, while the `og:image` — a 320×180 photograph of an
+industrial plant — fell through every shape band and landed on `primary` as the
+residual. `logoFor(brand)` defaults to `primary`, so every layout rendered the
+photograph.
+
+**Decision.** Discovery and role assignment are separated.
+
+1. **Discovery is unchanged.** `collectLogoCandidates` still walks §7's tiers in
+   §7's order, and a test asserts that order explicitly.
+2. **Exactly one candidate becomes `primary`**, chosen by `identityScore` — an
+   additive, inspectable score over named terms (`IDENTITY_WEIGHTS`): declared by
+   schema.org +3, named as a logo by its own filename/alt/element identity +2,
+   found in the header +1.5, vector +1, lockup or wordmark proportions +0.5,
+   found *only* as an og:image −1.5, favicon proportions −2.5. Ties fall back to
+   §7's preference order, then painted area, then name.
+3. **Every other candidate keeps its shape-and-name variant** — favicon,
+   wordmark, mark or inverse.
+4. **A candidate that is neither the primary nor recognisably a variant is not a
+   logo** and is rejected with a recorded reason.
+
+A non-empty result therefore always contains exactly one `primary`, which is the
+invariant `logoFor(brand)` depends on. When an og:image is the *only* candidate
+it still wins the role, so §7's graceful degradation is intact.
+
+**Why.** "Which tier fired first" and "which of these is the logo" are different
+questions. §7 answers the first; nothing answered the second, so `primary` was
+acting as a residual bucket — and a residual bucket wired to the default every
+layout reads is how a picture of a refinery becomes a client's brand mark. The
+scoring is additive and its terms are returned alongside the result so the studio
+can show a user *why* an asset was chosen, and so the answer can be argued with.
+
+The `named` term reads the asset's own filename, alt text and element identity
+(its class/id/aria-label plus the innermost wrapping `<a>`), never the full
+ancestor chain: every image inside a `.masthead` inherits the same words, and a
+term that matches everything discriminates nothing.
+
+---
+
+## L5-D24 — schema.org `Organization.logo` is read, and outranks every inferred signal
+
+**Unsettled by:** §7's list of sources predates nothing in particular — it simply
+does not mention structured data.
+
+**Decision.** `declaredLogoUrls(doc)` parses `<script type="application/ld+json">`
+for `logo` on organisation-like nodes, following `@graph`, arrays and the
+`publisher`/`sourceOrganization`/`brand` chain, and accepting `logo` as either a
+URL string or an `ImageObject`. A candidate whose URL matches is marked
+`declared`, which is the heaviest term in `identityScore` and sets logo
+confidence's agreement factor to 1. If the declared URL resolves to an asset no
+§7 tier reached, it is added as a candidate with source `ld-logo`, ranked ahead of
+the §7 tiers.
+
+Malformed JSON-LD is ignored rather than thrown on. Nothing is fetched — the URL
+is matched against the assets the caller supplied.
+
+**Why.** Every signal in §7's list is an inference from placement, filename or
+proportions. JSON-LD is the one place a site states, in its own words and
+unambiguously, *this asset is my logo*. Ranking a declaration above an inference
+is not a departure from §7's order so much as the case §7 did not have to
+consider; discovery still finds everything §7 names, and only the choice among
+them changes, and only when the site made an explicit statement.
+
+---
+
+## L5-D25 — `buildBrandSystem` accepts raw asset bytes as imagery evidence
+
+**Unsettled by:** L5-D13 defines the classifier's input as decoded pixels; §7 does
+not say who decodes.
+
+**Raised by:** the integrator — `API.md` publishes only `color.js` and `theme.js`
+from the brand lane, so `sampleFromPng` (which lives in `imagery.js`) was
+unreachable and `classifyImagery` never ran against anything. Imagery came back
+`unknown` at zero confidence and was held by the §7 review gate.
+
+**Decision.** `sampleFromPng`, `classifyImage` and `normalizeSample` are
+re-exported from `brand/theme.js`, and `buildBrandSystem` accepts `images`
+entries in either shape: an already-decoded `ImageSample`, or the
+`{name, bytes, mime}` asset record L3's ingest produces. Raw entries are decoded
+when they are PNG — the one format this repository decodes (L5-D10) — and skipped
+otherwise. An undecodable PNG is skipped rather than failing the whole brand
+extraction.
+
+**Why.** The lane surface is the only thing another lane may call, so a
+capability that is not on it does not exist. Accepting bytes as well as pixels
+means the wiring cannot be got half right: a caller that has what L3 produces
+gets a real answer, and a caller with JPEG pixels decodes with the platform and
+passes samples, exactly as L5-D13 describes.

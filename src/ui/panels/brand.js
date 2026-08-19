@@ -25,7 +25,7 @@ import {
   badge, button, checkbox, empty, field, notice, pair, pairs, rawBox, section, select, swatch, toolbar,
 } from '../components.js';
 import { formatMetric, formatPercent, formatRatio, humanize } from '../format.js';
-import { BRAND_GROUPS, LOW_CONFIDENCE, pairedRole, reviewedGroups, unreviewedBrandGroups } from '../model.js';
+import { BRAND_GROUPS, LOW_CONFIDENCE, brandGroupEvidence, pairedRole, reviewedGroups, unreviewedBrandGroups } from '../model.js';
 import { COLOR_ROLES, CONTRAST_AA_BODY, FOREGROUND_ROLES } from '../../core/contracts.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
 
@@ -38,8 +38,11 @@ export function renderBrandPanel(app) {
   const reviewed = new Set(reviewedGroups(brand));
   const pending = unreviewedBrandGroups(brand);
 
+  const contrast = app.services.checkContrast(brand);
+
   return h('div', { class: 'st-panel' },
     renderExtract(app, brand),
+    contrast.length ? renderContrastFindings(contrast) : null,
     pending.length ? renderReviewGate(app, brand, pending) : null,
     renderColors(app, brand),
     renderFaces(app, brand),
@@ -82,7 +85,34 @@ function renderExtract(app, brand) {
     key: 'brand-source', mono: true,
     hint: 'What the artifact will say this brand was read from.',
   }),
-  app.services.has('color') ? null : notice('warn', 'The colour lane is not wired into this build, so contrast is shown as “—” rather than guessed, and extraction is unavailable. Manual entry below still works.'));
+  app.services.has('color') ? null : notice('warn', 'The colour lane is not wired into this build, so contrast is shown as “—” rather than guessed, and extraction is unavailable. Manual entry below still works.'),
+  renderStrategies(app));
+}
+
+/**
+ * L11's contrast verdict on the palette as it stands, without a sweep.
+ *
+ * §22.1 names naive palette swapping as the first thing that goes wrong, and it
+ * goes wrong silently. Running the real check here means the number a user sees
+ * beside the hex they just typed is the same number that will close the emit.
+ * @param {any[]} findings
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderContrastFindings(findings) {
+  const blocking = findings.filter((f) => f.severity === 1);
+  return section({
+    title: `Contrast · ${findings.length}`,
+    subtitle: 'Checked by the same rule the rehearsal sweep uses, so this cannot disagree with it.',
+  },
+  notice(blocking.length ? 'bad' : 'warn', blocking.length
+    ? `${blocking.length === 1 ? 'One pair' : `${blocking.length} pairs`} of this palette fail at severity 1. The emit is closed until they pass — derive a compliant colour, or change the pair.`
+    : 'Nothing here blocks an emit, but these pairs are worth looking at before a projector does it for you.'),
+  h('ul', { class: 'st-findings' }, findings.map((f) => h('li', {
+    class: cx('st-finding', `st-finding--s${f.severity}`), [KEY_ATTR]: f.id,
+  },
+  h('div', { class: 'st-finding-head' },
+    badge(f.code, f.severity === 1 ? 'bad' : 'warn'),
+    h('span', { class: 'st-finding-message' }, f.message))))));
 }
 
 /**
@@ -93,26 +123,81 @@ function renderExtract(app, brand) {
  * @param {{group: string, confidence: number}[]} pending
  */
 function renderReviewGate(app, brand, pending) {
+  const reviewable = pending.filter((entry) => brandGroupEvidence(brand, entry.group).hasContent);
+  const empty = pending.filter((entry) => !brandGroupEvidence(brand, entry.group).hasContent);
+
   return section({
     title: 'Waiting for your review',
-    subtitle: `§7 holds low-confidence fields out of an emit until you have looked at them.`,
-    actions: toolbar(button({ act: 'brand.reviewAll', variant: 'primary' }, 'I have checked all of these')),
+    subtitle: '§7 holds low-confidence fields out of an emit until you have looked at them.',
+    actions: reviewable.length
+      ? toolbar(button({ act: 'brand.reviewAll', variant: 'primary' },
+        reviewable.length === 1 ? 'I have checked this one' : `I have checked all ${reviewable.length}`))
+      : null,
   },
-  notice('warn', h('div', null,
-    h('p', null, `${pending.length === 1 ? 'One group is' : `${pending.length} groups are`} below the ${Math.round(LOW_CONFIDENCE * 100)}% confidence floor. The emit stays closed until each is reviewed.`),
-    h('ul', { class: 'st-review-list' }, pending.map((entry) => h('li', { [KEY_ATTR]: entry.group },
-      h('strong', null, humanize(entry.group)),
-      ' — ',
-      formatPercent(entry.confidence),
-      ' confident. ',
-      reviewAdvice(entry.group)))))),
-  h('div', { class: 'st-review-checks' }, pending.map((entry) => checkbox({
-    label: `${humanize(entry.group)} checked`,
-    act: 'brand.review',
-    arg: entry.group,
-    checked: false,
-    hint: 'Marks this group reviewed. Editing a field does not review it — looking at it does.',
-  }))));
+  empty.length
+    ? notice('bad', h('div', null,
+      h('p', null, `${empty.length === 1 ? 'One group holds' : `${empty.length} groups hold`} nothing at all, so ${empty.length === 1 ? 'it' : 'they'} cannot be reviewed — there is no claim there to accept. The emit stays closed until ${empty.length === 1 ? 'it has' : 'they have'} something in ${empty.length === 1 ? 'it' : 'them'}.`),
+      h('ul', { class: 'st-review-list' }, empty.map((entry) => h('li', { [KEY_ATTR]: entry.group },
+        h('strong', null, humanize(entry.group)),
+        ' — ',
+        brandGroupEvidence(brand, entry.group).describe,
+        '. ',
+        emptyAdvice(entry.group))))))
+    : null,
+  reviewable.length
+    ? notice('warn', h('div', null,
+      h('p', null, `${reviewable.length === 1 ? 'One group is' : `${reviewable.length} groups are`} below the ${Math.round(LOW_CONFIDENCE * 100)}% confidence floor. The emit stays closed until each is reviewed.`),
+      h('ul', { class: 'st-review-list' }, reviewable.map((entry) => h('li', { [KEY_ATTR]: entry.group },
+        h('strong', null, humanize(entry.group)),
+        ' — ',
+        formatPercent(entry.confidence),
+        ' confident, ',
+        brandGroupEvidence(brand, entry.group).describe,
+        '. ',
+        reviewAdvice(entry.group))))))
+    : null,
+  reviewable.length
+    ? h('div', { class: 'st-review-checks' }, reviewable.map((entry) => checkbox({
+      label: `${humanize(entry.group)} checked`,
+      act: 'brand.review',
+      arg: entry.group,
+      checked: false,
+      hint: 'Marks this group reviewed. Editing a field does not review it — looking at it does.',
+    })))
+    : null);
+}
+
+/** @param {string} group @returns {string} */
+function emptyAdvice(group) {
+  const advice = {
+    colors: 'Extract again with the page’s stylesheet, or add the roles by hand below.',
+    faces: 'Add the families they use by hand — the fallback stack is what decides whether headlines overflow.',
+    logos: 'Ask them for the SVG, or drop it with the saved page.',
+    shape: 'Set the radius, border and shadow from a real component on their site.',
+    imagery: 'Choose the treatment that matches what they publish.',
+  };
+  return advice[group] || 'Enter it by hand below.';
+}
+
+/**
+ * §6's strategy chain, in L3's own words. A fetch that returns only the
+ * document — which is most of them — leaves nothing to extract a brand from, so
+ * the way forward has to be on the page rather than in a support article.
+ * @param {any} app
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderStrategies(app) {
+  const strategies = app.services.fetchStrategies();
+  if (!strategies.length) return null;
+  return h('details', { class: 'st-details' },
+    h('summary', null, `How the studio gets a page · ${strategies.length} routes, tried in order`),
+    h('ol', { class: 'st-strategies' }, strategies.map((strategy) => h('li', {
+      class: cx('st-strategy', !strategy.automatic && 'st-strategy--manual'),
+      [KEY_ATTR]: strategy.id,
+    },
+    h('span', { class: 'st-strategy-label' }, strategy.label),
+    strategy.automatic ? badge('automatic', 'dim') : badge('you supply it', 'info'),
+    h('span', { class: 'st-strategy-describe' }, strategy.describe)))));
 }
 
 /** @param {string} group @returns {string} */
@@ -348,6 +433,7 @@ function renderConfidence(app, brand, reviewed) {
     const value = Number(brand.confidence?.[group] ?? 0);
     const low = value < LOW_CONFIDENCE;
     const isReviewed = reviewed.has(group);
+    const evidence = brandGroupEvidence(brand, group);
     return h('div', { class: cx('st-conf-row', low && !isReviewed && 'st-conf-row--pending'), [KEY_ATTR]: group },
       h('span', { class: 'st-conf-name' }, humanize(group)),
       h('span', { class: 'st-conf-bar' }, h('span', {
@@ -356,7 +442,14 @@ function renderConfidence(app, brand, reviewed) {
       })),
       h('span', { class: 'st-conf-value st-mono' }, formatPercent(value)),
       low
-        ? checkbox({ label: 'Reviewed', act: 'brand.review', arg: group, checked: isReviewed })
+        ? checkbox({
+          label: 'Reviewed',
+          act: 'brand.review',
+          arg: group,
+          checked: isReviewed,
+          disabled: !evidence.hasContent && !isReviewed,
+          hint: evidence.hasContent ? null : `Nothing to review — ${evidence.describe}.`,
+        })
         : badge('above the floor', 'ok'));
   })));
 }

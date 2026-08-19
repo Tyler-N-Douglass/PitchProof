@@ -24,6 +24,7 @@ import { danglingReveals, findScene, layoutChoices } from '../model.js';
 import { revealedAt } from '../../runtime/beats.js';
 import { revealableElements } from '../reveal.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
+import { BREAKPOINTS } from '../../core/contracts.js';
 
 /**
  * @param {any} app
@@ -38,6 +39,7 @@ export function renderScenesPanel(app) {
   return h('div', { class: 'st-panel' },
     renderSpine(app, spine, scene),
     scene ? renderScene(app, scene, at) : null,
+    scene ? renderOverflow(app, scene) : null,
     scene ? renderBeats(app, scene) : null);
 }
 
@@ -166,6 +168,57 @@ function renderScene(app, scene, at) {
     pair('Scene id', h('code', { class: 'st-mono' }, scene.id)),
     pair('Beats', h('span', { class: 'st-mono' }, String((scene.beats || []).length))),
   ));
+}
+
+/**
+ * Text overflow on this scene, measured now, at all three breakpoints.
+ *
+ * §22.2: "the defect that makes a proof look amateur in front of a CMO, and it
+ * is invisible until it isn't". It is invisible because it happens after the
+ * brand's face is substituted, which is long after anyone looked at the
+ * headline. This runs L8's measurement and L11's detector — the same two calls
+ * the sweep makes — beside the field the headline is typed into, which is the
+ * earliest moment the defect can possibly be seen.
+ * @param {any} app
+ * @param {any} scene
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderOverflow(app, scene) {
+  const runtime = app.preview.model(app.proof);
+  if (!runtime) return null;
+  let ctx;
+  try { ctx = runtime.layoutContext(scene); } catch { return null; }
+
+  const perBreakpoint = BREAKPOINTS.map((bp) => ({
+    breakpoint: bp,
+    findings: app.services.sceneOverflow(scene, ctx, bp.id),
+  }));
+  const total = perBreakpoint.reduce((n, e) => n + e.findings.length, 0);
+  const blocking = perBreakpoint.reduce((n, e) => n + e.findings.filter((f) => f.severity === 1).length, 0);
+
+  return section({
+    title: `Text fit · ${total === 0 ? 'clean' : plural(total, 'finding')}`,
+    subtitle: 'Measured against the face that will actually render, at every breakpoint (§14, §22.2).',
+  },
+  total === 0
+    ? notice('ok', 'Every text box on this scene fits its container at 390, 1024 and 1600 — measured after the brand’s type substitution, which is the only measurement that means anything.')
+    : notice(blocking ? 'bad' : 'warn', blocking
+      ? `${plural(blocking, 'box')} overflow badly enough to block the emit. A fallback face that runs wider than the brand’s own is the usual cause — check the metric delta in Brand.`
+      : `${plural(total, 'box')} are tight. They will not block the emit; they will look wrong on somebody else's projector.`),
+  total
+    ? h('div', { class: 'st-fit' }, perBreakpoint.filter((e) => e.findings.length).map((entry) => h('div', {
+      class: 'st-fit-group', [KEY_ATTR]: entry.breakpoint.id,
+    },
+    h('h4', { class: 'st-fit-head' },
+      `${entry.breakpoint.id} · ${entry.breakpoint.width}px`,
+      badge(String(entry.findings.length), entry.findings.some((f) => f.severity === 1) ? 'bad' : 'warn')),
+    h('ul', { class: 'st-findings' }, entry.findings.slice(0, 6).map((f) => h('li', {
+      class: cx('st-finding', `st-finding--s${f.severity}`), [KEY_ATTR]: `${entry.breakpoint.id}-${f.id}`,
+    },
+    h('div', { class: 'st-finding-head' },
+      badge(f.code, f.severity === 1 ? 'bad' : 'warn'),
+      h('span', { class: 'st-finding-message' }, f.message))))))))
+    : null);
 }
 
 /**

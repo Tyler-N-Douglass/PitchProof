@@ -523,3 +523,95 @@ JavaScript string literals — the emitter builds documents for a living. And an
 `iframe` is not a network reference: the live preview uses one with no `src` and
 no `srcdoc`, written into directly like the presenter window (D16), which is
 what keeps the artifact's `--pp-*` theme out of the studio's `--st-*` chrome.
+
+---
+
+## D24 — The provenance label wears a pair the solver guarantees
+
+*Critic finding F5.*
+
+`.pp-provenance` rendered `--pp-on-primary` on `--pp-warning`. No post-condition
+anywhere covers that pairing. §4's `ROLE_PAIR` does not name it, L4's role solver
+does not optimise for it, and `src/validate/contrast.js` does not check it — so
+on the Northwind corpus it landed at **4.36:1** and every one of the fifty
+illustrative renditions in the deck failed §18.1's contrast floor.
+
+The consequence was worse than the ratio. §14's rehearsal reported the
+provenance axis clean, because rehearsal reads the label's *presence*. The
+emitter then refused the same proof with fifty severity-1 `PROVENANCE_UNLABELED`
+findings and no override. A seller cleared rehearsal and then could not emit,
+with nothing in between explaining why.
+
+The label now uses `surfaceAlt`/`onSurfaceAlt` — the pair the solver guarantees
+at ≥ 4.5:1 and the pair the validator checks — and gets its distinctiveness from
+a `--pp-warning` rule down its leading edge and a heavier weight, neither of
+which is load-bearing for legibility. **A rehearsal that clears what the emitter
+refuses is worse than no rehearsal**: it teaches the seller to trust a signal
+that does not predict the outcome.
+
+## D25 — An unknown family reports no metric delta rather than a perfect one
+
+*Critic finding F9.*
+
+`resolveFace` returned a `metricDelta` for every family, including ones we hold
+no published metrics for. For an unknown family `metricsFor` has already fallen
+back to a category model, so `metricDelta(family, resolved)` compared that model
+to itself and returned `{cap: 0, x: 0, width: 0}` — a substitution reported as
+metrically perfect precisely when we know least about it. Söhne, Bodoni Ultra
+Condensed and Comic Sans MS all came back as exact matches for a system stack.
+
+§4 permits `metricDelta: null`, which is the honest answer. `resolveFace` now
+returns it for any family outside the published tables, sets `approximate: true`
+to say why, and keeps a real delta only where a real measurement exists. A
+confident wrong number is worse than an admitted absence: §7's whole point is
+that the seller sees how far the substitution is from the brand's own type, and
+a zero tells them there is nothing to see.
+
+## D26 — Backspace steps back one branch level
+
+*Critic finding F11.*
+
+§11's return semantics were reachable only through the branch overlay and the
+automatic return at the end of a branch. There was no key that meant "back one
+level", so a presenter who took a branch on a question and wanted out had to
+open an overlay in front of the room.
+
+`Backspace` now maps to `returnOnce`, which pops exactly one return frame. It is
+in the `Branch` group of the help overlay, so it is discoverable where the rest
+of the branch keys are. It resolves only when nothing is being typed — D21 keeps
+the whole binding table out of a focused text field, so the jump index still
+gets its own backspaces.
+
+## D27 — Comments are stripped from the bundle, and nothing else is
+
+*Critic finding F17.*
+
+The runtime bundle shipped **158,804 bytes of source comments in 431,608 bytes —
+36.8% of every artifact** — while §13's budgeter progressively downscaled the
+prospect's own images, which were 3.8% of the same file. A degradation report
+that tells a seller their hero image was resampled to 15% while the largest
+removable payload was never considered is not a budget, it is a scapegoat.
+
+`scripts/lib/strip-comments.mjs` removes comments from the JavaScript and CSS
+bundles. It takes **37.8%** off the runtime script and **20.5%** off the
+stylesheet; the emitted Northwind artifact went from 780 KB to 614 KB with no
+image degraded that was not degraded before.
+
+Two things it deliberately does not do. It does not minify — no renaming, no
+reformatting, no whitespace crushing. §18.4 makes "verified at emit, not
+asserted in a README" a law, and an artifact nobody can read cannot be audited
+by the person who receives it; the bundler also keys every module by its source
+path as a *string literal*, so provenance survives stripping and a reader can
+still see which file each function came from. And it is not a parser, which is
+why it is dangerous: deciding whether a `/` opens a comment, a regex or a
+division, byte by byte, next to template literals with nested interpolation, is
+exactly the kind of transform that deletes live code silently.
+
+So the build does not take it on trust. `scripts/build.mjs` evaluates both
+bundles — stripped and unstripped — and refuses to emit if the export surface
+changed by one name. That check exists because of D5: `dist/pitchproof-studio.html`
+did not parse at all while 1608 tests were green, because nothing executed the
+built file. `test/core/strip-comments.test.mjs` adds twenty cases for the
+constructs that decide where a comment is, including the two that would have bit
+us — a `/` inside a regex character class, and an apostrophe inside a comment
+about "the seller's own words".

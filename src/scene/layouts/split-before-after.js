@@ -102,6 +102,7 @@ function renderSplit(ctx, sourceBlocks, rends, columnCount) {
     blocks: sourceBlocks,
     path: (i) => `before/block/${i}`,
     group: 'before',
+    container: 'before',
     media: ctx.media,
   }),
   rends.map((rendition, colIndex) => cell(ctx, {
@@ -111,6 +112,7 @@ function renderSplit(ctx, sourceBlocks, rends, columnCount) {
     blocks: Array.isArray(rendition.blocks) ? rendition.blocks : [],
     path: (i) => `after/rendition/${colIndex}/block/${i}`,
     group: `after/${colIndex}`,
+    container: `after/${colIndex}`,
     media: ctx.media,
     renditionId: rendition.id,
   }))));
@@ -131,6 +133,10 @@ function cell(ctx, spec) {
     class: `pp-split-cell pp-col ${spec.columnClass}`,
     'data-pp-box': 'splitCell',
     'data-pp-n': spec.n,
+    // Every cell of one column reports the same container, because that is what
+    // they actually stack inside — the detector checks each block against the
+    // column and can sum the column as well.
+    'data-pp-container': spec.container,
   };
   if (spec.index === null || spec.index === undefined) {
     return h('div', { ...shared, class: `${shared.class} pp-split-cell--empty`, 'aria-hidden': 'true' });

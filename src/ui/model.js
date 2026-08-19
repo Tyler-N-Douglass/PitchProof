@@ -492,24 +492,121 @@ export function setLogoVariant(doc, logoId, variant) {
 }
 
 /**
+ * Is there anything in this brand group for a person to review?
+ *
+ * §7's gate exists so a low-confidence field is looked at before an emit relies
+ * on it. Looking at *nothing* is not looking: a group that holds no colours, no
+ * faces, no logos — or a shape and an imagery treatment that nobody extracted
+ * and nobody entered — cannot be reviewed, because there is no claim there to
+ * accept. Marking it reviewed would clear an emit blocker on the strength of an
+ * empty set, which is exactly the hole §7 is written to close.
+ *
+ * Evidence is content *or* a manual override: a user who typed the radius by
+ * hand has established a shape, even if extraction found none.
+ *
+ * @param {BrandSystem} brand
+ * @param {string} group
+ * @returns {{hasContent: boolean, count: number|null, describe: string}}
+ */
+export function brandGroupEvidence(brand, group) {
+  const b = brand || /** @type {any} */ ({});
+  const overridden = (b.manualOverrides || []).some((path) => String(path).startsWith(`brand.${group}`));
+  const confident = Number(b.confidence?.[group] ?? 0) > 0;
+  switch (group) {
+    case 'colors': {
+      const count = (b.colors || []).length;
+      return { hasContent: count > 0, count, describe: count ? `${count} roles` : 'no colour roles' };
+    }
+    case 'faces': {
+      const count = (b.faces || []).filter((f) => f && String(f.family || '').trim()).length;
+      return { hasContent: count > 0, count, describe: count ? `${count} faces` : 'no faces' };
+    }
+    case 'logos': {
+      const count = (b.logos || []).length;
+      return { hasContent: count > 0, count, describe: count ? `${count} assets` : 'no logo' };
+    }
+    case 'shape': {
+      const has = overridden || confident;
+      return { hasContent: has, count: null, describe: has ? 'radius, border and shadow set' : 'nothing extracted or entered' };
+    }
+    case 'imagery': {
+      const has = overridden || confident || (b.imagery && b.imagery.treatment && b.imagery.treatment !== 'unknown');
+      return { hasContent: !!has, count: null, describe: has ? String(b.imagery?.treatment || 'set') : 'treatment unknown' };
+    }
+    default:
+      return { hasContent: false, count: null, describe: 'unknown group' };
+  }
+}
+
+/**
+ * The unreviewed groups a person is actually able to review right now.
+ * @param {BrandSystem} brand
+ * @returns {{group: string, confidence: number}[]}
+ */
+export function reviewableBrandGroups(brand) {
+  return unreviewedBrandGroups(brand).filter((entry) => brandGroupEvidence(brand, entry.group).hasContent);
+}
+
+/**
+ * The unreviewed groups that hold nothing, so cannot be reviewed at all.
+ * @param {BrandSystem} brand
+ * @returns {{group: string, confidence: number}[]}
+ */
+export function emptyBrandGroups(brand) {
+  return unreviewedBrandGroups(brand).filter((entry) => !brandGroupEvidence(brand, entry.group).hasContent);
+}
+
+/**
  * Mark a low-confidence brand group as reviewed, which is what releases §7's
  * hold on the emit. Reviewing is not editing, so it does not touch
  * `manualOverrides`; it is recorded separately and shown separately.
+ *
+ * **A group with nothing in it cannot be reviewed.** The call returns the
+ * document unchanged rather than throwing, so a stale control cannot clear a
+ * blocker, and the studio explains why next to the control.
+ *
  * @param {Doc} doc
  * @param {string} group
  * @param {boolean} reviewed
  * @returns {Doc}
  */
 export function setBrandReviewed(doc, group, reviewed) {
+  if (reviewed && !brandGroupEvidence(doc.proof.brand, group).hasContent) return doc;
   return withBrand(doc, (brand) => {
     const current = new Set(reviewedGroups(brand));
     if (reviewed) current.add(group); else current.delete(group);
-    return { ...brand, reviewedGroups: BRAND_GROUPS.filter((g) => current.has(g)) };
+    const next = BRAND_GROUPS.filter((g) => current.has(g));
+    const before = reviewedGroups(brand);
+    if (next.length === before.length && next.every((g, i) => g === before[i])) return brand;
+    return { ...brand, reviewedGroups: next };
   });
 }
 
-/** @param {Doc} doc @param {BrandSystem} brand @returns {Doc} */
-export function replaceBrand(doc, brand) { return withProof(doc, (p) => ({ ...p, brand })); }
+/**
+ * Drop any review that no longer stands because the group it covered is empty.
+ * Called wherever the brand is replaced wholesale, so re-extracting into a worse
+ * result cannot leave a stale sign-off behind it.
+ * @param {BrandSystem} brand
+ * @returns {BrandSystem}
+ */
+export function pruneReviews(brand) {
+  const kept = reviewedGroups(brand).filter((g) => brandGroupEvidence(brand, g).hasContent);
+  const before = reviewedGroups(brand);
+  if (kept.length === before.length) return brand;
+  return { ...brand, reviewedGroups: kept };
+}
+
+/**
+ * Replace the whole brand system. Any review that no longer covers anything is
+ * dropped with it: a re-extraction that found less than the last one must not
+ * inherit the sign-off the last one earned.
+ * @param {Doc} doc
+ * @param {BrandSystem} brand
+ * @returns {Doc}
+ */
+export function replaceBrand(doc, brand) {
+  return withProof(doc, (p) => ({ ...p, brand: pruneReviews(brand) }));
+}
 
 // ---------------------------------------------------------------------------
 // Specimen mutations

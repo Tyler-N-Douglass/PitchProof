@@ -1,18 +1,3 @@
-/* src/runtime/runtime.css */
-/*
- * The artifact stylesheet.
- *
- * Every custom property here is namespaced `--pp-*` (DECISIONS D11). The studio
- * chrome uses `--st-*` and the two sets are disjoint — §15 calls a single shared
- * variable between studio chrome and artifact output a bug, and
- * test/ui/theme-isolation.test.mjs is what makes that a build failure rather
- * than a convention.
- *
- * The values below are neutral defaults. The brand theme compiler (L5) writes
- * the prospect's own values over them at emit time; the artifact never wears the
- * studio's palette.
- */
-
 :root {
   --pp-primary: #1a1a1a;
   --pp-on-primary: #ffffff;
@@ -54,8 +39,6 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ------------------------------------------------------------------ stage */
-
 .pp-stage {
   position: relative;
   height: 100%;
@@ -83,8 +66,6 @@ html, body {
 
 [data-pp-reduced-motion="true"] .pp-scene { scroll-behavior: auto; }
 
-/* --------------------------------------------------------------- reveals */
-
 [data-pp-el] {
   transition:
     opacity var(--pp-transition-ms) ease,
@@ -95,8 +76,7 @@ html, body {
   opacity: 0;
   transform: translateY(8px);
   pointer-events: none;
-  /* Hidden reveals keep their box so nothing reflows when a beat lands. A
-     layout that jumps as each beat arrives reads as a bug from the third row. */
+
   visibility: hidden;
   transition: none;
 }
@@ -112,8 +92,6 @@ html, body {
   .pp-unrevealed { transform: none; }
 }
 
-/* ----------------------------------------------------------- blank screen */
-
 .pp-blank {
   position: absolute;
   inset: 0;
@@ -122,8 +100,6 @@ html, body {
 }
 
 .pp-stage--blank .pp-stage-scene { visibility: hidden; }
-
-/* ---------------------------------------------------------- branch badge */
 
 .pp-branch-badge {
   position: absolute;
@@ -154,8 +130,6 @@ html, body {
   opacity: 0.75;
   white-space: nowrap;
 }
-
-/* -------------------------------------------------------------- overlays */
 
 .pp-overlay-layer {
   position: absolute;
@@ -223,22 +197,16 @@ html, body {
 
 .pp-help-label { margin: 0; font-size: 14px; }
 
-/* ------------------------------------------------ provenance label (§9/§18) */
-
-/*
- * The illustrative label. §18.1: the label "cannot be styled to invisibility",
- * and the emitter checks the computed result against the final stylesheet. The
- * floors below are the ones it enforces — a size floor of 11px and a real
- * contrast pair — so this rule is not decoration, it is the law's implementation.
- */
 .pp-provenance {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 3px 8px;
   border-radius: 4px;
-  background: var(--pp-warning);
-  color: var(--pp-on-primary);
+
+  background: var(--pp-surface-alt);
+  color: var(--pp-on-surface-alt);
+  border-left: 3px solid var(--pp-warning);
   font-family: var(--pp-font-body);
   font-size: 12px;
   line-height: 1.35;
@@ -247,8 +215,6 @@ html, body {
   opacity: 1;
   visibility: visible;
 }
-
-/* --------------------------------------------------- placeholder fallback */
 
 .pp-layout--placeholder {
   display: flex;
@@ -284,20 +250,6 @@ html, body {
   opacity: 0.6;
 }
 
-/* src/branch/branch.css */
-/*
- * L9 branch overlays: the jump index, the branch map and the contents index.
- *
- * These extend the `pp-overlay` shell that `src/runtime/runtime.css` owns; they
- * never redefine a class the runtime owns (API.md, Artifact CSS). Every colour
- * comes from a `--pp-*` role variable, so the panels wear the prospect's brand
- * like the rest of the artifact and nothing here can leak studio chrome (D11).
- *
- * NOTE FOR THE INTEGRATOR: `scripts/build.mjs` concatenates CSS from
- * `src/runtime/**` and `src/scene/**` only. This file must be added to that
- * list, or the overlays render unstyled in the emitted artifact.
- */
-
 .pp-overlay--jump,
 .pp-overlay--map,
 .pp-overlay--contents {
@@ -305,8 +257,6 @@ html, body {
   flex-direction: column;
   gap: 14px;
 }
-
-/* ------------------------------------------------------------- jump index */
 
 .pp-jump-field {
   display: flex;
@@ -406,8 +356,6 @@ html, body {
   opacity: 0.7;
 }
 
-/* -------------------------------------------------------------- branch map */
-
 .pp-map-here {
   border: var(--pp-border-width) solid var(--pp-border);
   border-left: 3px solid var(--pp-accent);
@@ -497,16 +445,9 @@ html, body {
   cursor: pointer;
 }
 
-/*
- * Unshown branches are the point of this panel (§11), so they carry the accent
- * and shown ones recede. Never the other way round: a map that highlights what
- * is already spent tells the presenter nothing they can act on.
- */
 .pp-map-anchor { border-left-color: var(--pp-accent); }
 .pp-map-anchor--shown { border-left-color: var(--pp-border); opacity: 0.55; }
 
-/* A branch offered from inside another branch is drawn under it, indented, so
- * the presenter can see the whole detour they are one key away from. */
 .pp-map-anchors--nested {
   margin-left: 12px;
   font-size: 12px;
@@ -517,8 +458,6 @@ html, body {
   font-size: 13px;
   font-weight: 700;
 }
-
-/* ---------------------------------------------------------- contents index */
 
 .pp-contents-list {
   list-style: none;
@@ -569,54 +508,6 @@ html, body {
   .pp-contents-item { transition: none; }
 }
 
-/* src/scene/scenes.css */
-/*
- * The scene stylesheet (L8).
- *
- * Bundled into `dist/pitchproof-runtime.css` behind `src/runtime/runtime.css`
- * and inlined into every artifact, so everything here is subject to the
- * artifact's laws rather than the studio's conveniences:
- *
- *   - **`--pp-*` variables only** (D11, §15). The studio chrome's own variable
- *     namespace may not appear anywhere under `src/scene/`, and
- *     test/scene/css-agreement.test.mjs fails the build on any occurrence of it.
- *     Colour comes from the brand theme's `--pp-*` roles; no literal hex
- *     appears below, because the artifact wears the prospect's brand and
- *     nobody else's.
- *   - **No network of any kind** (§13): no imported stylesheet, no font URL, no
- *     image URL, no remote anything. Every visual is a border, a background, a
- *     gradient over brand colours, or inline SVG in the markup. The rule is
- *     checked by test/scene/css-agreement.test.mjs over the whole directory,
- *     including this comment — the file is bundled into the artifact verbatim.
- *   - **The §10 motion budget**: the only animated properties are `opacity` and
- *     `transform`, every duration is `var(--pp-transition-ms)` (200ms, capped at
- *     240 by `transitionMs()` in runtime/beats.js), and
- *     `prefers-reduced-motion` removes them. Transitions on those two
- *     properties are interruptible by definition — a reveal reversed mid-flight
- *     lands on the state the beat engine asked for, never on a partial one.
- *
- * ------------------------------------------------------------------ geometry
- *
- * Every number in the `:root` blocks below is generated from `GEOM` and
- * `TYPE_ROLES` in `src/scene/tokens.js`, which is also what `measureScene()`
- * measures with. The two cannot drift: `test/scene/css-agreement.test.mjs`
- * parses this file and asserts each `:root` block declares exactly
- * `sceneVars(bp)`, and that each `[data-pp-tx]` rule matches its `TYPE_ROLES`
- * entry, value for value.
- *
- * The vertical model, for reading the rules below:
- *
- *     content box  = viewport - 2 x --pp-stage-pad   (runtime.css)
- *     header band  = --pp-sc-head-h
- *     body box     = content box - header band - --pp-sc-head-gap
- *
- * Dimensions produced by a grid rather than by a token — the equal columns of a
- * split, the equal cards of a fan — are computed in geometry.js with the
- * formula `repeat(n, minmax(0,1fr))` plus `gap` actually produces, so the
- * agreement there is structural rather than copied.
- */
-
-/* sm — the base block: 390px viewport (BREAKPOINTS in core/contracts.js). */
 :root {
   --pp-sc-bleed-max-w: 350px;
   --pp-sc-bleed-pad: 16px;
@@ -682,7 +573,6 @@ html, body {
   --pp-sc-fs-subhead: 14px;
 }
 
-/* md — (min-width: 768px): 1024px viewport. */
 @media (min-width: 768px) {
   :root {
     --pp-sc-bleed-max-w: 640px;
@@ -750,7 +640,6 @@ html, body {
   }
 }
 
-/* lg — (min-width: 1400px): 1600px viewport. */
 @media (min-width: 1400px) {
   :root {
     --pp-sc-bleed-max-w: 820px;
@@ -817,8 +706,6 @@ html, body {
     --pp-sc-fs-subhead: 20px;
   }
 }
-
-/* ------------------------------------------------------------ type roles */
 
 .pp-scene [data-pp-tx="kicker"] {
   font-family: var(--pp-font-body);
@@ -1048,24 +935,12 @@ html, body {
   letter-spacing: 0;
 }
 
-/* ------------------------------------------------------- clamps and wrapping
- *
- * `measureScene` reports `maxLines`, `whiteSpace` and `overflowWrap` by reading
- * these very attributes back off the element. There is one declaration of each
- * behaviour and one reader of it, so the measurement cannot describe CSS that
- * is not applied. */
-
-/* `-webkit-line-clamp` needs `display: -webkit-box`, and a grid or flex parent
-   blockifies that away — so every element carrying a multi-line clamp is a
-   child of a *block* container below, never of a grid or a flex row. */
 .pp-scene [data-pp-clamp] {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-/* A single-line clamp is the one case that needs no legacy box: nowrap plus an
-   ellipsis works in any container. `measureScene` reports the `nowrap` with it,
-   so the detector checks the width rather than the line count. */
+
 .pp-scene [data-pp-clamp="1"] {
   display: block;
   -webkit-line-clamp: 1;
@@ -1081,8 +956,6 @@ html, body {
 .pp-scene [data-pp-ow="break-word"] { overflow-wrap: break-word; }
 .pp-scene [data-pp-ow="anywhere"] { overflow-wrap: anywhere; }
 
-/* ---------------------------------------------------------------- the frame */
-
 .pp-layout {
   display: flex;
   flex-direction: column;
@@ -1096,9 +969,6 @@ html, body {
   min-height: 0;
 }
 
-/* Only opacity and transform are ever animated, and only for the duration the
-   beat engine sanctions. A reveal interrupted halfway lands where the engine
-   says, not where the animation was. */
 .pp-layout [data-pp-el] {
   transition-property: opacity, transform;
   transition-duration: var(--pp-transition-ms);
@@ -1133,8 +1003,6 @@ html, body {
   min-height: 0;
 }
 .pp-empty-text { margin: 0; opacity: 0.72; text-align: center; max-width: 52ch; }
-
-/* --------------------------------------------------------- content blocks */
 
 .pp-block { min-width: 0; }
 .pp-h { margin: 0; color: var(--pp-on-surface); }
@@ -1192,8 +1060,7 @@ html, body {
   background: var(--pp-surface-alt);
 }
 .pp-figure--tall .pp-img { height: 100%; object-fit: cover; }
-/* A captured hero is evidence, not the scene: it takes at most a third of the
-   frame inside a content column, so the copy beside it stays the subject. */
+
 .pp-block--media .pp-img { max-height: 34vh; }
 .pp-figure--tall .pp-img { max-height: none; }
 .pp-img-missing {
@@ -1212,8 +1079,6 @@ html, body {
 .pp-raw-label { margin: 0 0 4px; opacity: 0.65; text-transform: uppercase; }
 .pp-raw-text { margin: 0; }
 
-/* ------------------------------------------------------ panels and headers */
-
 .pp-panel-head {
   display: flex;
   align-items: center;
@@ -1225,15 +1090,11 @@ html, body {
 .pp-panel-title { margin: 0; }
 .pp-panel-meta { margin: 2px 0 0; opacity: 0.66; }
 
-/* The provenance label's type, colour and size are runtime.css's (§18.1). All
-   that is added here is where it sits — never how legible it is. */
 .pp-scene .pp-provenance {
   margin: 8px 0 0;
   align-self: flex-start;
   max-width: 100%;
 }
-
-/* ------------------------------------------------- layout: splitBeforeAfter */
 
 .pp-split { display: flex; flex-direction: column; min-height: 0; }
 .pp-split-body { flex: 1 1 auto; min-height: 0; }
@@ -1273,8 +1134,6 @@ html, body {
 .pp-col--after { background: var(--pp-surface); color: var(--pp-on-surface); }
 .pp-split-row--head .pp-col--after { box-shadow: inset 0 3px 0 0 var(--pp-accent); }
 .pp-split-cell--empty { opacity: 0.5; }
-
-/* ------------------------------------------------------------ layout: fanOut */
 
 .pp-fan {
   display: grid;
@@ -1331,18 +1190,13 @@ html, body {
   min-height: 0;
   display: block;
   overflow: hidden;
-  /* Content that runs past the card fades out rather than being sliced through
-     the middle of a line. It is still reported to the overflow detector with
-     its clamp, so the scene that needs a shorter blurb is a finding, not a
-     surprise on the projector. */
+
   mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 22px), transparent);
   -webkit-mask-image: linear-gradient(to bottom, var(--pp-on-surface) calc(100% - 22px), transparent);
 }
 .pp-fan-card-title { margin: 0; }
 .pp-fan-card-blurb { margin: 4px 0 0; opacity: 0.86; }
 .pp-fan-card-empty { margin: 0; opacity: 0.7; }
-
-/* ------------------------------------------------------------- layout: stack */
 
 .pp-stack {
   display: flex;
@@ -1424,8 +1278,6 @@ html, body {
 .pp-stack-blurb { margin: 4px 0 0; opacity: 0.86; }
 .pp-stack-empty { margin: 0; opacity: 0.7; }
 
-/* --------------------------------------------------------- layout: fullBleed */
-
 .pp-layout--bleed {
   display: block;
   position: relative;
@@ -1479,16 +1331,13 @@ html, body {
   background: transparent;
   border-right: 0;
 }
-/* Block, so the clamps on the headline and subhead survive (see the clamp
-   rules above). */
+
 .pp-bleed-overlay-inner { display: block; min-width: 0; }
 .pp-bleed-kicker { margin: 0 0 8px; color: var(--pp-accent); }
 .pp-bleed-headline { margin: 0; }
 .pp-bleed-sub { margin: 8px 0 0; opacity: 0.78; }
 .pp-bleed-caption { margin: 8px 0 0; opacity: 0.66; }
 .pp-bleed-overlay .pp-provenance { margin-top: 10px; }
-
-/* ---------------------------------------------------------- layout: sideNote */
 
 .pp-side { display: flex; flex-direction: column; gap: var(--pp-sc-row-gap); min-height: 0; }
 .pp-side-row {
@@ -1515,8 +1364,6 @@ html, body {
 .pp-side-note-label { margin: 0; color: var(--pp-accent); }
 .pp-side-note-text { margin: 0; }
 
-/* -------------------------------------------------------- layout: quoteCard */
-
 .pp-quote-card {
   margin: 0;
   align-self: center;
@@ -1536,8 +1383,6 @@ html, body {
 .pp-quote-figcaption { display: block; }
 .pp-quote-attribution { margin: 0; }
 .pp-quote-source { margin: 2px 0 0; opacity: 0.66; }
-
-/* -------------------------------------------------------- layout: systemMap */
 
 .pp-map {
   display: flex;
@@ -1585,8 +1430,6 @@ html, body {
 .pp-map-chip-label { margin: 0; }
 .pp-map-chip--empty { border-style: dashed; }
 
-/* ---------------------------------------------------- layout: contentsIndex */
-
 .pp-index {
   margin: 0;
   padding: 0;
@@ -1611,12 +1454,6 @@ html, body {
 .pp-index-title { margin: 0; }
 .pp-index-blurb { margin: 4px 0 0; opacity: 0.74; max-width: 90ch; }
 
-/* ------------------------------------------------------- md: 768px and wider
- *
- * Where the single-column stack of the small breakpoint opens into the
- * side-by-side arrangements. The column formulas here are the ones geometry.js
- * computes with: `repeat(n, minmax(0,1fr))` plus a gap. */
-
 @media (min-width: 768px) {
   .pp-split-row { grid-template-columns: repeat(var(--pp-sc-split-cols, 2), minmax(0, 1fr)); }
 
@@ -1629,18 +1466,9 @@ html, body {
   .pp-side-row { grid-template-columns: minmax(0, 1fr) var(--pp-sc-note-w); }
 }
 
-/* ------------------------------------------------------ lg: 1400px and wider */
-
 @media (min-width: 1400px) {
   .pp-fan-grid[data-pp-n="3"] { --pp-sc-fan-cols: 3; }
 }
-
-/* --------------------------------------------------------- reduced motion
- *
- * §10: `prefers-reduced-motion` is honoured. Nothing under `src/scene/`
- * animates once it is set — and because the only animated properties are
- * opacity and transform, removing the transition leaves the element in exactly
- * the state the beat engine asked for. */
 
 @media (prefers-reduced-motion: reduce) {
   .pp-layout,

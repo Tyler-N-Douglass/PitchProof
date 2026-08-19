@@ -124,6 +124,12 @@ export function blockBody(block, o) {
       const cellAttrs = {
         'data-pp-frac': String(cols),
         'data-pp-inset': 'cell-pad,cell-pad',
+        // `.pp-table th, .pp-table td { overflow-wrap: break-word }` — a column
+        // in a narrow panel is often narrower than a single long word, and the
+        // stylesheet breaks it rather than letting it run out of the cell. The
+        // measurement has to say so or the detector reads a wrapped word as an
+        // unbreakable overflow (CRITIQUE-1 F6).
+        'data-pp-ow': 'break-word',
       };
       return h('div', { class: 'pp-table-wrap' },
         h('table', { class: 'pp-table', 'data-pp-cols': String(cols) },

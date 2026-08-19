@@ -120,24 +120,41 @@ detector ends up measuring a layout nobody ships.
 gives it" without saying what that means for a box whose height is content-driven.
 
 **Decision.** `containerWidthPx` is always exact — it is the inner width the CSS
-gives the run. `containerHeightPx` is the height the layout *affords* the box:
-exact where the CSS constrains it (a fan card's equal share, a step's share of
-the stack, a clamped run's own box), and the remaining height of its nearest
-constraining ancestor where the box is auto-height. Every box additionally
-carries three optional fields beyond the declared shape:
+gives the run. `containerHeightPx` is the height the layout *affords* the box,
+and the rule is: **a box is afforded a share of the frame only where the CSS
+actually constrains it to one.**
 
+- Constrained, so divided: fan cards (`grid-auto-rows: minmax(min, 1fr)`, with
+  the floor applied) and stack steps (`flex: 1 1 0`).
+- Not constrained, so afforded the frame: split columns and their cells, margin
+  notes, index rows. These stack in a column that scrolls; nothing squeezes
+  them, so claiming they get a share of the screen is a fiction. It was one, and
+  it is what CRITIQUE-1 F6 measured as thirty to sixty blocking findings on
+  `splitBeforeAfter` — a five-rendition scene was reporting that its source
+  column had a fifth of the screen height, so ordinary prose "overflowed".
+- `--pp-sc-panel-head-h` is a `min-height`, not a cap, so a panel header's boxes
+  are measured against the column, not against the floor.
+
+Every box additionally carries four optional fields beyond the declared shape:
+
+- `textOverflow: 'clip' | 'ellipsis'` — see L8-22;
 - `fontStack` — the CSS stack `style.family` heads, so L11 can resolve
   availability without re-deriving it from the brand;
-- `containerId` — a stable id for the container instance, so boxes that stack
-  inside one column can be summed for cumulative overflow;
+- `containerId` — the container the box stacks inside. Boxes that share a
+  scrolling column report the *same* id (`splitCell:before`,
+  `sideNote:notes`, `indexRow:index`), stamped by the layout as
+  `data-pp-container`, so the detector can check each box against the column
+  *and* sum the column for the cumulative case;
 - `slot` — the geometry slot's name, for reporting.
 
 **Why.** A per-box height that pretended to be exact for an auto-height run
 would be a fiction, and one that reported zero would make every column
-un-checkable. Reporting the affordance flags the single run that cannot fit, and
-`containerId` gives the detector everything it needs to catch the case where six
-runs each fit and their sum does not. Extensions are additive, which `API.md`
-explicitly permits.
+un-checkable. Reporting the frame as the affordance still flags the single run
+that cannot fit on screen at all — verified against planted defects: a
+3,500-word paragraph in a split column and an unbreakable 200-character token in
+a heading are both still severity 1 — and the shared `containerId` gives the
+detector what it needs for the case where six runs each fit and their sum does
+not. Extensions are additive, which `API.md` explicitly permits.
 
 ---
 
@@ -451,3 +468,87 @@ test, a fixture or a rehearsal rebuild has neither and wants the same scene to
 produce the same ids every time. Both routes are deterministic, which is all §5
 requires, and the in-place route is what lets a scene be re-planned without
 orphaning the branches anchored to it.
+
+
+---
+
+## L8-22 — `textOverflow` says whether an overflow is visible or silent
+
+**Unsettled by:** `SceneMeasurement.boxes` carried `whiteSpace`, `overflowWrap`
+and `maxLines`, from which the detector could tell that a box does not wrap and
+holds one line — but not whether the text that does not fit is cut with an
+ellipsis the viewer can see or cut with nothing at all. CRITIQUE-1 F6: the
+panel meta line's designed one-line ellipsis was graded severity 1 and blocked
+the emit on four of eight layouts, on the prospect's own source URL, with no
+seller-authored text involved.
+
+**Decision.** Every box carries `textOverflow: 'clip' | 'ellipsis'`, derived
+from the same attribute that produces the CSS (`textOverflowOf()` in
+`measure.js`):
+
+- a run carrying `data-pp-clamp` is `'ellipsis'` — the one-line rule declares
+  `text-overflow: ellipsis` outright and `-webkit-line-clamp` supplies one above
+  it;
+- everything else is `'clip'`: if it does not fit it is cut, or pushed past the
+  frame, with nothing on screen to say so;
+- `data-pp-to` lets a layout state the answer directly where it knows better
+  than the derivation.
+
+`test/scene/css-agreement.test.mjs` parses the stylesheet and asserts the
+declared value for every clamp the layouts stamp, so the reported value cannot
+drift from the CSS. The grading is the integrator's, settled centrally:
+`'clip'` is severity 1 (data lost silently), `'ellipsis'` is severity 2
+(truncated where the viewer can see it happened).
+
+**Why.** The two cases look identical in a measurement and are opposite in
+consequence. A clamp is a design decision the layout made on purpose and the
+viewer can see the ellipsis; a clip is content the room never learns exists.
+Blocking the emit on the first is what forced the critic to shorten the client's
+own title and URL to get an artifact at all — which is the tool asking the
+prospect's content to change to suit the tool, the exact inversion §18.3 exists
+to prevent.
+
+**Measured.** Against the four corpus specimens × eight layouts × three
+breakpoints, with the client's content unmodified and no seller text:
+**severity 1 went from 328 to 0**, severity 2 to 202, and the planted-defect
+cases (a 3,500-word paragraph in a column, an unbreakable 200-character token in
+a heading) still raise severity 1.
+
+---
+
+## L8-23 — A source URL label elides its middle, not its end
+
+**Unsettled by:** §18.3 covers the prospect's *content*; a source URL rendered
+in a panel header is chrome the layout generates. Nothing says what to do when
+it does not fit.
+
+**Decision.** `displayUrl()` drops the scheme and the trailing slash as before,
+and above a 48-character budget elides the middle of the path:
+`www.northwind-industrial.example/…/conveyor-drive-units`. Where even that does
+not fit, the CSS ellipsises and the measurement reports it as a visible
+truncation.
+
+**Why.** The two informative ends of a URL are the host and the last path
+segment — the slug that says which page this is. Right-truncation, which is what
+the CSS does unaided, keeps the host and throws the slug away, so a client sees
+the same forty characters on every scene and cannot tell which of their pages is
+on screen. The elision is not an edit to their content: it is a label this lane
+writes, and the `…` says plainly that something was removed.
+
+---
+
+## L8-24 — The stylesheet's `overflow-wrap` is reported, not assumed
+
+**Unsettled by:** nothing in the spec; found while investigating CRITIQUE-1 F6.
+
+**Decision.** `.pp-table th, .pp-table td { overflow-wrap: break-word }` is
+mirrored by `data-pp-ow="break-word"` on every table cell the block renderer
+emits, so the measurement reports the wrap the CSS gives it.
+`test/scene/css-agreement.test.mjs` asserts that every `overflow-wrap`
+declaration in the sheet outside the attribute rules belongs to a selector whose
+boxes report it.
+
+**Why.** A column in a narrow panel is often narrower than a single long word,
+and the stylesheet already breaks it. Not reporting that made the detector read
+a word the browser would have wrapped as an unbreakable horizontal overflow —
+a false severity-1 on the client's own table copy.

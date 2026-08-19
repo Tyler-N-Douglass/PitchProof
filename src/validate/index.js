@@ -16,9 +16,9 @@ export { runPreflight, summarize, resolveBreakpoints, resolveDeps, measureDeck, 
 export { RULES, ruleFor, STALE_CAPTURE_DAYS, MAX_MEDIA_EDGE_PX } from './rules.js';
 export {
   detectOverflow, detectBoxOverflow, layOutBox, resolveBoxFace, availableFamilies,
-  classifyExcess, faceResolutions, fittingFontSizePx, fittingCharCount,
+  classifyExcess, faceResolutions, fittingFontSizePx, fittingCharCount, truncationMode,
   OVERFLOW_CLIP_RATIO, OVERFLOW_CLIP_MIN_PX, OVERFLOW_NOISE_RATIO, OVERFLOW_NOISE_PX,
-  CLAMP_BLOCKING_LOST_LINES,
+  TEXT_OVERFLOW_MODES, DEFAULT_TEXT_OVERFLOW,
 } from './overflow.js';
 export { checkContrast, contrastReport, displayTextIsLarge, PROVENANCE_PAIR, DISPLAY_SIZE_PX } from './contrast.js';
 export { autoFixes, autoFixCommand, applyAll, FIXABLE_CODES, clone } from './autofix.js';

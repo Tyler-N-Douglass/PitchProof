@@ -40,8 +40,9 @@ export {
 } from './promotion.js';
 
 export {
-  budgetAssets, collectAssets, rankAssets, locateAssets, degradeAsset, minifySvg,
-  applyReplacements, beatIndexResolver, sizeBudgetFinding, SCALE_LADDER,
+  budgetAssets, collectAssets, dedupeAssets, rankAssets, locateAssets, degradeAsset, minifySvg,
+  applyReplacements, beatIndexResolver, sizeBudgetFinding, predictEmittedBytes,
+  dataUriPrefixBytes, SCALE_LADDER, PNG_CONTAINER_BYTES,
 } from './budget.js';
 
 export {

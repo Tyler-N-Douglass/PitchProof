@@ -121,3 +121,35 @@ unrepresentable-by-accident.
   The per-face and per-logo numbers are carried as optional extensions
   (`face.confidence`, and the source tier on each logo), so nothing is lost. No
   objection.
+
+---
+
+## L5-X5 — §4's closed logo variant set makes `primary` double as the residual bucket
+
+**Contract:** §4
+
+```ts
+variant: 'primary' | 'mark' | 'wordmark' | 'inverse' | 'favicon';
+```
+
+**Objection.** Four of the five values describe an asset's *form* — how it looks.
+`primary` describes its *role* — which asset the brand leads with. Mixing the two
+in one closed enumeration means any asset whose form matches none of the four
+must be called `primary`, and `primary` is the value `logoFor(brand)` defaults
+to. The §20 critic's F10 is exactly that failure: a 320×180 og:image of an
+industrial plant matched no form band, was therefore labelled `primary`, and
+became the logo every layout rendered.
+
+The set also cannot express "an asset was found and judged not to be a logo",
+which is a normal and useful outcome on any real site with a social card.
+
+**Built as written.** The enumeration is unchanged. The lane separates the two
+meanings itself (L5-D23): exactly one asset is assigned the `primary` role by an
+identity score, the rest keep their form-derived variant, and an asset with
+neither is not emitted at all. The form each asset would have had is preserved in
+the optional extension `formVariant`, and `selectLogos()` returns the rejected
+candidates with reasons so the studio can show what was discarded and why.
+
+**A v2 contract should say** either `variant: 'lockup'|'mark'|'wordmark'|'inverse'|'favicon'`
+with a separate `role: 'primary'|'secondary'` (or an `isPrimary: boolean`), or add
+`'other'` to the set so a found-but-rejected asset has somewhere honest to sit.

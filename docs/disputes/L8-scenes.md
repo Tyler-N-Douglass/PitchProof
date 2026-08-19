@@ -55,6 +55,13 @@ document order, and compare against `containerHeightPx`.
 `containers: {id, widthPx, heightPx}[]` alongside `boxes`) into the declared
 shape, so the detector is not relying on an extension.
 
+**Update (CRITIQUE-1 F6).** Half of this is now settled centrally: the
+integrator has pinned `textOverflow: 'clip' | 'ellipsis'` into the declared
+shape and L11 grades on it. `containerId` is also now *meaningful* rather than
+merely present — boxes that stack inside one scrolling column report the same id
+(`splitCell:before`, `sideNote:notes`, `indexRow:index`) rather than one id per
+element, so the cumulative sum is computable. It remains an extension.
+
 ---
 
 ## L8-D3 — `measureScene(scene, ctx, breakpoint)` takes the scene twice

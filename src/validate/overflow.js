@@ -72,12 +72,52 @@ export const OVERFLOW_CLIP_RATIO = 0.02;
 export const OVERFLOW_CLIP_MIN_PX = 2;
 
 /**
- * Lines lost to `-webkit-line-clamp` before truncation blocks emit. One lost
- * line is the ordinary, deliberate teaser clamp — worth a warning, because the
- * seller should know the last line is gone. Two or more lost lines is a
- * paragraph the client will never see, presented as if it were complete.
+ * **What decides whether truncation blocks an emit is whether the viewer can
+ * see that it happened.**
+ *
+ * A box that clips loses text silently: the sentence simply stops, and nobody in
+ * the room knows there was more. That is the §22.2 defect — invisible until it
+ * isn't — and it blocks. A box that ellipsises loses the same text but says so:
+ * the trailing `…` is a signal the viewer reads, and a designed truncation of a
+ * long URL into a one-line meta row is a layout decision rather than a defect.
+ * It warns.
+ *
+ * This replaced an earlier rule that graded the clamp axis by *how many lines*
+ * were lost, which produced an inconsistency the §20 critic caught (F6): losing
+ * two lines of the client's own copy to a multi-line clamp graded 2, while
+ * losing the tail of a URL to a one-line clamp graded 1. Grading on the signal
+ * rather than the quantity removes the inconsistency and puts the line where the
+ * product actually needs it.
+ *
+ * The field comes from L8 (`SceneMeasurement.boxes[].textOverflow`), derived
+ * from the same design tokens that produce the artifact's CSS.
  */
-export const CLAMP_BLOCKING_LOST_LINES = 2;
+export const TEXT_OVERFLOW_MODES = ['clip', 'ellipsis'];
+
+/**
+ * CSS's initial value for `text-overflow`, and therefore what a box that does
+ * not declare one does. Defaulting the other way would silently downgrade real
+ * data loss to a warning on every box whose measurement predates the field,
+ * which is the one direction §14 does not allow.
+ */
+export const DEFAULT_TEXT_OVERFLOW = 'clip';
+
+/**
+ * Whether a box's truncation is visible to the viewer.
+ *
+ * `known` is false when the measurement carries no `textOverflow` at all; the
+ * box is then graded as clipping (CSS's initial value), and the finding says the
+ * mode was not declared so the gap is legible rather than silent.
+ *
+ * @param {{textOverflow?: string}} box
+ * @returns {{mode: string, signalled: boolean, known: boolean}}
+ */
+export function truncationMode(box) {
+  const declared = box && typeof box.textOverflow === 'string' ? box.textOverflow : null;
+  const known = declared !== null && TEXT_OVERFLOW_MODES.includes(declared);
+  const mode = known ? declared : DEFAULT_TEXT_OVERFLOW;
+  return { mode, signalled: mode === 'ellipsis', known };
+}
 
 /** CSS generic families: always available, and they resolve to a platform face. */
 const GENERIC_FAMILIES = new Set([
@@ -187,6 +227,7 @@ export function resolveBoxFace(family, brand, weight = 400) {
  * @property {string} [whiteSpace]
  * @property {string} [overflowWrap]
  * @property {number} [maxLines]
+ * @property {'clip'|'ellipsis'} [textOverflow]  L8's declared truncation mode
  */
 
 /**
@@ -329,6 +370,33 @@ function boxLabel(box) {
 }
 
 /**
+ * Apply the truncation policy to a magnitude verdict: a box that ellipsises
+ * never blocks, because the viewer can see the cut; a box that clips is graded
+ * on magnitude alone.
+ * @param {0|1|2} severity
+ * @param {{signalled: boolean}} truncation
+ * @returns {0|1|2}
+ */
+function narrowIfSignalled(severity, truncation) {
+  if (severity === 0) return 0;
+  return truncation.signalled ? 2 : severity;
+}
+
+/**
+ * What the box does with text it cannot fit, as a sentence.
+ * @param {{mode: string, signalled: boolean, known: boolean}} truncation
+ * @returns {string}
+ */
+function truncationClause(truncation) {
+  if (!truncation.known) {
+    return 'The measurement declares no text-overflow mode, so the box is graded as clipping — CSS\'s own default — and the text is assumed to be cut with no signal to the viewer.';
+  }
+  return truncation.signalled
+    ? 'The box truncates with a visible ellipsis, so the viewer can see that something was cut; the tail is still gone.'
+    : 'The box clips, so the text is cut with nothing to tell the viewer that anything is missing.';
+}
+
+/**
  * How the substitution contributed, as a sentence — or the empty string when the
  * requested face is the one that renders.
  * @param {import('../core/text-metrics.js').FaceResolution} face
@@ -367,6 +435,7 @@ export function detectBoxOverflow(box, where, brand) {
   const containerH = Number(box.containerHeightPx) > 0 ? Number(box.containerHeightPx) : 0;
   const key = box.elementId || `${box.role || 'text'}#${where.index}`;
   const nowrap = box.whiteSpace === 'nowrap' || box.whiteSpace === 'pre';
+  const truncation = truncationMode(box);
 
   /** @type {any[]} */
   const findings = [];
@@ -378,6 +447,8 @@ export function detectBoxOverflow(box, where, brand) {
     role: box.role || null,
     requestedFamily: face.requested,
     resolvedFamily: face.resolved,
+    textOverflow: truncation.mode,
+    textOverflowDeclared: truncation.known,
     faceAvailable: face.available,
     advanceDelta: face.metricDelta.avgAdvance,
     fontSizePx: style.fontSizePx,
@@ -386,7 +457,10 @@ export function detectBoxOverflow(box, where, brand) {
 
   // --- width axis --------------------------------------------------------
   const widthExcess = full.maxLineWidthPx - containerW;
-  const widthSeverity = classifyExcess(widthExcess, containerW);
+  // The magnitude decides whether there is anything to say; the truncation mode
+  // decides whether it blocks. Text cut with a visible ellipsis is a designed
+  // truncation the viewer can see; text cut with nothing is data lost silently.
+  const widthSeverity = narrowIfSignalled(classifyExcess(widthExcess, containerW), truncation);
   if (widthSeverity) {
     const ratio = widthExcess / containerW;
     const smaller = fittingFontSizePx(box, style);
@@ -405,7 +479,7 @@ export function detectBoxOverflow(box, where, brand) {
       locus: { sceneId: where.sceneId },
       key: `${where.breakpoint}|${key}|width`,
       autoFixAvailable: false,
-      message: `${boxLabel(box)} is ${px(widthExcess)}px wider than its ${px(containerW)}px container at ${where.breakpoint} (${pct(ratio)} over): "${sample(text)}". ${substitutionClause(face)}${cause} It fits at ${smaller === null ? 'no size above 4px' : `${smaller}px`}, or at about ${chars} of its ${[...text].length} characters.`,
+      message: `${boxLabel(box)} is ${px(widthExcess)}px wider than its ${px(containerW)}px container at ${where.breakpoint} (${pct(ratio)} over): "${sample(text)}". ${truncationClause(truncation)} ${substitutionClause(face)}${cause} It fits at ${smaller === null ? 'no size above 4px' : `${smaller}px`}, or at about ${chars} of its ${[...text].length} characters.`,
       detail: {
         ...common,
         axis: 'width',
@@ -455,7 +529,10 @@ export function detectBoxOverflow(box, where, brand) {
   // --- clamp axis --------------------------------------------------------
   if (lostLines > 0) {
     const maxLines = Math.floor(box.maxLines);
-    const severity = lostLines >= CLAMP_BLOCKING_LOST_LINES ? 1 : 2;
+    // Clamped text *fits* by construction, so a height check reports a pass. The
+    // defect is the copy that silently vanished — and, exactly as on the width
+    // axis, whether that blocks depends on whether the viewer is told.
+    const severity = narrowIfSignalled(1, truncation);
     const droppedText = full.lines.slice(maxLines).map((l) => l.text).join(' ').trim();
     const chars = fittingCharCount(box, style);
     findings.push(makeFinding({
@@ -464,7 +541,7 @@ export function detectBoxOverflow(box, where, brand) {
       locus: { sceneId: where.sceneId },
       key: `${where.breakpoint}|${key}|clamp`,
       autoFixAvailable: false,
-      message: `${boxLabel(box)} is clamped to ${maxLines} line${maxLines === 1 ? '' : 's'} at ${where.breakpoint} but needs ${full.lineCount}, so ${lostLines} line${lostLines === 1 ? '' : 's'} of copy is truncated and never reaches the viewer: "${sample(droppedText)}". ${substitutionClause(face)} Rewrite to about ${chars} characters, raise the clamp, or reduce the size.`,
+      message: `${boxLabel(box)} is clamped to ${maxLines} line${maxLines === 1 ? '' : 's'} at ${where.breakpoint} but needs ${full.lineCount}, so ${lostLines} line${lostLines === 1 ? '' : 's'} of copy is truncated and never reaches the viewer: "${sample(droppedText)}". ${truncationClause(truncation)} ${substitutionClause(face)} Rewrite to about ${chars} characters, raise the clamp, or reduce the size.`,
       detail: {
         ...common,
         axis: 'clamp',

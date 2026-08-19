@@ -16,7 +16,7 @@
  */
 
 import { ok, err } from '../core/result.js';
-import { htmlCapture, makeCapture, now, sniffMime, mimeForName, resolveUrl } from './capture.js';
+import { htmlCapture, makeCapture, now, sniffMime, mimeForName, resolveUrl, originOf } from './capture.js';
 import { importOoxml } from './ooxml.js';
 import { importPdf } from './pdf/index.js';
 import { importImage } from './image.js';
@@ -24,6 +24,8 @@ import { importHar } from './har.js';
 import { importMhtml } from './mhtml.js';
 import { importSavedPage } from './saved-page.js';
 import { importHtmlText, importManual } from './paste.js';
+import { collectSubresources, applySubresourceReport, SUBRESOURCE_LIMITS } from './subresources.js';
+import { parseRobots, emptyRobots } from './robots.js';
 
 /**
  * @typedef {import('./capture.js').RawCapture} RawCapture
@@ -273,7 +275,90 @@ async function captureResponse(res, url, strategy, deps) {
   });
   if (typeof res.status === 'number') capture.meta['http.status'] = String(res.status);
   if (res.url && res.url !== url) capture.meta['http.finalUrl'] = String(res.url);
+
+  // A document on its own is not a capture (§1.2, §7, §8): the brand engine
+  // needs the stylesheet, and every media block needs bytes behind it. Fetching
+  // the sub-resources is best-effort — a failure here never loses the document.
+  await attachSubresources(capture, url, strategy, deps);
   return ok(capture);
+}
+
+/**
+ * Fetch and attach the sub-resources a captured document references, through
+ * the same route the document took.
+ *
+ * §6's degradation law applies in full: anything that goes wrong here is
+ * recorded in the capture's report and the document capture still succeeds.
+ *
+ * @param {import('./capture.js').RawCapture} capture
+ * @param {string} url
+ * @param {string} strategy
+ * @param {{http?: HttpFn, clock: () => string, proxyBase?: string, subresources?: boolean|object, robotsText?: string|null}} deps
+ * @returns {Promise<void>}
+ */
+export async function attachSubresources(capture, url, strategy, deps) {
+  if (deps.subresources === false) {
+    capture.meta['subresources.skippedReasons'] = 'disabled by the caller';
+    return;
+  }
+  if (typeof deps.http !== 'function' || !capture.doc) return;
+
+  /** @type {any} */
+  const limits = { ...SUBRESOURCE_LIMITS, ...(typeof deps.subresources === 'object' && deps.subresources ? deps.subresources : {}) };
+
+  // Sub-resources travel the same road as the document: a capture that needed
+  // the user's proxy must not then try to reach its stylesheet directly.
+  const viaProxy = strategy === 'cors-proxy' && (deps.proxyBase || '').trim();
+  const fetchUrl = viaProxy
+    ? (target, init) => /** @type {HttpFn} */ (deps.http)(proxyUrl(/** @type {string} */ (deps.proxyBase), target), init)
+    : /** @type {HttpFn} */ (deps.http);
+
+  let robots = emptyRobots();
+  if (limits.respectRobots) {
+    robots = await readRobots(url, fetchUrl, deps);
+  }
+
+  try {
+    const { assets, report } = await collectSubresources({
+      doc: capture.doc,
+      baseUrl: url,
+      fetchUrl,
+      robots,
+      limits,
+    });
+    capture.assets = capture.assets.concat(assets);
+    applySubresourceReport(capture, report);
+  } catch (e) {
+    // Collection is an enhancement; the document capture already succeeded.
+    capture.meta['subresources.error'] = e instanceof Error ? e.message : String(e);
+    capture.meta['subresources.fetched'] = capture.meta['subresources.fetched'] || '0';
+  }
+}
+
+/**
+ * Read `robots.txt` once per ingest, best-effort. An unreadable file allows
+ * everything, which is what the standard says and what keeps ingest working on
+ * the many sites that have none.
+ *
+ * The caller may supply `robotsText` when it already has it, so sitemap assist
+ * and sub-resource collection need not fetch it twice.
+ *
+ * @param {string} url
+ * @param {HttpFn} fetchUrl
+ * @param {{robotsText?: string|null}} deps
+ * @returns {Promise<import('./robots.js').Robots>}
+ */
+async function readRobots(url, fetchUrl, deps) {
+  if (typeof deps.robotsText === 'string') return parseRobots(deps.robotsText);
+  const origin = originOf(url);
+  if (!origin) return emptyRobots();
+  try {
+    const res = await fetchUrl(`${origin}/robots.txt`, { method: 'GET' });
+    if (!res || !res.ok) return emptyRobots();
+    return parseRobots(await responseText(res));
+  } catch {
+    return emptyRobots();
+  }
 }
 
 /**

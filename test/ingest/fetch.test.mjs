@@ -152,7 +152,11 @@ test('ingestUrl tries direct first and stops there when it works', async () => {
   const result = await ingestUrl(URL_UNDER_TEST, { http, clock, proxyBase: 'https://proxy.internal/?' });
   assert.equal(result.ok, true);
   assert.equal(result.value.strategy, 'direct-fetch');
-  assert.deepEqual(http.calls, [URL_UNDER_TEST], 'the proxy is not consulted when the direct route works');
+  assert.equal(http.calls[0], URL_UNDER_TEST, 'the document is fetched directly, first');
+  assert.equal(
+    http.calls.some((call) => call.startsWith('https://proxy.internal/')), false,
+    'the proxy is not consulted when the direct route works',
+  );
 });
 
 test('ingestUrl falls through to the proxy when direct fetch is blocked', async () => {
@@ -164,7 +168,12 @@ test('ingestUrl falls through to the proxy when direct fetch is blocked', async 
   const result = await ingestUrl(URL_UNDER_TEST, { http, clock, proxyBase: 'https://proxy.internal/?' });
   assert.equal(result.ok, true);
   assert.equal(result.value.strategy, 'cors-proxy');
-  assert.deepEqual(http.calls, [URL_UNDER_TEST, proxied]);
+  assert.deepEqual(http.calls.slice(0, 2), [URL_UNDER_TEST, proxied], 'direct first, then the proxy');
+  // Everything after the document is sub-resource collection, and it travels
+  // the same road the document did.
+  for (const call of http.calls.slice(2)) {
+    assert.ok(call.startsWith('https://proxy.internal/'), `${call} should have gone via the proxy`);
+  }
 });
 
 test('with everything blocked, ingestUrl returns a usable message naming the next steps', async () => {

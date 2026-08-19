@@ -17,7 +17,7 @@
  */
 
 import { contentHash } from '../core/hash.js';
-import { unreviewedBrandGroups } from './model.js';
+import { brandGroupEvidence, unreviewedBrandGroups } from './model.js';
 
 /**
  * @typedef {object} Blocker
@@ -103,11 +103,19 @@ export function emitBlockers(app) {
   }
 
   for (const entry of unreviewedBrandGroups(proof.brand)) {
-    blockers.push({
-      kind: 'BRAND_UNREVIEWED',
-      message: `${BRAND_GROUP_PHRASE[entry.group] || entry.group} came out ${Math.round(entry.confidence * 100)}% confident. §7 holds a low-confidence brand field out of an emit until somebody has looked at it — check it against the source and mark it reviewed.`,
-      where: 'brand',
-    });
+    const evidence = brandGroupEvidence(proof.brand, entry.group);
+    const phrase = BRAND_GROUP_PHRASE[entry.group] || entry.group;
+    blockers.push(evidence.hasContent
+      ? {
+        kind: 'BRAND_UNREVIEWED',
+        message: `${phrase} came out ${Math.round(entry.confidence * 100)}% confident (${evidence.describe}). §7 holds a low-confidence brand field out of an emit until somebody has looked at it — check it against the source and mark it reviewed.`,
+        where: 'brand',
+      }
+      : {
+        kind: 'BRAND_EMPTY',
+        message: `${phrase} are empty — ${evidence.describe}. There is nothing here to review, so nothing can be signed off: extract them, or enter them by hand.`,
+        where: 'brand',
+      });
   }
 
   if (!app.services.has('emit')) {

@@ -13,12 +13,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { FINDING_CODES, FIXED_SEVERITY } from '../../src/core/contracts.js';
+import { h } from '../../src/core/vdom.js';
 import {
   runPreflight, RULES, ruleFor, severityOf, resolveSeverity, summarize,
-  DECLARED_SEVERITY, NARROWABLE, sortFindings, makeFinding, compareFindings,
+  DECLARED_SEVERITY, NARROWABLE, sortFindings, makeFinding, compareFindings, autoFixes,
 } from '../../src/validate/index.js';
 import {
-  cleanProof, defectProof, copy, NOW, MUCH_LATER, LEAKY_DOCUMENT, CLEAN_DOCUMENT,
+  cleanProof, defectProof, danglingRevealProof, withRenderedReveals,
+  copy, NOW, MUCH_LATER, LEAKY_DOCUMENT, CLEAN_DOCUMENT,
 } from '../fixtures/validate/defects.mjs';
 
 const clock = () => NOW;
@@ -201,6 +203,66 @@ test('BEAT_EMPTY does fire on a dead keypress inside a scene that reveals', asyn
   assert.equal(finding.severity, 2);
   assert.match(finding.message, /dead keypress/);
   assert.equal(finding.detail.beatIndex, 1);
+});
+
+test('a beat whose reveals name nothing the layout renders is a dead keypress too §20-F16', async () => {
+  const proof = danglingRevealProof();
+  const findings = await preflight(proof);
+  const finding = findings.find((f) => f.code === 'BEAT_EMPTY');
+  assert.ok(finding, 'a beat revealing an id nothing renders must be reported');
+  assert.equal(finding.severity, 2);
+  assert.equal(finding.detail.kind, 'dangling-reveals');
+  assert.deepEqual(finding.detail.dangling, ['el_deadbeef00']);
+  assert.ok(finding.detail.renderedCount > 0, 'the message must be able to say how many the layout does render');
+  assert.match(finding.message, /does not render/);
+  assert.match(finding.message, /changes nothing on screen/);
+  assert.equal(finding.autoFixAvailable, true);
+});
+
+test('a beat that reveals some real ids and some dangling ones is not reported', async () => {
+  // Partial drift still moves the screen, so it is not the dead keypress this
+  // rule is about. Reporting it would fire on any layout that renders a subset.
+  const proof = copy(cleanProof());
+  proof.spine[0].beats[0].reveals = [proof.spine[0].beats[0].reveals[0], 'el_deadbeef00'];
+  const findings = await preflight(proof);
+  assert.deepEqual(findings.filter((f) => f.code === 'BEAT_EMPTY'), []);
+});
+
+test('switching a scene to another layout without re-pointing its beats is caught', async () => {
+  const proof = copy(cleanProof());
+  // Every layout mints its own element ids, so a layout swap in the studio
+  // leaves every beat of that scene revealing something that is no longer there.
+  proof.spine[0].layout = 'quoteCard';
+  const findings = await preflight(proof);
+  const dead = findings.filter((f) => f.code === 'BEAT_EMPTY' && f.locus.sceneId === 'sc_a');
+  assert.equal(dead.length, proof.spine[0].beats.length, 'every beat of the swapped scene is now a dead keypress');
+  assert.ok(dead.every((f) => f.detail.kind === 'dangling-reveals'));
+  assert.ok(dead.every((f) => f.detail.layout === 'quoteCard'));
+  // And the scenes that were not touched are still fine.
+  assert.deepEqual(findings.filter((f) => f.code === 'BEAT_EMPTY' && f.locus.sceneId !== 'sc_a'), []);
+});
+
+test('the dangling check stays silent when the layout renders no revealable element at all', async () => {
+  const proof = copy(cleanProof());
+  const findings = await preflight(proof, {
+    // A layout that reveals nothing renders its scene whole; comparing beats
+    // against an empty set would make every beat in the deck a finding.
+    renderScene: () => h('div', { class: 'pp-scene' }, 'a still frame'),
+  });
+  assert.deepEqual(findings.filter((f) => f.code === 'BEAT_EMPTY'), []);
+});
+
+test('the auto-fix trims a dangling beat, and only while it is still dangling', async () => {
+  const proof = danglingRevealProof();
+  const findings = await preflight(proof);
+  const [fix] = autoFixes(proof, findings).filter((f) => f.finding.code === 'BEAT_EMPTY');
+  assert.ok(fix);
+  assert.match(fix.label, /name nothing the layout renders/);
+  const fixed = fix.apply(proof);
+  assert.equal(fixed.spine[0].beats.length, proof.spine[0].beats.length - 1);
+  const after = await preflight(fixed);
+  assert.deepEqual(after.filter((f) => f.code === 'BEAT_EMPTY'), []);
+  assert.deepEqual(proof.spine[0].beats[0].reveals, ['el_deadbeef00'], 'the input proof is untouched');
 });
 
 test('STALE_CAPTURE fires at severity 3 past thirty days, and not before', async () => {

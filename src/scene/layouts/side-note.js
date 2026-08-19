@@ -69,6 +69,7 @@ export function sideNote(ctx) {
       h('div', {
         class: 'pp-side-main',
         'data-pp-box': 'sideMain',
+        'data-pp-container': 'main',
       },
       row.block === null
         ? null
@@ -139,6 +140,7 @@ function renderNote(ctx, note, rowCount) {
     class: `pp-side-note pp-side-note--${note.kind}`,
     'data-pp-box': 'sideNote',
     'data-pp-n': String(rowCount),
+    'data-pp-container': 'notes',
     'data-pp-el': ctx.el(`note/${note.index}`),
     'data-pp-group': waveGroup('notes', note.index, rowCount),
     'data-pp-rendition': note.rendition ? note.rendition.id : null,
