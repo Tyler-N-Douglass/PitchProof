@@ -134,6 +134,33 @@ export function fontMime(name, declared = '') {
   return null;
 }
 
+/** What the file input for a missing image accepts. */
+export const IMAGE_ACCEPT = '.png,.jpg,.jpeg,.webp,.gif,.avif,.svg,image/*';
+
+/**
+ * The MIME type for an image file, or null when the file is not one.
+ *
+ * Same rule as `fontMime` and for the same reason: the extension decides. A
+ * file the studio cannot name is refused rather than inlined as
+ * `application/octet-stream`, because an unnamed `data:` URI is a broken image
+ * in front of the client — which is the failure this whole route exists to
+ * repair, and repeating it silently would be worse than refusing.
+ * @param {string} name
+ * @param {string} [declared]
+ * @returns {string|null}
+ */
+export function imageMime(name, declared = '') {
+  const ext = String(name || '').toLowerCase().split('.').pop();
+  const table = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+    gif: 'image/gif', avif: 'image/avif', svg: 'image/svg+xml',
+  };
+  if (table[ext]) return table[ext];
+  const d = String(declared || '').toLowerCase();
+  for (const mime of Object.values(table)) if (d === mime) return mime;
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // The registry
 // ---------------------------------------------------------------------------
@@ -846,6 +873,43 @@ export const ACTIONS = [
     },
   },
   {
+    id: 'specimen.supplyMedia', label: 'Supply an image the capture could not bring', group: 'Specimens', palette: false, control: true,
+    mutates: true,
+    sample: (app) => {
+      const specimen = app.proof.specimens.find((x) => (app.services.omittedMedia(x) || []).some((e) => e.restorable))
+        || app.proof.specimens[0];
+      const entry = (app.services.omittedMedia(specimen) || []).find((e) => e.restorable);
+      return { arg: `${specimen ? specimen.id : 'sp_none'}|${entry ? (entry.id || entry.ref) : 'none'}`, element: fakeImageInput('hero-plant.png') };
+    },
+    run: async (app, arg, ctx) => {
+      const [specimenId, target] = String(arg).split('|');
+      const specimen = M.findSpecimen(app.proof, specimenId);
+      const clear = () => { if (ctx.element) ctx.element.value = ''; };
+      if (!specimen) { clear(); return undefined; }
+      const files = ctx.element && ctx.element.files
+        ? await readFiles(ctx.element.files)
+        : await readFiles(await pickFiles({ document: app.document, accept: IMAGE_ACCEPT, multiple: false }));
+      clear();
+      if (!files.length) return undefined;
+      const file = files[0];
+      const mime = imageMime(file.name, file.mime);
+      if (!mime) {
+        app.notify('bad', `“${file.name}” is not an image the artifact can inline. Supply the .png, .jpg, .webp, .gif, .avif or .svg that was on the page.`, { sticky: true });
+        return undefined;
+      }
+      const restored = app.services.restoreOmittedMedia(specimen, target, {
+        name: file.name, bytes: file.bytes, mime,
+      }, { seed: app.doc.seed, proof: app.proof, imageQuality: app.proof.emitOptions.imageQuality });
+      if (!restored.ok) { app.notify('bad', restored.error, { sticky: true }); return undefined; }
+      const left = (app.services.omittedMedia(restored.value) || []).filter((e) => e.restorable).length;
+      const next = app.mutate('Supply a missing image', (doc) => M.replaceSpecimen(doc, restored.value), { scope: 'specimens' });
+      app.notify('ok', left
+        ? `“${file.name}” went back where ${target} stood, with its caption. ${plural(left, 'image')} on this specimen still ${left === 1 ? 'has' : 'have'} no file.`
+        : `“${file.name}” went back where ${target} stood, with its caption. Every image this capture left out now has its file.`);
+      return next;
+    },
+  },
+  {
     id: 'specimen.rawOptIn', label: 'Allow raw HTML for a specimen', group: 'Specimens', palette: false, control: true,
     mutates: true, sample: (app) => ({ arg: (app.proof.specimens[0] || {}).id || 'sp_none', value: true }),
     run: (app, arg, ctx) => {
@@ -1405,7 +1469,7 @@ export const ACTIONS = [
       const returned = reconcileFixAttempts(app, result.value);
       const blocking = result.value.filter((f) => f.severity === 1).length;
       if (returned) {
-        app.notify('warn', `${plural(returned, 'auto-fix')} ran and the finding came back. Those are not offered again — the Rehearse panel names them, and they need a hand edit.`);
+        app.notify('warn', `${plural(returned, 'auto-fix', 'auto-fixes')} ran and ${returned === 1 ? 'the finding came' : 'their findings came'} back. ${returned === 1 ? 'It is' : 'Those are'} not offered again — the Rehearse panel names ${returned === 1 ? 'it' : 'them'}, and ${returned === 1 ? 'it needs' : 'they need'} a hand edit.`);
       }
       // A sweep of a proof with no scenes walked no scenes, and "clean" is a
       // word about what was walked (CRITIQUE-2 C11). The Rehearse panel says the
@@ -1465,6 +1529,10 @@ export const ACTIONS = [
       const fixes = app.services.autoFixes(app.proof, app.ui.sweep.findings);
       const fix = fixes[Number(arg) || 0];
       if (!fix) { app.notify('warn', 'That fix is no longer available — re-run the sweep.'); return undefined; }
+      if (fix.finding && fixExhausted(app, fix.finding.id)) {
+        app.notify('warn', `“${fix.label}” has already been applied to this finding and did not clear it. It is not offered on the panel any more, and running it again would do the same nothing.`);
+        return undefined;
+      }
 
       // CRITIQUE-3 P2. A fix is a pure `(proof) => Proof`, so what it did is
       // knowable before anything is committed: run it, and compare. A fix that
@@ -1520,7 +1588,7 @@ export const ACTIONS = [
       // inert (CRITIQUE-3 P2).
       const live = fixes.filter((fx) => fx.finding && !fixExhausted(app, fx.finding.id));
       if (!live.length) {
-        app.notify('warn', `Every auto-fix on offer has already been applied and none of them changed anything. Auto-fix has done what it can here; the ${plural(fixes.length, 'finding')} left need a hand edit.`, { sticky: true });
+        app.notify('warn', `Every auto-fix on offer has already been applied and none of them changed anything. Auto-fix has done what it can here; the ${plural(fixes.length, 'finding')} left ${fixes.length === 1 ? 'needs' : 'need'} a hand edit.`, { sticky: true });
         return undefined;
       }
 
@@ -1536,7 +1604,7 @@ export const ACTIONS = [
         // against this exact proof and left it as it was, so no number of
         // further clicks will move it.
         for (const fx of live) recordFixAttempt(app, fx, 'no-change');
-        app.notify('warn', `All ${plural(live.length, 'auto-fix')} ran and the proof is unchanged, so nothing was committed. This is as far as auto-fix goes on this proof: the ${plural(findings.filter((f) => f.severity === 1).length, 'blocking finding')} left need a hand edit, and none of these buttons is offered again.`, { sticky: true });
+        app.notify('warn', `All ${plural(live.length, 'auto-fix', 'auto-fixes')} ran and the proof is unchanged, so nothing was committed. This is as far as auto-fix goes on this proof: the ${plural(findings.filter((f) => f.severity === 1).length, 'blocking finding')} left ${findings.filter((f) => f.severity === 1).length === 1 ? 'needs' : 'need'} a hand edit, and none of these buttons is offered again.`, { sticky: true });
         return undefined;
       }
 
@@ -1554,7 +1622,7 @@ export const ACTIONS = [
       });
       for (const fx of live) recordFixAttempt(app, fx, 'applied');
       app.ui.fixes = [...app.ui.fixes, ...live.map((fx) => fx.label)];
-      app.notify('ok', `Applied ${plural(live.length, 'auto-fix')} in one pass, as one undo entry. Run the sweep again (Alt R): anything that comes back will say so rather than offer the same button.`);
+      app.notify('ok', `Applied ${plural(live.length, 'auto-fix', 'auto-fixes')} in one pass, as one undo entry. Run the sweep again (Alt R): anything that comes back will say so rather than offer the same button.`);
       return next;
     },
   },
@@ -1858,6 +1926,36 @@ function addCapture(app, capture, label) {
   if (!built.ok) { app.notify('bad', built.error, { sticky: true }); return; }
   app.select({ specimenId: built.value.id });
   app.mutate(label, (doc) => M.addSpecimen(doc, built.value), { scope: 'specimens' });
+  reportOmittedMedia(app, built.value);
+}
+
+/**
+ * Say, at the moment it happens, that a capture did not bring the pictures.
+ *
+ * L6 holds back a `media` block whose bytes were never captured rather than
+ * emitting a reference to nothing (its D-L6-21, for CRITIQUE-3 P6). That fixed
+ * a severity-1 emit blocker on §6's paste route and moved the failure one step
+ * out: the emit now succeeds and the deck ships without the images, which is
+ * worse than the blocker, because the blocker at least stopped the seller.
+ *
+ * The neighbouring shape to CRITIQUE-3 P2, and worth naming as such: there, a
+ * repair did less than the seller thought; here, a capture did. Both are the
+ * studio's account of the project drifting from the project, and in both the
+ * fix is for the studio to say what actually happened rather than to leave the
+ * seller to infer it from what is missing.
+ *
+ * @param {any} app
+ * @param {any} specimen
+ */
+function reportOmittedMedia(app, specimen) {
+  const omitted = app.services.omittedMedia(specimen) || [];
+  if (!omitted.length) return;
+  const restorable = omitted.filter((e) => e.restorable);
+  const names = omitted.slice(0, 3).map((e) => e.ref).join(', ');
+  app.notify('warn', restorable.length
+    ? `${plural(omitted.length, 'image')} on that page did not come with it — pasted markup carries no bytes — so ${omitted.length === 1 ? 'it was' : 'they were'} left out of the content rather than shown as ${omitted.length === 1 ? 'a broken image' : 'broken images'}: ${names}${omitted.length > 3 ? `, and ${omitted.length - 3} more` : ''}. Specimens → “Images this capture could not bring” has a file picker for each, and each goes back exactly where it stood.`
+    : `${plural(omitted.length, 'image')} on that page ${omitted.length === 1 ? 'is' : 'are'} referenced by a block but ${omitted.length === 1 ? 'has' : 'have'} no file behind ${omitted.length === 1 ? 'it' : 'them'}: ${names}. The rehearsal sweep raises ASSET_MISSING for ${omitted.length === 1 ? 'it' : 'them'}.`,
+    { sticky: true });
 }
 
 
@@ -1898,6 +1996,30 @@ export function fakeFontInput(name) {
       type: 'font/woff2',
       arrayBuffer: async () => new Uint8Array([0x77, 0x4f, 0x46, 0x32, 0, 1, 0, 0]).buffer,
     }],
+  };
+}
+
+/**
+ * A file input holding a small real PNG, for `specimen.supplyMedia`'s sample.
+ *
+ * Unlike the font sample these bytes have to be a real image: L6 captures them
+ * into a `MediaRef` and the emitter inlines them, so a stand-in would exercise
+ * the route without exercising the thing the route is for. This is a 1×1
+ * transparent PNG — the smallest file that is genuinely one.
+ * @param {string} name
+ * @returns {any}
+ */
+export function fakeImageInput(name) {
+  const png = Uint8Array.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+    0x42, 0x60, 0x82,
+  ]);
+  return {
+    value: '',
+    files: [{ name, type: 'image/png', arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) }],
   };
 }
 

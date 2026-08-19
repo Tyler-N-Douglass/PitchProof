@@ -36,7 +36,9 @@ export {
   assertProvenance, judgeLabelStyle, judgeLabelRoom, clipsContent, scaleFactorOf,
   resolveBackground, describeElement, walkWithChain, renditionAppearsIn,
   documentChainPrefix, allScenesOf, nodeText, provenanceFinding, labelOptionFinding,
-  PROVENANCE_LABEL_CLASS, MIN_LABEL_FONT_PX, LABEL_MIN_WIDTH_EM, LABEL_MIN_TRACKING_EM, RENDITION_ATTR,
+  glyphPaint, parseFilter,
+  PROVENANCE_LABEL_CLASS, MIN_LABEL_FONT_PX, LABEL_MIN_WIDTH_EM, LABEL_MIN_TRACKING_EM,
+  LABEL_MAX_BLUR_EM, RENDITION_ATTR,
 } from './provenance.js';
 
 export {

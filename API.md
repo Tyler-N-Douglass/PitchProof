@@ -564,7 +564,28 @@ captureMedia(assets, {imageQuality, maxEdge, idMinter}): MediaRef[]
 detectLocale(doc, url): string|null
 buildSpecimen(capture, {kind?, imageQuality, clock, idMinter}): Specimen
 restoreBlock(specimen, removedEntry): Specimen         // stripping is reversible
+unresolvedMediaRefs(specimen): {ref, caption, position, reason}[]
+restoreOmittedMedia(specimen, target, supply, options): Specimen
+markEdited(specimen, {note, at}): Specimen             // §18.3's only route
 ```
+
+The last three are in this fence rather than in Part 5 because each is the
+**only** route to satisfying a law, and a surface in Part 5 is one
+`lane-conformance.test.mjs` does not require the studio to consume — which is
+how the studio went a whole pass without offering any way to supply a font
+(D-L12-9) and would have gone another without ever telling a seller that a
+pasted page's images did not arrive (D-L12-11).
+
+`unresolvedMediaRefs` and `restoreOmittedMedia`: §6 asks ingest to degrade
+gracefully, and a `media` block whose bytes were never captured is now held out
+of the stream rather than emitted as a reference that refuses the artifact
+(CRITIQUE-3 P6). That trades a blocking failure for a silent one unless a screen
+names what was left out and offers a way to supply it — which is worse, because
+the blocking one at least stopped the seller.
+
+`markEdited`: §18.3 requires the artifact to say when a specimen was edited.
+L11's `ASSET_MISSING` fixer calls it, L8 renders the marker, and nothing else may
+mutate a specimen's blocks without going through it.
 
 ### L7 Recipes — `src/recipe/index.js`
 
@@ -642,15 +663,47 @@ CRITIQUE-2's C1 found 980 of 2547 text boxes disagreeing with the model, the
 worst by 1259px, while every in-lane check passed: the stylesheet and the token
 table agreed with each other and neither had been compared to a browser.
 
-Two elements in the deck are sized by their own words rather than by their row —
-the `inline-flex` provenance pill and the `inline-block` CTA. For those,
-`containerWidthPx` is **the room the element has**, not the box it fills: what a
-longer label, or the same label in another brand's face, would need. The
-rendered box is never wider than the reported number, so §22.2's error falls
-towards a warning that is not needed rather than a truncation nobody sees. Those
-boxes report `fitsContent: true`, so the two meanings of `containerWidthPx` are
-told apart in the data rather than only in this paragraph, and the set is
-asserted in that test so it cannot grow by accident.
+Some boxes are not sized by their row, and for those `containerWidthPx` is **the
+room the element has** rather than the box it fills: what a longer label, or the
+same label in another brand's face, would need. The rendered box is never wider
+than the reported number, so §22.2's error falls towards a warning that is not
+needed rather than a truncation nobody sees. They report `fitsContent: true`
+alongside a `fit` naming which of two reasons applies, so the meanings of
+`containerWidthPx` are told apart in the data rather than only in this
+paragraph, and both inventories are asserted in that test so neither can grow by
+accident.
+
+```ts
+fit?: 'shrink' | 'spill'    // present only where fitsContent is true
+```
+
+**`shrink`** — the box is as wide as its words: the `inline-flex` provenance pill
+and the `inline-block` CTA.
+
+**`spill`** — the box is a **gutter reserved for a mark**, and the mark may be
+painted past its edge into the space the gutter exists to keep clear. The list
+marker is the only one in the deck: `--pp-sc-list-marker-w` is 14/16/18px, and
+`"18."` in Arial at 12px is 16.68px by the model and 16.69px of ink in Chromium —
+so a two-digit ordinal genuinely is wider than its column and **both sides agree
+to a hundredth of a pixel**. The grid's automatic minimum does not expand the
+box, nothing clips, and Chromium's integer `scrollWidth` rounds the 0.68px
+overshoot to 1. The two sides were answering different questions, not disagreeing
+about a number.
+
+The line between the two reasons is worth stating, because "does not clip" is not
+it — almost nothing clips at its own edge, and a headline running 200px across
+the stage is a defect clipped or not. The criterion is **whether the box is a
+gutter the design leaves empty or a frame the design draws**: the marker column
+is an indent for the copy, so a numeral in it is fine; `.pp-stack-index` is a
+filled circle with a radius, so a numeral leaving it is visibly wrong even though
+nothing is cut — and it keeps its container and keeps firing.
+
+**`data-pp-lines="<n>"`** declares that an element's block box is exactly *n* line
+boxes of its own role, and is held to an equality against Chromium's
+`clientHeight`. It exists because `badgeNumber` was measured against the
+`fanSource` slot's 536px column, so no height check on that role could fire at
+all — a role whose height cannot be checked is a hole in a measurement the
+product depends on, whether or not anything is currently lost through it.
 
 **Optional `dir` / `lang` on a block or a rendition (CRITIQUE-2 C8).** §4's
 `ContentBlock` and `Rendition` carry no writing direction, and §9.1 asks
@@ -721,12 +774,26 @@ runPreflight(proof, {breakpoints?, clock, runtimeJs?, runtimeCss?}): Promise<Fin
 RULES: Rule[]                                            // one per FindingCode
 detectOverflow(measurement, brand): Finding[]
 checkContrast(brand): Finding[]
-autoFixes(proof, findings): {finding: Finding, label: string, apply: (proof) => Proof}[]
+autoFixes(proof, findings, {clock?}): {finding: Finding, label: string, apply: (proof) => Proof, describeEdit?: (proof) => string|null}[]
 dryRun(proof, {onPosition}): Promise<{positions: number, findings: Finding[]}>
 severityOf(code): 1|2|3
 ```
 
 Severity is fixed for the codes in `FIXED_SEVERITY` and may not be lowered.
+
+`autoFixes` and `applyAll` take an **optional injected clock** as a last
+argument; the declared two-argument call is unchanged. A fix that changes what
+the client will see records the edit through L6's `markEdited`, which stamps a
+time — so §5's "no wall clock in model construction" reaches the fixers too, and
+a caller that already holds a clock should thread it.
+
+Only one fixer changes content: `ASSET_MISSING` removing a specimen block. The
+audit of the rest is in `docs/decisions/L11-validate.md` (L11-D30) — a colour, a
+face, a beat that reveals nothing, a branch anchor and a budgeting instruction
+are all changes to how the deck is *made*, not to what the room reads.
+`describeEdit(proof)` is the same computation without the mutation, so
+`applyAll` can fold a run of edits into one note naming every change instead of
+appending ten near-identical lines.
 
 ### L12 Studio UI — `src/ui/index.js`
 
@@ -840,10 +907,8 @@ withdraw something another lane depends on.
 | L4 | `brand/color.js` | `colorConfidenceDetail` | §7's low-confidence review surface |
 | L4 | `brand/color.js` | `ContrastSolveError` | `solveRoles` throws it; callers must handle it |
 | L5 | `brand/theme.js` | `assertNoStudioVars` | D11 made mechanical: throws on any `--st-` name in artifact CSS |
-| L6 | `specimen/index.js` | `unresolvedMediaRefs` | L11's `ASSET_MISSING` |
-| L6 | `specimen/index.js` | `restoreOmittedMedia`, `omitUnresolvedMedia` | A `media` block whose bytes were never captured is held out of the stream rather than emitted as a reference that refuses the artifact (CRITIQUE-3 P6). `restoreOmittedMedia` puts it back, in position, when the seller supplies the file |
+| L6 | `specimen/index.js` | `omitUnresolvedMedia` | The capture-time half of CRITIQUE-3 P6; `restoreOmittedMedia` is its inverse and is declared in Part 3 |
 | L6 | `specimen/index.js` | `setRawHtmlOptIn`, `rawFallbackBlocks` | §8's per-specimen raw opt-in |
-| L6 | `specimen/index.js` | `markEdited` | §18.3's "if a specimen was edited, the artifact says so" |
 | L6 | `specimen/index.js` | `inferKind`, `blocksWithTrace`, `restoreAllBlocks` | L12's specimen panel |
 | L7 | `recipe/index.js` | `renderRecipe`, `renderAll`, `RECIPE_TEMPLATES` | **How a caller actually gets renditions out of a recipe.** L12 depends on it |
 | L7 | `recipe/index.js` | `hasPromotionRecord`, `verifyProvenance`, `renditionsRequiringLabel`, `PROMOTION_RECORD_RE` | L10 and L11 must detect a `verified-by-user` claim carrying no promotion record |

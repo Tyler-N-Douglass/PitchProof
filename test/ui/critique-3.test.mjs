@@ -18,6 +18,14 @@
  *     same button: 40 clicks, 232 seconds, the blocking count stuck at 3 from
  *     the seventeenth, `Save the file` never enabled.
  *   - **P11** — L11 published `applyAll` and nothing in the studio called it.
+ *   - **P6's follow-on** — L6 now holds a pasted `media` block out of the
+ *     stream instead of emitting a reference to bytes nobody captured, which
+ *     closed a severity-1 emit blocker on §6's paste route and opened a quieter
+ *     hole: the deck emits cleanly with the product photograph missing. Nothing
+ *     in `src/ui/**` read `mediaOmitted` or called `unresolvedMediaRefs`, so
+ *     nothing said so. It shares P2's shape and not its cause — there a repair
+ *     did less than the seller thought, here a capture did — and the answer is
+ *     the same both times: the studio says what actually happened.
  *
  * So the assertions here are of two kinds. The id ones are read off a proof
  * built by driving the real adapter through the real capture actions, across
@@ -37,6 +45,7 @@ import { PANELS } from '../../src/ui/panels/index.js';
 import { fixAttempt, fixCoverage } from '../../src/ui/gate.js';
 import { newDoc, usedIds } from '../../src/ui/model.js';
 import { ProjectStore, exportProjectJson, importProjectJson, makeRecord } from '../../src/core/storage.js';
+import { fakeImageInput, imageMime } from '../../src/ui/actions.js';
 import { fixtureDoc, fakeServices, makeClock, finding } from '../fixtures/ui/studio-fixture.mjs';
 
 // ---------------------------------------------------------------------------
@@ -733,4 +742,182 @@ test('P11: undoing every auto-fix clears the ledger, so the buttons come back wi
   app.ui.section = 'rehearse';
   assert.match(toHtml(PANELS.rehearse(app)), /data-st-act="rehearse\.autoFix"/,
     'and the button comes back with the proof it was withdrawn against');
+});
+
+
+// ---------------------------------------------------- P6's follow-on (L6) ---
+
+test('the studio says, at capture time, that a pasted page brought no images', async () => {
+  const app = await realApp();
+  paste(app, PAGES[0]);
+
+  const specimen = app.proof.specimens[0];
+  const omitted = app.services.omittedMedia(specimen);
+  assert.equal(omitted.length, 1, 'the page had one image and the paste carried no bytes for it');
+  assert.equal(omitted[0].ref, '/assets/hero-plant.png');
+  assert.equal(omitted[0].restorable, true, 'L6 recorded the position it came from');
+
+  assert.ok(app.ui.notices.some((n) => n.tone === 'warn' && /did not come with it/i.test(n.text)),
+    `a capture that quietly dropped the pictures must say so: ${app.ui.notices.map((n) => n.text).join(' | ')}`);
+  assert.ok(app.ui.notices.some((n) => /hero-plant\.png/.test(n.text)), 'and name which');
+});
+
+test('the specimens panel names every image the capture could not bring, and offers a file for each', async () => {
+  const app = await realApp();
+  paste(app, PAGES[1]);
+  app.select({ specimenId: app.proof.specimens[0].id });
+  app.ui.section = 'specimens';
+
+  const html = toHtml(PANELS.specimens(app));
+  assert.match(html, /Images this capture could not bring/i);
+  assert.match(html, /product-hx400\.png/, 'the reference is named');
+  assert.match(html, /data-st-act="specimen\.supplyMedia"/, 'and there is a way to put it back');
+  assert.match(html, /type="file"/);
+  assert.match(html, /HX-400 shell-and-tube heat exchanger/, 'the caption it will come back with');
+});
+
+test('a specimen that brought all its images says nothing about missing ones', async () => {
+  const app = await fakeApp();
+  const clean = { ...app.proof.specimens[0], mediaOmitted: [], mediaUnresolved: [] };
+  app.mutate('clean', (doc) => ({ ...doc, proof: { ...doc.proof, specimens: [clean, ...doc.proof.specimens.slice(1)] } }));
+  app.select({ specimenId: clean.id });
+  app.ui.section = 'specimens';
+  assert.doesNotMatch(toHtml(PANELS.specimens(app)), /Images this capture could not bring/i,
+    'an empty warning on a clean capture is how a warning stops being read');
+});
+
+test('supplying the file puts the image back where it stood, with its caption, undoably', async () => {
+  const app = await fakeApp();
+  const specimen = app.proof.specimens[0];
+  const entry = app.services.omittedMedia(specimen)[0];
+  assert.ok(entry && entry.restorable);
+  const before = specimen.blocks.length;
+  const depth = app.stack.history().length;
+
+  await app.dispatch('specimen.supplyMedia', `${specimen.id}|${entry.id}`, { element: fakeImageInput('hero-plant.png') });
+
+  const after = app.proof.specimens[0];
+  assert.equal(after.blocks.length, before + 1, 'the block came back');
+  const block = after.blocks[entry.position];
+  assert.equal(block.type, 'media', `it came back at position ${entry.position}`);
+  assert.equal(block.caption, entry.caption, 'with the caption it was taken with');
+  assert.ok((after.media || []).some((m) => m.id === block.ref), 'and the block resolves to a MediaRef');
+  assert.equal(app.services.omittedMedia(after).length, 0, 'and it is off the omitted list');
+  assert.equal(after.edited, false,
+    '§18.3: their picture arriving is not an edit to their page, and the artifact must not claim it was');
+
+  assert.equal(app.stack.history().length, depth + 1);
+  app.stack.undo();
+  assert.equal(app.proof.specimens[0].blocks.length, before, 'and it is undoable like anything else');
+});
+
+test('P1 discipline holds on the restore route: the media id it mints is free in the project', async () => {
+  const app = await fakeApp();
+  const specimen = app.proof.specimens[0];
+  const entry = app.services.omittedMedia(specimen)[0];
+
+  const bad = app.services.restoreOmittedMedia(specimen, entry.id, { name: 'x.png', bytes: new Uint8Array([1]), mime: 'image/png' }, { seed: app.doc.seed });
+  assert.equal(bad.ok, false, 'a second minting site must not be reachable without the project');
+  assert.match(bad.error, /P1/);
+
+  await app.dispatch('specimen.supplyMedia', `${specimen.id}|${entry.id}`, { element: fakeImageInput('hero-plant.png') });
+  assertIdsUnique(app.proof, 'a proof with a supplied image in it');
+});
+
+test('a file that is not an image is refused rather than inlined as an unnamed blob', async () => {
+  const app = await fakeApp();
+  const specimen = app.proof.specimens[0];
+  const entry = app.services.omittedMedia(specimen)[0];
+  const depth = app.stack.history().length;
+
+  await app.dispatch('specimen.supplyMedia', `${specimen.id}|${entry.id}`, {
+    element: { value: '', files: [{ name: 'notes.txt', type: 'text/plain', arrayBuffer: async () => new Uint8Array([1, 2]).buffer }] },
+  });
+
+  assert.equal(app.stack.history().length, depth, 'nothing was committed');
+  assert.ok(app.ui.notices.some((n) => n.tone === 'bad' && /not an image/i.test(n.text)));
+  assert.equal(imageMime('notes.txt', 'text/plain'), null);
+  assert.equal(imageMime('hero.PNG'), 'image/png');
+  assert.equal(imageMime('hero', 'image/webp'), 'image/webp');
+});
+
+test('a block whose ref resolves to nothing is named but offered no picker', async () => {
+  const app = await fakeApp();
+  const specimen = app.proof.specimens[0];
+  const dangling = {
+    ...specimen,
+    mediaOmitted: [],
+    blocks: [...specimen.blocks, { type: 'media', ref: '/assets/gone.png' }],
+  };
+  app.mutate('dangle', (doc) => ({ ...doc, proof: { ...doc.proof, specimens: [dangling, ...doc.proof.specimens.slice(1)] } }));
+  app.select({ specimenId: dangling.id });
+  app.ui.section = 'specimens';
+
+  const entries = app.services.omittedMedia(app.proof.specimens[0]);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].restorable, false, 'there is no recorded position to put it back at');
+
+  const html = toHtml(PANELS.specimens(app));
+  assert.match(html, /gone\.png/, 'it is still named — silence is what this whole surface is against');
+  assert.doesNotMatch(html, /data-st-act="specimen\.supplyMedia"/, 'but a picker that cannot work is not offered');
+  assert.match(html, /ASSET_MISSING/, 'and the honest route is named');
+});
+
+test('the emit panel names the images the file will not contain, beside “every check has passed”', async () => {
+  const app = await realApp();
+  for (const html of PAGES) paste(app, html);
+  app.dispatch('scene.add', 'quoteCard');
+  app.ui.section = 'emit';
+
+  const html = toHtml(PANELS.emit(app));
+  assert.match(html, /Images this file will not contain · 3/);
+  assert.match(html, /hero-plant\.png/);
+  assert.match(html, /their own pictures missing/i,
+    'the consequence is stated in terms of what the client sees, not in terms of a count');
+  assert.match(html, /have no file behind them/,
+    'and it reads as a sentence: three images “has no file behind it” is how a working tool reads as a broken one');
+  assert.match(html, /data-st-act="app\.section" data-st-arg="specimens"|data-st-arg="specimens"/,
+    'with a way to the screen that fixes it');
+});
+
+test('a proof whose captures brought everything says nothing on the emit panel about omissions', async () => {
+  const app = await fakeApp();
+  app.mutate('clean', (doc) => ({
+    ...doc,
+    proof: { ...doc.proof, specimens: doc.proof.specimens.map((s) => ({ ...s, mediaOmitted: [], mediaUnresolved: [] })) },
+  }));
+  app.ui.section = 'emit';
+  assert.doesNotMatch(toHtml(PANELS.emit(app)), /Images this file will not contain/);
+});
+
+test('P2: opening another project does not carry one project\'s dead buttons into it', async () => {
+  const app = await fakeApp({
+    findings: [finding({ id: 'fd_inert', code: 'ASSET_MISSING', severity: 1, locus: { specimenId: 'sp_x' }, autoFixAvailable: true })],
+  });
+  app.services.autoFixes = inertFixes();
+  await app.dispatch('rehearse.sweep');
+  await app.dispatch('rehearse.autoFix', '0');
+  assert.equal(fixAttempt(app, 'fd_inert').outcome, 'no-change');
+
+  const saved = await app.saveNow();
+  assert.ok(saved.ok, saved.ok ? '' : saved.error);
+  const loaded = await app.store.load(app.doc.id);
+  app.loadRecord(loaded.value);
+  assert.equal(fixAttempt(app, 'fd_inert'), null, 'the ledger belongs to a sweep, and the sweep was thrown away');
+});
+
+test('P2: a fix already proven inert refuses even if its control is dispatched again', async () => {
+  const app = await fakeApp({
+    findings: [finding({ id: 'fd_inert', code: 'ASSET_MISSING', severity: 1, locus: { specimenId: 'sp_x' }, autoFixAvailable: true })],
+  });
+  app.services.autoFixes = inertFixes();
+  await app.dispatch('rehearse.sweep');
+  await app.dispatch('rehearse.autoFix', '0');
+  const depth = app.stack.history().length;
+  const notices = app.ui.notices.length;
+
+  await app.dispatch('rehearse.autoFix', '0');
+  assert.equal(app.stack.history().length, depth);
+  assert.ok(app.ui.notices.length > notices);
+  assert.ok(app.ui.notices.some((n) => /already been applied to this finding/i.test(n.text)));
 });

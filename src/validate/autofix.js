@@ -29,6 +29,15 @@
  *    its consequence. A brand face that cannot be embedded stays unembeddable;
  *    what the fix changes is which face renders in its place.
  *
+ * **A fix that changes what the room will see says so** (§18.3, L11-D30). One
+ * fix in this module edits the prospect's own material — `ASSET_MISSING` removes
+ * a block from a specimen — and it records the removal through L6's
+ * `markEdited`, which is the only writer of `Specimen.edited` / `editNotes`. The
+ * audit that put every other fix on the other side of that line is L11-D30; the
+ * short version is that a colour, a fallback stack, a branch anchor, an emit
+ * option and a beat that reveals nothing all change how the deck looks or moves
+ * without removing a word or a picture from it.
+ *
  * Five codes are deliberately **not** auto-fixable, and the reasons matter:
  *
  *  - `TEXT_OVERFLOW` — the fix is to rewrite the sentence or change the type
@@ -49,6 +58,7 @@
 import { QUALITY_STEPS, CONTRAST_AA_BODY } from '../core/contracts.js';
 import { replaceCommand } from '../core/command.js';
 import { contrastRatio, deriveForContrast, hexToOklch } from './lane-brand.js';
+import { markEdited } from './lane-specimen.js';
 import { resolveBoxFace } from './overflow.js';
 
 /**
@@ -70,10 +80,154 @@ function nextQualityDown(quality) {
   return i > 0 ? QUALITY_STEPS[i - 1] : null;
 }
 
+// ---------------------------------------------------------------------------
+// §18.3 — recording an edit to the prospect's own content
+// ---------------------------------------------------------------------------
+
+/** Curly quotes, because these strings are read by a client, not parsed. */
+function quote(text, limit = 70) {
+  const flat = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  return `“${flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat}”`;
+}
+
+/**
+ * Where a block stood, said the way a reader locates content rather than the
+ * way an array does. The nearest heading above it is what someone re-reading
+ * the page would look for; a position is the fallback when there is no heading.
+ * @param {any[]} blocks   the block list *before* the removal
+ * @param {number} index
+ * @returns {string}
+ */
+function blockLocation(blocks, index) {
+  for (let i = index - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b && b.type === 'heading' && typeof b.text === 'string' && b.text.trim()) {
+      return `under the heading ${quote(b.text)}`;
+    }
+  }
+  return `at position ${index + 1} of ${blocks.length}`;
+}
+
+/**
+ * The `editNotes` line for one or more removals, in the words §18.3 exists for.
+ *
+ * "Block removed" is true and useless. What a client reading the artifact is
+ * owed is *what* left the page and *why it had to*: this removal is not an
+ * editorial cut, it is a picture whose bytes the capture never carried, and the
+ * two deserve different sentences. Every removal this module can make is the
+ * second kind, so that is the sentence it writes; the entry carries its `kind`
+ * so a later kind of edit has somewhere to say something else.
+ *
+ * @param {{kind: string, ref: string, caption: string|null, where: string}[]} entries
+ * @returns {string}
+ */
+function formatEditNote(entries) {
+  const described = entries.map((e) => {
+    const caption = e.caption ? ` (captioned ${quote(e.caption)})` : '';
+    return `${quote(e.ref, 100)}${caption}, ${e.where}`;
+  });
+  if (described.length === 1) {
+    return `Removed an image — ${described[0]} — during rehearsal: no media in this project carries that reference, `
+      + 'so it would have shown to the room as a broken image. Everything else on the page is as it was captured.';
+  }
+  return `Removed ${described.length} images during rehearsal, because no media in this project carries their references `
+    + `and each would have shown to the room as a broken image: ${described.join('; ')}. `
+    + 'Everything else on the page is as it was captured.';
+}
+
+/**
+ * Which block the finding is about, in the proof as it stands *now*.
+ *
+ * The finding carries the index it saw. An earlier fix in the same `applyAll`
+ * pass may have removed a block above it, so the index alone is not enough:
+ * before this, the second of two removals on one specimen found a stranger at
+ * `blockIndex`, declined, and returned the proof unchanged — while the batch
+ * still reported both as applied. When the index no longer names the block, one
+ * unambiguous block with the same dangling ref is still the block the finding
+ * meant; two are not, and it declines rather than guess.
+ *
+ * @param {any[]} blocks
+ * @param {{blockIndex: number, ref: string}} d
+ * @returns {number} the index to remove, or -1
+ */
+function danglingBlockIndex(blocks, d) {
+  const matches = (b) => Boolean(b) && b.type === 'media' && b.ref === d.ref;
+  if (matches(blocks[d.blockIndex])) return d.blockIndex;
+  /** @type {number[]} */
+  const found = [];
+  blocks.forEach((b, i) => { if (matches(b)) found.push(i); });
+  return found.length === 1 ? found[0] : -1;
+}
+
+/**
+ * Remove the dangling media block, and say what was removed when the owner is a
+ * specimen. Split out so `apply` and `describeEdit` cannot disagree: both call
+ * this, on the same proof, and one is the other's answer.
+ *
+ * @param {any} current
+ * @param {any} d   the finding's detail
+ * @returns {{proof: any, edit: {specimenId: string, entry: any}|null}}
+ */
+function removeDanglingMedia(current, d) {
+  const next = clone(current);
+  const collection = d.ownerKind === 'specimen' ? 'specimens' : 'renditions';
+  const owner = (next[collection] || []).find((o) => o && o.id === d.ownerId);
+  if (!owner || !Array.isArray(owner.blocks)) return { proof: next, edit: null };
+  const at = danglingBlockIndex(owner.blocks, d);
+  if (at < 0) return { proof: next, edit: null };
+  const block = owner.blocks[at];
+  const entry = {
+    kind: 'media-block-removed',
+    ref: String(block.ref),
+    caption: typeof block.caption === 'string' && block.caption.trim() ? block.caption : null,
+    where: blockLocation(owner.blocks, at),
+  };
+  owner.blocks.splice(at, 1);
+  return { proof: next, edit: d.ownerKind === 'specimen' ? { specimenId: owner.id, entry } : null };
+}
+
+/**
+ * Record the edit on the specimen, through the lane that owns the field.
+ * `markEdited` also recomputes `wordCount`, which the old splice left stale.
+ * @param {any} next
+ * @param {{specimenId: string, entry: any}} edit
+ * @param {string|null} at
+ * @returns {any}
+ */
+function recordSpecimenEdit(next, edit, at) {
+  const list = next.specimens || [];
+  const i = list.findIndex((s) => s && s.id === edit.specimenId);
+  if (i < 0) return next;
+  list[i] = markEdited(list[i], { note: formatEditNote([edit.entry]), at: at || undefined });
+  return next;
+}
+
+/**
+ * True when a rendition is the tool's own draft, and therefore something the
+ * tool may edit on its own initiative.
+ *
+ * `client-supplied` is the prospect's own material by declaration and
+ * `verified-by-user` is material a person signed off on — the promotion record
+ * signs the identity of the rendition, not its blocks, so a splice would leave
+ * a sign-off standing over content nobody signed. §4 gives `Rendition` no
+ * `edited` / `editNotes` (dispute #4 won those for `Specimen` only), so there is
+ * nowhere to say either thing happened. The fix declines, the finding stands and
+ * blocks, and the removal stays the seller's own edit (L11-D30).
+ *
+ * @param {any} proof
+ * @param {string} renditionId
+ * @returns {boolean}
+ */
+export function renditionIsToolDraft(proof, renditionId) {
+  const rendition = ((proof && proof.renditions) || []).find((r) => r && r.id === renditionId);
+  if (!rendition) return false;
+  return rendition.provenance !== 'client-supplied' && rendition.provenance !== 'verified-by-user';
+}
+
 /**
  * Every fixer, keyed by finding code. A fixer returns `{label, apply}` or null
  * when this particular finding cannot be fixed safely.
- * @type {Record<string, (proof: any, finding: any) => {label: string, apply: (proof: any) => any}|null>}
+ * @type {Record<string, (proof: any, finding: any, ctx?: {clock?: () => string}) => {label: string, apply: (proof: any) => any}|null>}
  */
 const FIXERS = {
   CONTRAST_FAIL(proof, finding) {
@@ -138,21 +292,26 @@ const FIXERS = {
     return FIXERS.ASSET_OVERSIZE(proof, finding);
   },
 
-  ASSET_MISSING(proof, finding) {
+  ASSET_MISSING(proof, finding, ctx) {
     const d = finding.detail || {};
     if (d.ownerKind !== 'specimen' && d.ownerKind !== 'rendition') return null;
     if (!Number.isInteger(d.blockIndex)) return null;
-    const collection = d.ownerKind === 'specimen' ? 'specimens' : 'renditions';
+    if (d.ownerKind === 'rendition' && !renditionIsToolDraft(proof, d.ownerId)) return null;
+    const clock = ctx && typeof ctx.clock === 'function' ? ctx.clock : null;
     return {
       label: `Remove the block referencing missing media "${d.ref}"`,
+      // The only fix in this module that edits what the room will see. §18.3:
+      // "if a specimen was edited, the artifact says so" — so the removal and
+      // the record of it are one indivisible step, and `markEdited` is the
+      // writer (L11-D30). `describeEdit` is the same computation without the
+      // mutation, so `applyAll` can fold a batch of these into one note that
+      // says what happened rather than ten that each say a fragment of it.
+      describeEdit(current) {
+        return removeDanglingMedia(current, d).edit;
+      },
       apply(current) {
-        const next = clone(current);
-        const owner = (next[collection] || []).find((o) => o.id === d.ownerId);
-        if (!owner || !Array.isArray(owner.blocks)) return next;
-        const block = owner.blocks[d.blockIndex];
-        if (!block || block.type !== 'media' || block.ref !== d.ref) return next;
-        owner.blocks.splice(d.blockIndex, 1);
-        return next;
+        const { proof: next, edit } = removeDanglingMedia(current, d);
+        return edit ? recordSpecimenEdit(next, edit, clock ? clock() : null) : next;
       },
     };
   },
@@ -328,11 +487,19 @@ const FIXERS = {
  * still decline — the two agree by construction because the rule computes
  * `autoFixAvailable` from the same conditions the fixer checks.
  *
+ * `options.clock` is the §5 injected clock, and it is optional here in a way it
+ * is not elsewhere: the only thing it timestamps is the `editNotes` line a
+ * content-changing fix writes (§18.3), and a note without a time still says what
+ * changed and why. A caller that has a clock should pass it — the studio's
+ * `services.autoFixes` is the one that does.
+ *
  * @param {import('../core/contracts.d.ts').Proof} proof
  * @param {import('../core/contracts.d.ts').Finding[]} findings
+ * @param {{clock?: () => string}} [options]
  * @returns {{finding: any, label: string, apply: (proof: any) => any}[]}
  */
-export function autoFixes(proof, findings) {
+export function autoFixes(proof, findings, options = {}) {
+  const ctx = { clock: typeof options.clock === 'function' ? options.clock : undefined };
   /** @type {{finding: any, label: string, apply: (proof: any) => any}[]} */
   const out = [];
   for (const finding of findings || []) {
@@ -341,7 +508,7 @@ export function autoFixes(proof, findings) {
     if (!fixer) continue;
     let fix = null;
     try {
-      fix = fixer(proof, finding);
+      fix = fixer(proof, finding, ctx);
     } catch (e) {
       // A fixer that cannot compute its fix offers none. It never half-applies:
       // `apply` has not run at this point, and the proof is untouched either way.
@@ -352,6 +519,11 @@ export function autoFixes(proof, findings) {
       finding,
       label: fix.label,
       apply: fix.apply,
+      // Present only on a fix that changes what the room will see: it answers
+      // "what would this remove, from the proof as it stands now" without
+      // removing it, which is what lets `applyAll` write one honest note for a
+      // batch instead of one per click.
+      ...(typeof fix.describeEdit === 'function' ? { describeEdit: fix.describeEdit } : {}),
       // 'resolves' — re-running preflight on the fixed proof no longer reports
       // this finding. 'plan' — the edit instructs the emitter, and the finding
       // clears when the emitter acts on it. Nothing else is legal.
@@ -386,14 +558,73 @@ export function autoFixCommand(proof, fix) {
 /**
  * Apply a list of fixes in order, threading the proof through each. Returned as
  * a new proof; the input is untouched.
+ *
+ * **Ten fixes are one action, and the artifact should read like one.** Each fix
+ * records its own §18.3 edit when applied alone, because it must — the studio
+ * calls `fix.apply` directly for a single click. Applied together, that appends
+ * one `editNotes` line per removal to the same specimen, and a client reading
+ * ten near-identical sentences learns less than they would from one. So this
+ * folds them: every note the batch added to a specimen is replaced by a single
+ * note naming every image that left and why, written through the same
+ * `markEdited` that wrote the ones it replaces. Nothing is dropped — the fold is
+ * a rewrite of the batch's own tail, and it is skipped entirely if that tail is
+ * not exactly what this pass appended.
+ *
  * @param {any} proof
- * @param {{apply: (proof: any) => any}[]} fixes
+ * @param {{apply: (proof: any) => any, describeEdit?: (proof: any) => any}[]} fixes
+ * @param {{clock?: () => string}} [options]
  * @returns {any}
  */
-export function applyAll(proof, fixes) {
+export function applyAll(proof, fixes, options = {}) {
+  const clock = typeof options.clock === 'function' ? options.clock : null;
+  /** @type {Map<string, any[]>} specimen id → the entries this pass removed */
+  const batched = new Map();
   let current = proof;
-  for (const fix of fixes || []) current = fix.apply(current);
-  return current;
+  for (const fix of fixes || []) {
+    // Described against the proof this fix is about to be handed, so what it
+    // reports and what it does are the same computation on the same input. A
+    // description that cannot be computed costs the fold, not the fix: `apply`
+    // writes its own note either way, so the failure mode is N honest notes
+    // rather than one, and never a note for a removal that did not happen.
+    let edit = null;
+    try {
+      edit = typeof fix.describeEdit === 'function' ? fix.describeEdit(current) : null;
+    } catch { edit = null; }
+    current = fix.apply(current);
+    if (!edit || !edit.specimenId) continue;
+    const list = batched.get(edit.specimenId) || [];
+    list.push(edit.entry);
+    batched.set(edit.specimenId, list);
+  }
+  return foldBatchedEditNotes(proof, current, batched, clock ? clock() : null);
+}
+
+/**
+ * Replace the run of notes a batch appended to one specimen with a single note.
+ * @param {any} before   the proof the batch started from
+ * @param {any} after    the proof it produced
+ * @param {Map<string, any[]>} batched
+ * @param {string|null} at
+ * @returns {any}
+ */
+function foldBatchedEditNotes(before, after, batched, at) {
+  for (const [specimenId, entries] of batched) {
+    if (entries.length < 2) continue;
+    const original = ((before.specimens || []).find((s) => s && s.id === specimenId) || {}).editNotes;
+    const baseline = Array.isArray(original) ? original.length : 0;
+    const list = after.specimens || [];
+    const i = list.findIndex((s) => s && s.id === specimenId);
+    if (i < 0) continue;
+    const notes = Array.isArray(list[i].editNotes) ? list[i].editNotes : [];
+    // Anything other than exactly this pass's own notes on the end, and the fold
+    // has lost track of what it is rewriting: leave every note standing.
+    if (notes.length !== baseline + entries.length) continue;
+    list[i] = markEdited(
+      { ...list[i], editNotes: notes.slice(0, baseline) },
+      { note: formatEditNote(entries), at: at || undefined },
+    );
+  }
+  return after;
 }
 
 /** Codes this module can fix, for the studio's affordances and for the tests. */

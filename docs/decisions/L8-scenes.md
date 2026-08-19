@@ -936,3 +936,156 @@ positives), unchanged by this pass and reproducing L8-D9's number now that
 `test/core/text-metrics-breaks.test.mjs` holds `/` out of `BREAK_AFTER`. The one
 miss is the same `sm` headline as before: a two-line clamp that overflows its
 box by 25px vertically.
+
+---
+
+## L8-31 — Decoration stays in the measured population, and says why it fits
+
+**From:** two findings that are one question. The list marker (`deco`) was
+reported as overflowing its column and Chromium disagreed — 18 boxes, `sm` and
+`md`, and a failing precision assertion in L11's `overflow-recall.test.mjs`. The
+badge numeral (`badgeNumber`) was measured against the wrong box, recorded in
+`DEFERRED.md`: `measureScene` gave it the `fanSource` slot's 536px height rather
+than its own 40px line, so no height check on the role could fire at all.
+
+**Unsettled by:** §22.2 says text overflow "makes a proof look amateur in front
+of a CMO" and is about the *client's copy*. Nothing says whether a bullet or a
+badge numeral is in the population at all.
+
+### What the browser actually does
+
+Established before anything was changed, because two of the three candidate
+explanations would have led to a different fix.
+
+The model's advance is right. `"18."` in Arial at 12px measures **16.68px**; the
+ink Chromium draws is **16.69px**. At `sm` it is 15.29 against 15.30, at `lg`
+18.07 against 18.08. The `--pp-sc-list-marker-w` track is 14/16/18px, so a
+two-digit ordinal is genuinely wider than its column and both sides say so to
+within a hundredth of a pixel. Nothing here is a metrics defect and nothing here
+is a stale token.
+
+What the marker's box does is the part neither side had written down:
+
+```
+md  "18."   clientW 16   scrollW 17   rect 16   ink 16.69   overflow visible   min-width auto
+sm  "18."   clientW 14   scrollW 15   rect 14   ink 15.30   overflow visible
+lg  "18."   clientW 18   scrollW 18   rect 18   ink 18.08   overflow visible
+```
+
+The element's box stays exactly the track — it is not expanded by the grid's
+automatic minimum — and the numeral is painted in full past its edge, into the
+gutter the track exists to reserve. Nothing clips it. Chromium's integer
+`scrollWidth` rounds the 0.68px overshoot to 1, which is why L11's `> 1` predicate
+counts the box as fitting and the model counted it as overflowing: the two were
+answering different questions, not disagreeing about a number.
+
+The badge is the same shape on the other axis. `.pp-fan-count-number` is a block
+in normal flow, so its box is its own line — 28/40/52px, exactly what Chromium
+reports as `clientHeight` — and the numeral's ink stands 2–3px proud of it with
+`overflow: visible` and nothing lost.
+
+### Decision
+
+**Both boxes stay in the measured population.** Excluding a role is how a blind
+spot is built, and CRITIQUE-3's P3 is about exactly that: the detector's
+population is defined by the thing being measured, so anything left out is
+invisible forever. "It is only decoration" is an argument for measuring it with
+the right box, not for not measuring it.
+
+**The marker is reported as fitting, because the extent at which its content is
+lost is not its own box.** `data-pp-fit` grows a second reason:
+
+- `shrink` — the element is as wide as its words (the provenance pill, the CTA).
+  Unchanged; L8-28 is the record.
+- `spill` — the element's box is a **gutter reserved for a mark**: the stylesheet
+  paints nothing at its edge and clips nothing there, so a mark wider than the
+  gutter is drawn in full in space the design already leaves empty. The reported
+  `containerWidthPx` is the room the containing box gives it, and is a bound.
+
+Both set `fitsContent: true`, which is the field that already tells the two
+meanings of `containerWidthPx` apart. The list marker is the only `spill` box in
+the deck and the inventory is asserted per reason, so it cannot grow by
+accident.
+
+**The badge is measured against its own line box.** A new `data-pp-lines="<n>"`
+says the element's block box is exactly n line boxes of its own role; for
+`badgeNumber` that is one. The height axis now has a box to fire against where
+before it had a 536px column that no content could ever exceed.
+
+### Why the marker is a bound and the rail badge is not
+
+`spill` is not "does not clip". Almost nothing in the deck clips at its own edge,
+and a headline running 200px across the stage is a §22.2 defect whether it is
+clipped or not. The criterion is narrower: **is the box a gutter the design
+leaves empty, or a frame the design draws?**
+
+- The list-marker column is a gutter. It is the indent the *copy* is set at;
+  nothing is painted at its edge, and a numeral 0.68px wider than it lands in
+  space no one is looking at. Reported as fitting.
+- `.pp-stack-index` is a frame — a filled circle with a radius and a background.
+  A numeral leaving it is visibly wrong even though nothing is cut. It keeps its
+  `stack-rail-w` container and keeps firing. Deliberately not `spill`.
+- `indexNumber` fills a declared geometry slot whose width the row's other track
+  is derived from, so it stays an equality the browser check holds it to.
+
+### The claim is checked, not asserted
+
+This is the part that keeps it from being an excuse.
+`test/scene/geometry-browser.test.mjs` gained a test that, for every `spill` run
+at every breakpoint, in Chromium:
+
+1. the gutter is still the token the stylesheet declares — the mark's own box
+   width equals `--pp-sc-list-marker-w`, so taking the box out of the detector's
+   arithmetic does not take CRITIQUE-2 C1's number out of this file's;
+2. nothing cuts the overshoot: the element does not clip its own mark, and where
+   an ancestor clips, the ink sits inside it. Checked per axis and only on an
+   axis where the mark's own box is already inside the clipper — a list running
+   past the foot of the stage has its last markers cut along with the copy beside
+   them, which is the stage's height being short and is reported on that copy;
+3. the ink stays inside the room the model reports, so a mark that outgrew its
+   room — painting over the copy beside it — fails here rather than passing as
+   "nothing is lost";
+4. and at least one mark in the run has to actually be wider than its own gutter,
+   or the test says so rather than passing vacuously. The shared fixture's only
+   list is five unordered items whose bullet is 4px in a 14px column, so this
+   file carries its own eighteen-step ordered checklist to make the case exist.
+
+The `data-pp-lines` height is checked as an **equality** against Chromium's
+`clientHeight`, the same contract every unfitted width is held to, and the set of
+roles declaring it is asserted. If a badge ever needed two lines the browser
+would draw 80px against the model's 40 and that test fails — which is the right
+outcome: the declaration would still be describing the design, and the layout
+would be the thing that had broken.
+
+### What it cost and what it bought
+
+Nothing was widened to make a number come out. The marker track is the same
+14/16/18px it was; the tokens, the advances and the stylesheet are untouched.
+
+Measured in Chromium over the freshly emitted corpus artifact, at `sm`/`md`/`lg`,
+across every reachable position of the spine and all four branches:
+
+```
+boxes measured 4089    TEXT_OVERFLOW findings 150
+recall, boxes Chromium actually cuts    150/151 = 0.9934
+recall, all boxes Chromium reports not fitting  150/159 = 0.9434
+precision                               150/150 = 1.0000
+```
+
+The residual is nine boxes and is entirely accounted for:
+
+- one is C1's recorded residual, the `sm` headline `"HX-400 shell-and-tube heat
+  exchanger — Northwind Industrial"`, clamped to two lines where Chromium draws
+  three. Still a `src/core/text-metrics.js` limit against a rasteriser, still not
+  bought back by widening a band.
+- eight are `badgeNumber` ink standing 2–3px proud of its line box, `overflow:
+  visible`, nothing cut. They are counted in the "not fitting" population and
+  excluded from the "actually cuts" one, which is the difference between the two
+  figures. Note that this is now the *ink* against a 40px box the model states
+  and the browser confirms, not against a 536px column nobody could exceed — the
+  hole `DEFERRED.md` recorded is closed, and what is left is a rasteriser's
+  ascender, which no line-box model reports.
+
+L11 filters nothing by role. The precision assertion holds because the
+measurement says something true about the box, not because its consumer drops a
+population.

@@ -61,6 +61,69 @@ test('degradation is monotonic in importance rank (§17.10)', () => {
   }
 });
 
+test('the invariant is about pixels, and it holds however the codec behaves (P7)', () => {
+  // `steps` is a reading of the scale, so this is the same statement as the one
+  // above — but stated on the thing that matters (how much of the picture is
+  // left) and over every budget rather than one. The clause about resampling is
+  // not a let-out: an asset the codec cannot make smaller has given up nothing,
+  // so there is nothing to order it by, and its line says "re-encoded
+  // losslessly" rather than claiming a resample it did not do.
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 220 });
+  const total = assetTotal(proof);
+  for (const fraction of [0.9, 0.7, 0.5, 0.35, 0.2]) {
+    const result = budgetAssets(proof, Math.round(total * fraction), { renderScene: sceneRenderer(proof) });
+    const resampled = result.plan.filter((l) => l.to.w < l.from.w).sort((a, b) => a.rank - b.rank);
+    for (let i = 1; i < resampled.length; i++) {
+      assert.ok(
+        resampled[i].scale <= resampled[i - 1].scale,
+        `budget ${fraction}: rank ${resampled[i].rank} kept ${resampled[i].scale} of its linear size `
+        + `while the more important rank ${resampled[i - 1].rank} kept only ${resampled[i - 1].scale}`,
+      );
+      assert.ok(resampled[i].steps >= resampled[i - 1].steps, `budget ${fraction}: steps disagree with scale`);
+    }
+    for (const line of result.plan) {
+      assert.ok(line.scale > 0 && line.scale <= 1, `${line.assetId}: scale ${line.scale} is not a scale`);
+      assert.equal(line.steps === 0, line.scale === 1, `${line.assetId}: steps 0 must mean, and only mean, that no pixel was given up`);
+      if (line.scale === 1) assert.equal(line.to.w, line.from.w, `${line.assetId}: scale 1 must not have resampled`);
+    }
+  }
+});
+
+test('the budgeter lands near the budget instead of far under it (P7)', () => {
+  // The finding: to shed 7,975 bytes the old allocator threw away 378,857, and
+  // returned the identical file at every budget across a 25% range. Both halves
+  // are asserted here — the overshoot is bounded, and different budgets produce
+  // genuinely different results.
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 240 });
+  const total = assetTotal(proof);
+  /** @type {string[]} */
+  const shapes = [];
+  for (const fraction of [0.98, 0.95, 0.9, 0.8, 0.6]) {
+    const budget = Math.round(total * fraction);
+    const result = budgetAssets(proof, budget, { renderScene: sceneRenderer(proof) });
+    assert.equal(result.fits, true, `budget ${fraction} was not met`);
+
+    const after = assetTotal(result.proof);
+    const needed = total - budget;
+    const given = total - after;
+    assert.ok(given >= needed, `budget ${fraction}: gave up ${given} bytes against a need of ${needed}`);
+    // Twice the need, plus one 8KB allowance for a floor nothing can search
+    // past: an image's dimensions are whole pixels, and on these 120–240px
+    // fixtures one pixel of width is a step of several thousand bytes, because
+    // the pattern they carry compresses very differently at 239px than at 240.
+    // On a real 1.6MP photograph — where a pixel is a pixel — the same
+    // allocator lands within 1.1x of the need at every budget the critic chose.
+    assert.ok(
+      given <= needed * 2 + 8192,
+      `budget ${fraction}: needed ${needed} bytes and threw away ${given} — ${(given / needed).toFixed(1)}x more than asked`,
+    );
+    shapes.push(result.plan.map((l) => `${l.assetId}:${l.to.w}x${l.to.h}`).join('|'));
+  }
+  assert.equal(new Set(shapes).size, shapes.length, `the same file came back at different budgets:\n  ${shapes.join('\n  ')}`);
+});
+
 test('the reported saving equals the actual byte delta, exactly (§17.10)', () => {
   registerTestLayouts();
   const proof = emitProof({ imageEdge: 200 });
@@ -614,6 +677,103 @@ test('a payload the document never writes out is reserve, not a line item (C2)',
   assert.equal(footprint.reserveBytes, utf8Length(html));
   assert.equal(footprint.inPayload.length, 1);
   assert.equal(footprint.byAssetId.get('hidden'), 0);
+});
+
+// --------------------------------------------------------------------- P4
+//
+// The ladder reaches images and nothing else. When the overage is something
+// else — an embedded font, the runtime bundle, the model payload — a refusal
+// that names only images is pointing at the smallest object in the room, and
+// the pictures degraded on the way there were spent for nothing.
+
+test('a budget the reserve alone cannot meet degrades nothing (P4)', () => {
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 200 });
+  const total = assetTotal(proof);
+  // A reserve larger than the whole budget: no image can help.
+  const result = budgetAssets(proof, 100_000, { reserveBytes: 400_000, renderScene: sceneRenderer(proof) });
+
+  assert.deepEqual(result.plan, [], 'no image may be spent on a budget that cannot be met');
+  assert.equal(result.proof, proof, 'the prospect\'s pictures must come back exactly as they arrived');
+  assert.equal(result.fits, false);
+  assert.equal(result.unreachable, true);
+  assert.match(result.reason, /before a single image/);
+  assert.equal(assetTotal(result.proof), total, 'not one byte of picture was given up');
+});
+
+test('a budget no amount of degradation could reach degrades nothing either (P4)', () => {
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 200 });
+  const total = assetTotal(proof);
+  // Reachable arithmetic — the reserve fits — but the floor of the ladder is
+  // still over the line. Taking every picture to 15% and refusing anyway would
+  // have cost the seller their images and bought nothing.
+  const result = budgetAssets(proof, 4_000, { renderScene: sceneRenderer(proof) });
+  assert.deepEqual(result.plan, []);
+  assert.equal(result.unreachable, true);
+  assert.equal(result.fits, false);
+  assert.match(result.reason, /of its linear size/);
+  assert.equal(assetTotal(result.proof), total);
+});
+
+test('the refusal names the largest thing in the file, not the smallest (P4)', async () => {
+  registerTestLayouts();
+  // 400KB of embedded font — the shape of the finding: a licence-asserted face
+  // attached through the studio's own control, on a face the brand marks
+  // embeddable, and a budget below what the document costs without any images.
+  const base = emitProof({ imageEdge: 64 });
+  const proof = {
+    ...base,
+    brand: {
+      ...base.brand,
+      faces: [
+        { family: 'Sohne', fallbackStack: ['Sohne', 'Arial', 'sans-serif'], weightsSeen: [400], role: 'body', metricDelta: null, embeddable: true },
+        ...base.brand.faces,
+      ],
+    },
+  };
+  const fonts = [300, 400, 500, 700].map((weight) => ({
+    family: 'Sohne', weight, style: 'normal', licenseAsserted: true,
+    dataUri: `data:font/woff2;base64,${'A'.repeat(100_000)}`,
+  }));
+
+  const generous = await emit(proof, { maxBytes: 50_000_000 }, { ...budgetDeps, fonts });
+  assert.equal(generous.ok, true, generous.ok ? '' : generous.error);
+  const fontBytes = generous.value.budget.fixedCost.find((c) => c.name === 'embedded fonts');
+  assert.ok(fontBytes, 'the census must account for the embedded font');
+  assert.ok(fontBytes.bytes > 400_000, `the font is ${fontBytes.bytes} bytes in the census`);
+  assert.match(fontBytes.detail, /4 faces: Sohne/);
+
+  // The census is a decomposition of the reserve, not a set of guesses at it.
+  const censusTotal = generous.value.budget.fixedCost.reduce((n, c) => n + c.bytes, 0);
+  assert.equal(censusTotal, generous.value.budget.reserveBytes, 'the census must account for every reserve byte, exactly');
+  assert.equal(
+    generous.value.budget.reserveBytes + generous.value.budget.assetBytes, generous.value.bytes,
+    'and the reserve plus the assets must be the file',
+  );
+
+  const refused = await emit(proof, { maxBytes: 420_000 }, { ...budgetDeps, fonts });
+  assert.equal(refused.ok, false, 'a budget under the fixed cost must be refused');
+  const finding = refused.detail.findings.find((f) => f.code === 'SIZE_BUDGET_EXCEEDED');
+  assert.ok(finding, 'no SIZE_BUDGET_EXCEEDED was raised');
+  assert.match(finding.message, /embedded fonts \d+ bytes/, 'the refusal must name the font and its size');
+  assert.match(finding.message, /Nothing was degraded/, 'and must say that the pictures were left alone');
+  assert.deepEqual(refused.detail.degradations, [], 'and no image was spent reaching a budget it could not reach');
+
+  // The locus points at whatever is actually largest — here the test harness's
+  // runtime bundle outweighs even 400KB of font — and the message names the
+  // components in that order, largest first. The old refusal named a 178-byte
+  // PNG and nothing else.
+  const census = refused.detail.budget.fixedCost.slice().sort((a, b) => b.bytes - a.bytes);
+  assert.equal(finding.locus.largest, census[0].name, 'the locus must point at the largest fixed cost');
+  const order = census.slice(0, 4).map((c) => finding.message.indexOf(c.name));
+  for (let i = 1; i < order.length; i++) {
+    assert.ok(order[i] > order[i - 1] && order[i - 1] >= 0, `the census is not named largest-first:\n${finding.message}`);
+  }
+  assert.ok(
+    finding.message.indexOf('embedded fonts') < finding.message.indexOf('Images are'),
+    `a 400KB font must be named before the images are:\n${finding.message}`,
+  );
 });
 
 test('an asset the budgeter cannot measure is named rather than passed over (C2)', () => {

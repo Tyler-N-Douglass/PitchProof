@@ -286,21 +286,23 @@ export function collectTextBoxes(node, env) {
         box.fontStack = resolved.fontStack;
         box.containerId = next.containerId;
         box.slot = next.slot;
-        // The two shapes the stylesheet sizes to their own words — the
-        // `inline-flex` provenance pill and the `inline-block` CTA. For those,
-        // `containerWidthPx` is the room the element has rather than the box it
-        // fills: what a longer label, or the same label in a brand face with
-        // wider advances, would need. Reported so a reader of the measurement
-        // can tell the two meanings apart; every other box is an equality
-        // `test/scene/geometry-browser.test.mjs` checks against Chromium.
         // A block in normal flow is as tall as its own lines, not as tall as the
-        // slot it sits in. Where the stylesheet gives an element a fixed number
-        // of them, the layout says so and the height check has a box to fire
+        // slot it sits in. Where the design gives an element a fixed number of
+        // them, the layout says so and the height axis has a box to fire
         // against — see the module note on `badgeNumber`.
         if (attrs['data-pp-lines'] !== undefined && attrs['data-pp-lines'] !== null) {
           const lines = Math.max(1, Math.floor(Number(attrs['data-pp-lines'])) || 1);
           box.containerHeightPx = round3(lines * resolved.style.fontSizePx * resolved.style.lineHeight);
         }
+        // The shapes whose own box is not the extent at which their content is
+        // lost: the `inline-flex` provenance pill and the `inline-block` CTA,
+        // which are as wide as their words, and the list-marker gutter, which a
+        // long ordinal is painted straight past. For those, `containerWidthPx`
+        // is the room the element has rather than the box it fills — what a
+        // longer label, or the same label in a brand face with wider advances,
+        // would need. Reported with the reason so a reader of the measurement
+        // can tell the meanings apart; every other box is an equality
+        // `test/scene/geometry-browser.test.mjs` checks against Chromium.
         if (fit) {
           box.fitsContent = true;
           box.fit = fit;

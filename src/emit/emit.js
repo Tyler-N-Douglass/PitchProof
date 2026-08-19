@@ -105,7 +105,14 @@ export async function emit(proof, options, deps) {
   const themeCss = typeof deps.themeCss === 'string' && deps.themeCss.trim()
     ? deps.themeCss
     : compileFallbackTheme(proof.brand).css;
-  const fontCss = compileFontFaces(deps.fonts || []);
+  // P9. §7 makes `TypeFace.embeddable` the assertion, and L5's `attachUserFont`
+  // the only thing that sets it. A font handed straight to the emitter that no
+  // face in the model claims is a second door into the same law — and one that
+  // puts the artifact on a typeface the preflight sweep did not measure. The
+  // door is closed here: unclaimed faces are not embedded, and the caller is
+  // told which and why rather than left to notice.
+  const fontDecision = partitionFonts(deps.fonts, proof.brand);
+  const fontCss = compileFontFaces(fontDecision.embedded);
   const userCss = typeof deps.userCss === 'string' ? deps.userCss : '';
   const finalCss = [runtimeCss, fontCss, themeCss, userCss].filter((s) => s && s.trim()).join('\n\n');
 
@@ -124,6 +131,8 @@ export async function emit(proof, options, deps) {
   let built = buildDocument(working, { runtimeJs, runtimeCss, themeCss, userCss, fontCss });
 
   let footprint = measureFootprint(built, working);
+  /** Why the budget could not be met, when the answer is not "the images" (P4). */
+  let unreachableReason = null;
 
   for (let pass = 0; pass < BUDGET_PASSES && built.bytes > emitOptions.maxBytes; pass++) {
     // C2. The reserve — "what the document costs before assets" — used to be
@@ -153,6 +162,7 @@ export async function emit(proof, options, deps) {
       quality: emitOptions.imageQuality,
       resample: deps.resample,
     });
+    unreachableReason = budgeted.unreachable ? budgeted.reason : null;
     if (budgeted.plan.length === 0) { undegradable = budgeted.undegradable; break; }
     degradations = budgeted.plan;
     undegradable = budgeted.undegradable;
@@ -215,6 +225,22 @@ export async function emit(proof, options, deps) {
   // rule checks that every asset is a data: URI; this checks what is in one.
   findings.push(...scanModelAssets(reconstructed, { nestedOnly: true }));
 
+  // P9. A font the emitter was handed and did not embed, and why. Severity 2,
+  // which is `FONT_UNAVAILABLE`'s declared severity: the artifact renders the
+  // fallback the preflight sweep already measured against, so nothing about it
+  // is a lie — but a seller who attached a licensed file and got a substitute
+  // is owed the reason rather than left to notice in the room.
+  for (const refusal of fontDecision.refused) {
+    findings.push({
+      id: contentId('finding', { code: 'FONT_UNAVAILABLE', family: refusal.family, where: 'deps.fonts' }),
+      severity: 2,
+      code: 'FONT_UNAVAILABLE',
+      message: `A font file for "${refusal.family}" was supplied to the emitter but ${refusal.reason}, so it was not embedded and the artifact renders the fallback stack. §7 makes TypeFace.embeddable the assertion and L5's attachUserFont the only route to it — attach the licensed file to the face itself, so that the sweep measures the typeface the client will actually read.`,
+      locus: { where: 'deps.fonts' },
+      autoFixAvailable: false,
+    });
+  }
+
   // §9's label-option check. `normalizeEmitOptions` has already forced the flag
   // back to true, so the model the gate reads no longer records that the caller
   // asked for it to be off — only the emitter still knows, and L11's rule skips
@@ -222,14 +248,37 @@ export async function emit(proof, options, deps) {
   const optionFinding = labelOptionFinding(reconstructed, { labelDisableRequested, mode: emitOptions.mode });
   if (optionFinding) findings.push(optionFinding);
 
+  const fixedCost = fixedCostOf(built, { runtimeJs, runtimeCss, themeCss, userCss, fontCss }, footprint, fontDecision.embedded);
+
   if (bytes > emitOptions.maxBytes) {
     const over = bytes - emitOptions.maxBytes;
     const blocked = undegradable.length
       ? ` ${undegradable.length} asset(s) could not be degraded: ${undegradable.slice(0, 5).map((u) => `${u.assetId} (${u.bytes} bytes — ${u.reason})`).join('; ')}.`
       : '';
+    // P4. The ladder only reaches images, so a refusal that names only images
+    // can be pointing at the smallest object in the room while a megabyte of
+    // embedded font — or of runtime, or of model payload — is the whole of the
+    // overage. Every refusal therefore says where the bytes are, and when the
+    // budget was unreachable it says that too, in place of a degradation count
+    // that would imply the pictures were the problem.
+    const why = unreachableReason
+      ? ` Nothing was degraded: ${unreachableReason}.`
+      : ` after ${degradations.length} degradation(s).`;
+    const head = unreachableReason
+      ? `The artifact is ${bytes} bytes, ${over} over the ${emitOptions.maxBytes}-byte budget.`
+      : `The artifact is ${bytes} bytes, ${over} over the ${emitOptions.maxBytes}-byte budget,`;
     findings.push(sizeBudgetFinding(
-      `The artifact is ${bytes} bytes, ${over} over the ${emitOptions.maxBytes}-byte budget, after ${degradations.length} degradation(s).${blocked}`,
-      { assetId: undegradable.length ? undegradable[0].assetId : undefined, bytes, maxBytes: emitOptions.maxBytes, over },
+      `${head}${why}${blocked} ${describeFixedCost(fixedCost)} `
+      + `Images are ${footprint.assetBytes} bytes of the file (${percent(footprint.assetBytes, bytes)}).`,
+      {
+        assetId: undegradable.length ? undegradable[0].assetId : undefined,
+        bytes,
+        maxBytes: emitOptions.maxBytes,
+        over,
+        assetBytes: footprint.assetBytes,
+        reserveBytes: footprint.reserveBytes,
+        largest: fixedCost.length ? fixedCost.slice().sort((a, b) => b.bytes - a.bytes)[0].name : undefined,
+      },
     ));
   }
 
@@ -259,7 +308,12 @@ export async function emit(proof, options, deps) {
       reserveBytes: footprint.reserveBytes,
       assetBytes: footprint.assetBytes,
       copies: [...footprint.byAssetId.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([assetId, n]) => ({ assetId, copies: n })),
+      // Where the reserve went, largest first (P4). `assetBytes` plus every
+      // component here is `bytes`, exactly, so a seller told the budget cannot
+      // be met can see what is holding the file open instead of inferring it.
+      fixedCost,
     },
+    fonts: fontDecision,
   };
 
   if (blocking.length) {
@@ -283,6 +337,120 @@ export async function emit(proof, options, deps) {
  */
 function measureFootprint(built, proof) {
   return assetFootprint(built.html, dedupeAssets(collectAssets(proof)));
+}
+
+/**
+ * `n` as a percentage of `total`, for a sentence rather than for arithmetic.
+ * @param {number} n
+ * @param {number} total
+ * @returns {string}
+ */
+function percent(n, total) {
+  if (!(total > 0)) return '0%';
+  const value = (n / total) * 100;
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)}%`;
+}
+
+/**
+ * Where every byte that is not a degradable image went (P4).
+ *
+ * The size budget's whole vocabulary used to be "assets" and "the reserve", and
+ * the reserve was one number. That is fine while the reserve is the runtime
+ * bundle — nobody can shrink that and nobody expects to — and useless the
+ * moment a seller embeds four weights of a licensed font, because then 54% of
+ * the file is a thing the ladder cannot touch and the refusal is naming a
+ * 178-byte PNG.
+ *
+ * Nothing here is estimated. Each component is the byte length of the string
+ * the emitter wrote into the document, less any asset payload written inside it
+ * (the media table and the pre-rendered opening beat both carry data URIs, and
+ * those bytes are already counted as assets). What the parts do not account for
+ * is the document scaffolding — doctype, head, the element wrappers — and that
+ * is reported as itself rather than distributed.
+ *
+ * @param {{html: string, bytes: number, firstPaintHtml: string, encoded: {payload: string, mediaText: string}}} built
+ * @param {{runtimeJs: string, runtimeCss: string, themeCss: string, userCss: string, fontCss: string}} parts
+ * @param {import('./budget.js').AssetFootprint} footprint
+ * @param {{family: string, dataUri: string, weight?: number, style?: string}[]} fonts
+ * @returns {import('./budget.js').CostComponent[]}
+ */
+export function fixedCostOf(built, parts, footprint, fonts) {
+  const assets = footprint ? [...footprint.copies.keys()].map((dataUri) => ({ assetId: dataUri, assetIds: [dataUri], dataUri, bytes: utf8Length(dataUri) })) : [];
+  const assetsIn = (text) => (text ? assetFootprint(text, assets).assetBytes : 0);
+
+  const families = [...new Set((fonts || []).map((f) => String(f.family || '').trim()).filter(Boolean))];
+  const fontDetail = fonts && fonts.length
+    ? `${fonts.length} ${fonts.length === 1 ? 'face' : 'faces'}: ${families.join(', ')}`
+    : undefined;
+
+  /** @type {import('./budget.js').CostComponent[]} */
+  const components = [
+    { name: 'embedded fonts', bytes: utf8Length(parts.fontCss), detail: fontDetail },
+    { name: 'the presentation runtime', bytes: utf8Length(parts.runtimeJs) },
+    { name: 'the model payload', bytes: utf8Length(built.encoded.payload) },
+    { name: 'the artifact stylesheet', bytes: utf8Length(parts.runtimeCss) },
+    { name: 'the brand theme', bytes: utf8Length(parts.themeCss) },
+    { name: 'the user stylesheet', bytes: utf8Length(parts.userCss) },
+    { name: 'the media table', bytes: Math.max(0, utf8Length(built.encoded.mediaText) - assetsIn(built.encoded.mediaText)) },
+    { name: 'the pre-rendered opening beat', bytes: Math.max(0, utf8Length(built.firstPaintHtml) - assetsIn(built.firstPaintHtml)) },
+  ].filter((c) => c.bytes > 0);
+
+  const accounted = components.reduce((n, c) => n + c.bytes, 0);
+  const scaffolding = Math.max(0, footprint.reserveBytes - accounted);
+  if (scaffolding > 0) components.push({ name: 'document scaffolding', bytes: scaffolding });
+  return components;
+}
+
+/**
+ * Which supplied fonts the artifact may embed (P9).
+ *
+ * §7: "`embeddable` is **false** unless the user explicitly supplies a font
+ * file they assert they have rights to". §4 puts that assertion on
+ * `TypeFace.embeddable`, and `src/brand/type.js`'s `attachUserFont` is the only
+ * function in the repository that sets it — detection never does. `deps.fonts`
+ * exists because the frozen `TypeFace` has nowhere to carry the bytes
+ * (`docs/disputes/L10-emit.md`, L10-D2), not because it is a second way to make
+ * the claim. So a `deps.fonts` entry is embedded only when the proof's own
+ * brand carries a face of that family marked `embeddable`.
+ *
+ * The cost of getting this wrong is not theoretical: preflight measures every
+ * `TEXT_OVERFLOW` finding against the family the model resolves to, so an
+ * artifact rendering a face the model does not know about has been measured
+ * against a different typeface than the one the client will read.
+ *
+ * @param {{family: string, dataUri: string, weight?: number, style?: string, licenseAsserted?: boolean}[]|undefined} fonts
+ * @param {import('../core/contracts.d.ts').BrandSystem} brand
+ * @returns {{embedded: any[], refused: {family: string, reason: string}[]}}
+ */
+export function partitionFonts(fonts, brand) {
+  const normalize = (name) => String(name || '').trim().replace(/^["']|["']$/g, '').toLowerCase();
+  const claimed = new Set(
+    ((brand && brand.faces) || [])
+      .filter((face) => face && face.embeddable === true)
+      .map((face) => normalize(face.family)),
+  );
+  /** @type {any[]} */
+  const embedded = [];
+  /** @type {{family: string, reason: string}[]} */
+  const refused = [];
+  /** @type {Set<string>} */
+  const reported = new Set();
+
+  for (const font of fonts || []) {
+    if (!font || font.licenseAsserted !== true) continue;   // §7: never embedded, never mentioned
+    const family = String(font.family || '').trim();
+    if (!family) continue;
+    if (claimed.has(normalize(family))) { embedded.push(font); continue; }
+    if (reported.has(normalize(family))) continue;
+    reported.add(normalize(family));
+    refused.push({
+      family,
+      reason: (brand && brand.faces || []).some((f) => f && normalize(f.family) === normalize(family))
+        ? `the brand's own TypeFace for "${family}" is not marked embeddable`
+        : `no TypeFace in this proof's brand system claims the family "${family}"`,
+    });
+  }
+  return { embedded, refused };
 }
 
 /**

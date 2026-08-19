@@ -16,7 +16,7 @@ import { BREAKPOINTS } from '../../src/core/contracts.js';
 import { measureText, resolveFace } from '../../src/core/text-metrics.js';
 import {
   buildScene, renderSceneTree, measureScene, stageBox, boxGeometry, TYPE_ROLES, styleForRole,
-  textOverflowOf, displayUrl,
+  textOverflowOf, displayUrl, geom,
 } from '../../src/scene/index.js';
 import { renderedFamily } from '../../src/scene/brand-access.js';
 import { specimenMeta } from '../../src/scene/parts.js';
@@ -585,5 +585,84 @@ test('preformatted text is normalised only where the model could not otherwise m
     assert.equal(boxes[0].whiteSpace, 'pre-wrap', `${bp}: the detector is not told the run wraps as pre`);
     assert.equal(boxes[0].text, aligned, `${bp}: the measured text is not the block's text`);
     assert.equal(TYPE_ROLES.pre.face, 'mono');
+  }
+});
+
+test('a mark in a gutter is measured against the room it has, and the gutter is still declared', () => {
+  // Eighteen ordered items, so the marker column has to carry two digits: "18."
+  // measures 16.68px in Arial at 12px against a 16px `--pp-sc-list-marker-w`
+  // track, and Chromium draws the same ink to within a hundredth of a pixel.
+  // The track is the indent the *copy* is set at, not a frame the numeral is
+  // drawn inside — nothing paints at its edge and nothing clips there — so the
+  // extent at which anything is lost is the room the row gives it (L8-31).
+  const items = Array.from({ length: 18 }, (_, i) => `Commissioning step ${i + 1}`);
+  const spec = specimen({ blocks: [{ type: 'list', ordered: true, items }] });
+  const scene = buildScene({ layout: 'splitBeforeAfter', specimen: spec, renditions: [], headline: 'Checklist' });
+  const ctx = contextFor(scene, { specimen: spec, renditions: [] });
+
+  for (const bp of BPS) {
+    const boxes = measureScene(scene, ctx, bp).boxes;
+    const marks = boxes.filter((b) => b.role === 'deco');
+    assert.equal(marks.length, 18, `${bp}: every marker must be measured, not skipped`);
+    const twoDigit = marks.filter((b) => b.text.length === 3);
+    assert.equal(twoDigit.length, 9, `${bp}: the fixture no longer reaches two-digit ordinals`);
+
+    const track = geom(bp, 'list-marker-w');
+    for (const mark of marks) {
+      assert.equal(mark.fitsContent, true, `${bp}: "${mark.text}" is measured as a box it fills`);
+      assert.equal(mark.fit, 'spill', `${bp}: "${mark.text}" declares the wrong reason`);
+      // The room is the row, not the gutter, and it is a bound in the direction
+      // §22.2 asks for: never more than the page has.
+      assert.ok(mark.containerWidthPx > track,
+        `${bp}: "${mark.text}" is still measured against its ${track}px gutter`);
+      const row = boxes.find((b) => b.role === 'listItem');
+      assert.equal(mark.containerWidthPx, row.containerWidthPx,
+        `${bp}: a mark's room is the row its copy is set in`);
+    }
+
+    // And the numeral that started this really is wider than the gutter — both
+    // the model and Chromium say so, which is why the fix is the box and not
+    // the advance.
+    const worst = twoDigit[twoDigit.length - 1];
+    const width = measureText(worst.text, { ...worst.style, family: renderedFamily(brandFixture(), 'body', worst.style.weight) });
+    assert.ok(width > track, `${bp}: "${worst.text}" measures ${width}px, which fits the ${track}px gutter after all`);
+  }
+
+  // The gutter is not gone from the model: the copy beside the mark is still
+  // inset by it, which is the number test/scene/geometry-browser.test.mjs holds
+  // Chromium to.
+  const lg = measureScene(scene, ctx, 'lg').boxes;
+  const row = lg.find((b) => b.role === 'listItem');
+  const cell = boxGeometry('splitCell', 'lg', {});
+  assert.equal(Math.round(cell.widthPx - row.containerWidthPx), geom('lg', 'list-marker-w'),
+    'the marker column no longer narrows the copy beside it');
+});
+
+test('a badge numeral is measured against its own line, not against the column it sits in', () => {
+  // DEFERRED.md: `measureScene` gave `badgeNumber` the `fanSource` slot's 536px
+  // height rather than its own 40px line box, so no height check on the role
+  // could fire at any content, at any breakpoint. A role whose height cannot be
+  // checked is a hole in the measurement whether or not it is costing anything
+  // this week (L8-31).
+  const spec = specimen();
+  const rends = localeFanout(9);
+  const scene = buildScene({ layout: 'fanOut', specimen: spec, renditions: rends, headline: 'Nine markets' });
+  const ctx = contextFor(scene, { specimen: spec, renditions: rends });
+
+  for (const bp of BPS) {
+    const boxes = measureScene(scene, ctx, bp).boxes;
+    const badge = boxes.find((b) => b.role === 'badgeNumber');
+    assert.ok(badge, `${bp}: the fan-out badge is not measured at all`);
+    const line = badge.style.fontSizePx * badge.style.lineHeight;
+    assert.equal(badge.containerHeightPx, Math.round(line * 1000) / 1000,
+      `${bp}: the badge is measured against ${badge.containerHeightPx}px, not its ${line}px line`);
+    // The slot is still the slot — this is a different box, not a smaller one
+    // everywhere.
+    const slot = boxGeometry('fanSource', bp, {});
+    assert.ok(slot.heightPx > badge.containerHeightPx * 2,
+      `${bp}: the fanSource column is ${slot.heightPx}px and the badge now claims ${badge.containerHeightPx}px`);
+    const label = boxes.find((b) => b.role === 'badgeLabel');
+    assert.ok(Math.abs(label.containerHeightPx - slot.heightPx) < 0.01,
+      `${bp}: only the element that declares a line count gets one`);
   }
 });

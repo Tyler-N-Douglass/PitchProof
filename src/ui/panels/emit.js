@@ -34,9 +34,48 @@ export function renderEmitPanel(app) {
   const gate = emitBlockers(app);
   return h('div', { class: 'st-panel' },
     renderGate(app, gate),
+    renderOmissions(app),
     renderOptions(app),
     renderBudget(app),
     renderResult(app));
+}
+
+/**
+ * What this file will not contain, said on the screen that writes it.
+ *
+ * L6 holds a `media` block whose bytes were never captured out of the stream
+ * rather than emitting a reference the artifact would render as a broken image
+ * (its D-L6-21, for CRITIQUE-3 P6). That closed a severity-1 blocker on §6's
+ * paste route and left the emit open — which is the point, and the hazard: the
+ * sentence one section above this one reads "Every check has passed", and a
+ * seller can read that as "and the deck is complete".
+ *
+ * §18's honesty laws are about the artifact, and this is the studio's half of
+ * the same obligation: a proof that ships without the prospect's product
+ * photograph is a proof the seller has to have decided to ship. This does not
+ * block anything — nothing here lowers or raises a finding — it makes the
+ * decision a decision.
+ *
+ * @param {any} app
+ */
+function renderOmissions(app) {
+  const rows = (app.proof.specimens || [])
+    .map((specimen) => ({ specimen, omitted: app.services.omittedMedia(specimen) || [] }))
+    .filter((row) => row.omitted.length);
+  if (!rows.length) return null;
+  const total = rows.reduce((n, row) => n + row.omitted.length, 0);
+  return section({
+    title: `Images this file will not contain · ${total}`,
+    subtitle: 'Not a blocker, and not an oversight either: the capture could not bring these, so the deck goes without them unless you supply the files.',
+    actions: toolbar(button({ act: 'app.section', arg: 'specimens', variant: 'ghost' }, 'Go to Specimens')),
+  },
+  notice('warn', `${plural(total, 'image')} referenced by ${plural(rows.length, 'specimen')} ${total === 1 ? 'has no file behind it' : 'have no file behind them'}. The artifact will render the words around ${total === 1 ? 'it' : 'them'} and say nothing about ${total === 1 ? 'it' : 'them'} on stage — a client looking at the page they wrote will see their own ${total === 1 ? 'picture' : 'pictures'} missing. Specimens → “Images this capture could not bring” takes a file for each.`),
+  h('ul', { class: 'st-blockers' }, rows.map((row) => h('li', {
+    class: 'st-blocker', [KEY_ATTR]: row.specimen.id,
+  },
+  h('span', { class: 'st-blocker-code st-mono' }, String(row.omitted.length)),
+  h('span', { class: 'st-blocker-message' },
+    `${truncate(row.specimen.title, 48)} — ${row.omitted.map((e) => e.ref).slice(0, 3).join(', ')}${row.omitted.length > 3 ? `, and ${row.omitted.length - 3} more` : ''}`)))));
 }
 
 /**

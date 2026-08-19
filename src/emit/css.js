@@ -429,6 +429,10 @@ export function matchesSelector(selector, chain, index) {
 export const INHERITED_PROPS = new Set([
   'color', 'font-size', 'font-family', 'font-weight', 'font', 'visibility',
   'text-indent', 'line-height', 'letter-spacing', 'word-spacing', 'text-transform', 'white-space',
+  // The glyph paint. `color` is only the default source of it; these override
+  // it and, like `color`, they inherit — so a rule on an ancestor reaches the
+  // label's text exactly as a rule on the label does (P8).
+  '-webkit-text-fill-color', '-webkit-text-stroke-color', '-webkit-text-stroke-width', '-webkit-text-stroke',
 ]);
 
 /** Everything the provenance checker reads. Anything else is ignored on purpose. */
@@ -440,6 +444,7 @@ export const TRACKED_PROPS = [
   'overflow', 'overflow-x', 'overflow-y', 'white-space',
   'letter-spacing', 'word-spacing',
   'filter', 'content-visibility', 'z-index', 'line-height', 'inset',
+  '-webkit-text-fill-color', '-webkit-text-stroke-color', '-webkit-text-stroke-width', '-webkit-text-stroke',
 ];
 
 /**

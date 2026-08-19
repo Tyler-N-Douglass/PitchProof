@@ -245,6 +245,76 @@ test('attack 11d: scale the label down without scaling it to nothing (C9)', asyn
   assertBlocked(zoomed, /renders at/, 'zoom:0.25');
 });
 
+test('attack 11e: paint the glyphs with something other than `color` (P8)', async () => {
+  // `color` stays compliant and the text is gone: `-webkit-text-fill-color` is
+  // what actually fills a glyph wherever it is set, in every engine an artifact
+  // opens in. Reading `color` was reading a declaration; the law is about the
+  // paint.
+  const filled = await attempt({ userCss: '.pp-provenance{-webkit-text-fill-color:transparent!important}' });
+  assertBlocked(filled, /-webkit-text-fill-color/, '-webkit-text-fill-color:transparent');
+
+  const nearBackground = await attempt({ userCss: '.pp-provenance{-webkit-text-fill-color:rgba(0,0,0,0.02)!important}' });
+  assertBlocked(nearBackground, /contrast/, '-webkit-text-fill-color at 2% alpha');
+
+  // Inherited, like `color` is — a rule on <body> reaches the label's text.
+  const inherited = await attempt({ userCss: 'body{-webkit-text-fill-color:transparent!important}' });
+  assertBlocked(inherited, /contrast/, '-webkit-text-fill-color inherited from <body>');
+
+  // Outlined type is a design, not a hiding place: an empty fill with a real
+  // stroke behind it still draws readable glyphs and is allowed through.
+  const outlined = await attempt({
+    userCss: '.pp-provenance{-webkit-text-fill-color:transparent;-webkit-text-stroke-width:1px;-webkit-text-stroke-color:#101418}',
+  });
+  assert.equal(outlined.ok, true, `outlined type was refused: ${outlined.ok ? '' : outlined.error}`);
+
+  // …and a stroke of zero width paints nothing, so it rescues nothing.
+  const fakeStroke = await attempt({
+    userCss: '.pp-provenance{-webkit-text-fill-color:transparent!important;-webkit-text-stroke:0 #101418!important}',
+  });
+  assertBlocked(fakeStroke, /contrast/, 'a zero-width stroke behind a transparent fill');
+});
+
+test('attack 11f: blur the glyphs out of legibility (P8)', async () => {
+  const blurred = await attempt({ userCss: '.pp-provenance{filter:blur(20px)!important}' });
+  assertBlocked(blurred, /blur/, 'filter:blur(20px)');
+
+  const small = await attempt({ userCss: '.pp-provenance{filter:blur(2px)!important}' });
+  assertBlocked(small, /blur/, 'filter:blur(2px) on 12px type');
+
+  const relative = await attempt({ userCss: '.pp-provenance{filter:blur(1.6em)!important}' });
+  assertBlocked(relative, /blur/, 'filter:blur(1.6em) — the same attack in the units the ratio already answered');
+
+  // Blur composes: an ancestor blur reaches the label inside it.
+  const fromAbove = await attempt({ userCss: '.pp-scene{filter:blur(6px)!important}' });
+  assertBlocked(fromAbove, /blur/, 'filter:blur(6px) on an ancestor');
+});
+
+test('attack 11g: a filter that repaints the glyphs (P8)', async () => {
+  // Every one of these is a colour transfer, so all of them are the same
+  // finding — a contrast measurement on the paint that reaches the glyph —
+  // rather than one rule per spelling.
+  const cases = [
+    ['brightness(0)', '.pp-provenance{filter:brightness(0)!important;background:#ffffff!important;color:#ffffff!important}'],
+    ['opacity(0)', '.pp-provenance{filter:opacity(0)!important}'],
+    ['opacity(2%)', '.pp-provenance{filter:opacity(2%)!important}'],
+    ['grayscale + brightness', '.pp-provenance{filter:grayscale(1) brightness(12)!important}'],
+    ['contrast(0), which flattens both colours to the same grey', '.pp-provenance{filter:contrast(0)!important}'],
+  ];
+  for (const [what, css] of cases) {
+    const result = await attempt({ userCss: css });
+    assertBlocked(result, /contrast|zero alpha/, what);
+  }
+
+  // And the direction that matters for false positives: `invert(1)` on a label
+  // that paints its own background inverts the background with the text, which
+  // is a light label instead of a dark one and perfectly readable. A rule that
+  // listed `invert` would have refused it; a measurement does not.
+  const inverted = await attempt({
+    userCss: '.pp-provenance{color:#ffffff!important;background-color:#101418!important;filter:invert(1)!important}',
+  });
+  assert.equal(inverted.ok, true, `an inverted label with an inverted background was refused: ${inverted.ok ? '' : inverted.error}`);
+});
+
 test('the room floors do not fire on legitimate styling (C9)', async () => {
   // Every one of these is something a real stylesheet does, and none of them
   // hides the label. A law that refuses these is a law nobody can ship under.
@@ -258,6 +328,12 @@ test('the room floors do not fire on legitimate styling (C9)', async () => {
     ['a slight scale', '.pp-provenance{transform:scale(0.98)}'],
     ['a scale that keeps it above the floor', '.pp-provenance{font-size:24px;transform:scale(0.6)}'],
     ['a clipping ancestor with an auto height', '.pp-scene{overflow:hidden;height:auto}'],
+    // P8's measurements have to leave real design alone too.
+    ['a soft edge well under the ceiling', '.pp-provenance{filter:blur(0.3px)}'],
+    ['a drop shadow, which blurs the shadow and not the glyph', '.pp-provenance{filter:drop-shadow(0 1px 3px rgba(0,0,0,0.3))}'],
+    ['a filter that leaves contrast alone', '.pp-provenance{filter:saturate(1.2)}'],
+    ['a fill colour that is simply a colour', '.pp-provenance{-webkit-text-fill-color:#101418}'],
+    ['a fill that inherits from currentColor', '.pp-provenance{-webkit-text-fill-color:currentColor}'],
   ];
   for (const [what, css] of cases) {
     const result = await attempt({ userCss: css });

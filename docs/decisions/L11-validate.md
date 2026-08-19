@@ -1275,3 +1275,197 @@ it keeps testing the property and not the policy.
 argument better than the fixture does: the corpus hangs its nested branch off a
 scene *inside* the branch that gets shadowed, so one duplicated id strands a
 branch two levels away.
+
+---
+
+## L11-D30 — An auto-fix that changes what the room will see records it; the audit says which fixes those are
+
+**Defect:** CRITIQUE-3 **P6**, second half, reported by L6 (`docs/decisions/L6-specimen.md`,
+"Why this does not set `edited`, and what does") after it fixed the paste route
+that produced the dangling refs.
+
+**Unsettled by:** §18.3 says "the prospect's own content is presented unmodified
+on the 'before' side. If a specimen was edited, the artifact says so", and §14
+says auto-fix "where safe and reversible". Neither says which fixes count as
+editing, and §4's `Specimen` had nowhere to record it until dispute #4 won the
+optional `edited` / `editNotes`.
+
+**What was wrong.** `src/validate/autofix.js:141`, the `ASSET_MISSING` fixer,
+spliced a block out of `specimen.blocks` and set neither field. A seller clicks
+*"Remove the block referencing missing media"*, the prospect's own content leaves
+the deck, and the artifact — whose entire premise is that it is built on the
+prospect's material — says nothing about it. It also left `wordCount` stale,
+because the splice wrote the array and nothing recomputed the number derived from
+it.
+
+### The line, and which side each fix falls on
+
+The question is not "does this fix change the proof" — every fix does — but
+**does it change what the audience in the room will see, as content**. Words and
+pictures are content. Colour, type, geometry, ids, navigation and emit
+instructions are not: they change how the prospect's material *looks* or how the
+deck *moves*, and nothing the prospect wrote leaves the artifact.
+
+| fixer | what it edits | content? | records |
+|---|---|---|---|
+| `CONTRAST_FAIL` | a `BrandColor.hex`, plus the pair's ratio | no — a colour | `brand.manualOverrides` |
+| `ASSET_OVERSIZE` | `emitOptions.imageQuality` | no — see below | L10's `degradations` |
+| `SIZE_BUDGET_EXCEEDED` | the same option, for the whole budget | no | as above |
+| `ASSET_MISSING` (specimen block) | **removes a block from `specimen.blocks`** | **yes** | **`markEdited`** |
+| `ASSET_MISSING` (rendition block) | removes a block from a rendition | yes, from the tool's own draft — see below | nothing, or the fix is declined |
+| `ASSET_MISSING` (payload, logo, scene ref) | nothing — the fixer declines | — | — |
+| `BEAT_EMPTY` | removes a beat with no reveals, or whose reveals name nothing rendered | no — see below | the undo stack |
+| `BRANCH_NO_RETURN` | `returnPolicy`, or a `branchAnchors` entry | no — navigation | the undo stack |
+| `BRANCH_UNREACHABLE` | adds a `branchAnchors` entry | no — navigation, and it *adds* reach | the undo stack |
+| `FONT_UNAVAILABLE` | `fallbackStack`, `metricDelta` | no — type | `brand.manualOverrides` |
+| `PROVENANCE_UNLABELED` | demotes a rendition, or turns labelling on | no — it *adds* an honesty label | the label itself |
+
+Three of those are arguable, and the argument is the point:
+
+- **`ASSET_OVERSIZE` recompresses the prospect's photograph.** Fewer of their
+  pixels reach the room, which is a real loss of fidelity — but the block is
+  still there, saying the same thing, and §13 *requires* the emitter to
+  "downscale progressively until under budget". A tool that recorded "this
+  specimen was edited" every time the budgeter did its job would train the reader
+  to ignore the sentence, which is the way an honesty law dies. The fix is also
+  `effect: 'plan'`: it changes an instruction, not a specimen, and L10 reports
+  what it actually cost in `EmitResult.degradations`. Fidelity is reported where
+  fidelity is decided.
+- **`FONT_UNAVAILABLE` changes the face the prospect's words are set in.** Same
+  answer from the other direction: §7 asks for a metric-compatible substitution,
+  the words are untouched, and `metricDelta` and `manualOverrides` already carry
+  the record. Not recording it is what keeps `edited` meaning *the text is not
+  what we captured*.
+- **`BEAT_EMPTY` removes a beat.** A beat is pacing, and the fixer only ever
+  removes one that reveals nothing, or whose reveals name ids the layout does not
+  render. Nothing disappears from the screen, because nothing was appearing.
+  Removing a beat that *did* reveal something would be on the other side of this
+  line; the fixer re-checks `stillDead` against the proof it is handed and
+  declines otherwise, which is what keeps it there.
+
+### What the note says
+
+`editNotes` is read by a client, not parsed by a machine. "Block removed" is true
+and useless; a note worth putting in front of the room names **what left and why
+it had to**, and — as the finding asks — a picture whose bytes were never
+captured is a different sentence from a paragraph a seller cut for length. So the
+note carries the reference, the caption the page gave it, where it stood (the
+nearest heading above it, which is how a reader locates content, falling back to
+a position), and the reason:
+
+> Removed an image — “/assets/product-hx400.png” (captioned “HX-400 shell-and-tube
+> bundle”), under the heading “Heat exchangers” — during rehearsal: no media in
+> this project carries that reference, so it would have shown to the room as a
+> broken image. Everything else on the page is as it was captured.
+
+The entry behind it is structured (`{kind, ref, caption, where}`) and the prose is
+generated from it, so the one other kind of edit this module could grow has
+somewhere to say something else rather than inheriting this sentence.
+
+**`markEdited` is L6's, and is called, not reimplemented** — through the
+one-line bridge `src/validate/lane-specimen.js` (L11-D6), from L6's published
+index rather than deep into the lane, since there is no cycle to dodge here.
+L6 refuses an edit that does not say what changed, which is the law enforced as
+code, and it recomputes `wordCount`, which fixes the stale number for free.
+
+### `applyAll` must not compound it
+
+Each fix records its own edit when applied, because it must: the studio calls
+`fix.apply(proof)` directly for a single click (`src/ui/actions.js:1539`), so a
+fix that relied on a batching caller to write the note would write nothing on the
+common path. But `markEdited` **appends**, so ten fixes in one pass would append
+ten near-identical lines to one specimen, and a client reading ten sentences
+learns less than they would from one.
+
+So `applyAll` folds. Each content-changing fix also publishes
+`describeEdit(proof)` — the same computation as `apply`, on the same input,
+without the mutation — and `applyAll` collects those descriptions as it threads,
+then replaces the run of notes *this pass* appended to a specimen with a single
+note naming every image that left. The fold is a rewrite of the batch's own tail
+and nothing else: it counts the notes the specimen had before the pass, checks
+that exactly its own additions are on the end, and skips entirely if they are
+not. An edit note that was already there is history, and history is not something
+a batch may rewrite.
+
+**A second defect fell out of writing that.** Two dangling refs in one specimen
+produced two fixes, both keyed on `detail.blockIndex`; the first removal shifted
+the second's index, the second fix found a stranger there, declined, and returned
+the proof unchanged — while the studio, which compares digests, saw the batch
+change something and committed it. One of the two blocks stayed, and the finding
+came back on the next sweep. `danglingBlockIndex` now falls back from the index
+to the one unambiguous media block carrying that ref, and declines when there is
+more than one rather than guessing. Pinned in `test/validate/edit-record.test.mjs`.
+
+### A rendition is not a specimen, and two kinds of rendition are not the tool's to edit
+
+§18.3's sentence is about the specimen — the "before" side, the prospect's own
+page. A rendition is the tool's proposal, already labelled by §9's provenance
+machinery, and removing a broken image from a draft the tool assembled is not an
+edit to the prospect's content. `Rendition` accordingly has no `edited` field and
+does not need one.
+
+Two provenances are different, and the fixer now **declines** for both:
+
+- **`client-supplied`** — the seller has declared these blocks to be the
+  prospect's own material, and the artifact says so on screen ("client supplied",
+  `scene/parts.js:382`). Editing it is exactly what §18.3 forbids doing silently,
+  and §4 gives a rendition nowhere to say it happened.
+- **`verified-by-user`** — someone signed off on it. L7's promotion record signs
+  the rendition's *identity* (`v/by/at/of/from`), not its blocks, so a splice
+  would leave a valid sign-off standing over content nobody signed.
+
+The finding still fires, still at severity 1, and now says why no auto-fix is
+offered and what to do instead — supply the image, or remove the block by hand,
+which makes it the seller's edit rather than the tool's. The rule computes
+`autoFixAvailable` from `renditionIsToolDraft`, the fixer's own predicate,
+imported rather than restated so the two cannot drift (the module header already
+promises they agree by construction).
+
+**Not chosen: writing the note into `Rendition.notes`.** It is free text, and L8
+renders it verbatim to the client (`presentableNotes`). That is precisely why not:
+a machine-written line in the field a seller writes annotations in, displayed in
+the client's room, is a worse honesty problem than the one it solves. Reported
+upward instead as the shape a `Rendition` v2 would need.
+
+**Not chosen: demoting a promoted rendition and fixing it anyway.** `demoteProvenance`
+would withdraw the sign-off, which `verifyProvenance` then reports as
+"carries a promotion record but is not verified-by-user" — a fresh severity-1
+finding. Trading one blocking finding for another is not a fix.
+
+### The optional clock
+
+`autoFixes(proof, findings, {clock?})` and `applyAll(proof, fixes, {clock?})` take
+the §5 injected clock. It is optional here in a way it is not elsewhere: the only
+thing it timestamps is the note, and an undated note still says what changed and
+why, so a caller that has no clock gets a complete sentence rather than a fake
+time. `API.md`'s declared two-argument call still works unchanged, which is what
+the studio uses today — reported to the integrator as a one-line ask so
+`services.autoFixes` threads the clock it already holds.
+
+### What is still missing, and is not L11's
+
+**Nothing renders `editNotes` into the emitted artifact.** The model records the
+edit, and the studio shows it (`src/ui/panels/specimens.js:153`), but
+`specimenMeta` in `src/scene/parts.js:363` — the line the artifact prints under
+every "before" panel — carries the URL, the locale and the kind, and says nothing
+about `edited`. So §18.3's "the artifact says so" is, today, half-built: the
+sentence exists and nothing in the room shows it. That is L8's one-line change to
+`specimenMeta` (and L10's, if the emitter wants it in the review appendix too),
+reported to the integrator as a coupled ask rather than reached across the lane
+boundary. This lane's half — that the record exists, is true, and is written by
+the only writer §18.3 has — is what landed here.
+
+**Regression.** `test/validate/edit-record.test.mjs`. The named case: the fix
+records `edited`, one note, and the note names the ref, the caption, the heading
+it stood under and the reason; the proof handed in is untouched; a clock dates
+the note and its absence does not silence it; `wordCount` is recomputed. The
+general case, which is the one that would have caught this at any point: **every**
+fix the engine offers, on **every** defect proof, is applied and the record is
+checked against what actually changed — a specimen whose blocks moved must record
+exactly one edit, a specimen whose blocks did not must record none (a colour fix
+claiming the page was edited is the same law broken from the other side), and no
+fix may touch the blocks of a `client-supplied` or `verified-by-user` rendition.
+Then the batch: three dangling refs are all removed rather than one, and produce
+one note naming all three; a single fix keeps the singular sentence; a note that
+was already on the specimen survives the fold; and `applyAll` stays pure while
+still applying the fixes that record nothing.

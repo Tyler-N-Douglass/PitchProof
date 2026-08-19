@@ -368,3 +368,55 @@ test('a raw block that smuggles obfuscated script is refused by emit (C16)', asy
 
   registerTestLayouts();
 });
+
+// ---------------------------------------------------------------------------
+// P4 — a 485KB embedded font made the scanner quadratic
+// ---------------------------------------------------------------------------
+
+import { scanCss, scanAbsoluteUrls } from '../../src/emit/scan.js';
+
+test('a long alphanumeric run does not hide an absolute URL', () => {
+  // The bound on the scheme is a performance fix, so what it must not cost is
+  // detection. Every one of these still has to be found.
+  const runs = 'A'.repeat(5_000);
+  for (const [what, text] of [
+    ['after a long run', `${runs}https://evil.example/x`],
+    ['inside a long run', `${runs}https://evil.example/x${runs}`],
+    ['a long run that looks like a scheme', `${'a'.repeat(200)}://evil.example/x`],
+    ['in a CSS url()', `.x{background:url(${runs});color:red}\n.y{background:url(https://evil.example/a.png)}`],
+  ]) {
+    const hits = scanForNetworkReferences(`<p>${text}</p>`, {}).concat(scanAbsoluteUrls(text).map((f) => ({ message: f.message })));
+    assert.ok(hits.length > 0, `${what}: nothing was reported for ${text.slice(0, 40)}…`);
+  }
+});
+
+test('the bound on the scheme costs no detection at all', () => {
+  // The match may start anywhere, so a scheme longer than the bound is still
+  // found — the last 32 characters of it are a match. What the bound removes is
+  // the work of restarting the run at every character, not the finding.
+  const long = scanAbsoluteUrls(`${'z'.repeat(200)}://host/path`);
+  assert.equal(long.length, 1, 'a 200-character scheme is still reported');
+  assert.match(long[0].message, /host\/path/);
+  // …and the ordinary schemes all are.
+  for (const scheme of ['http', 'https', 'ftp', 'ws', 'wss', 'chrome-extension', 'x-custom-scheme.v2']) {
+    assert.equal(scanAbsoluteUrls(`${scheme}://host/path`).length, 1, `${scheme}:// was missed`);
+  }
+});
+
+test('an embedded font does not make the CSS scan quadratic (P4)', () => {
+  // A seller attaching four weights of a licensed font waited 166 seconds for a
+  // refusal, because `ABSOLUTE_URL_RE` restarted its greedy scheme run at every
+  // character of every base64 body in the sheet. This is not a timing
+  // preference: it is the difference between a studio that answers and a studio
+  // that appears to have hung.
+  const times = [];
+  for (const n of [40_000, 160_000]) {
+    const css = `@font-face{font-family:Sohne;src:url(data:font/woff2;base64,${'A'.repeat(n)});}`;
+    const started = Date.now();
+    assert.deepEqual(scanCss(css), [], 'an inlined font is not a network reference');
+    times.push(Date.now() - started);
+  }
+  // Four times the input must not cost anything like sixteen times the work.
+  assert.ok(times[1] < 2_000, `160KB of font took ${times[1]}ms to scan`);
+  assert.ok(times[1] <= times[0] * 6 + 200, `scanning went from ${times[0]}ms to ${times[1]}ms for 4x the input`);
+});

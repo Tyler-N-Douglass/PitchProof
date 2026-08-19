@@ -405,6 +405,11 @@ export class StudioApp extends Emitter {
       branchId: null, recipeId: null, beatIndex: 0, colorRole: null, faceIndex: null, logoId: null,
     };
     this.ui.sweep = { findings: [], at: null, running: false, error: null };
+    // The auto-fix ledger describes attempts against the sweep that is being
+    // thrown away here. Carried across a load it would withhold buttons from
+    // findings on a different project (CRITIQUE-3 P2).
+    this.ui.fixAttempts = [];
+    this.ui.fixes = [];
     this.ui.emit = { result: null, running: false, error: null, at: null };
     this.ui.save = { status: 'saved', at: record.savedAt || null, error: null, revision: record.revision || 1 };
     if (this.store) void this.store.setSetting(SETTING_KEYS.lastProject, record.id);

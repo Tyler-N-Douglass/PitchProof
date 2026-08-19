@@ -126,6 +126,18 @@ export function fixtureSpecimen() {
     restored: [],
     blockPositions: [1, 2, 3, 4],
     chrome: { locator: 'main', root: 'body > main', removedCount: 1, siblingPages: 0 },
+    // One image L6 held back because the capture carried no bytes for it
+    // (D-L6-21, CRITIQUE-3 P6). The studio has to name it and offer a way to
+    // supply it, so the fixture has to have one.
+    mediaOmitted: [{
+      id: contentId('block', 'ui-fixture-omitted-hero'),
+      ref: '/assets/hero-plant.png',
+      caption: 'The Aberdeen plant, mid-turnaround',
+      position: 2,
+      origin: 'blocks',
+      reason: 'bytes-not-captured',
+    }],
+    mediaUnresolved: ['/assets/hero-plant.png'],
   };
 }
 
@@ -360,6 +372,51 @@ export function fakeServices(options = {}) {
       ...specimen, blocks, edited: true, editNotes: [...(specimen.editNotes || []), note],
     }),
     rawFallback: () => ({ blocks: [], allowed: false, reason: 'not opted in' }),
+    // Shaped like the real adapter's: the held-back entries, plus any block ref
+    // that resolves to nothing, which has no position to go back to.
+    omittedMedia: (specimen) => {
+      if (!specimen) return [];
+      const entries = (specimen.mediaOmitted || []).map((e) => ({
+        id: e.id || null,
+        ref: String(e.ref),
+        caption: e.caption === undefined ? null : e.caption,
+        position: Number.isInteger(e.position) ? e.position : null,
+        origin: e.origin || null,
+        reason: e.reason || null,
+        restorable: true,
+      }));
+      const known = new Set((specimen.media || []).map((m) => m.id));
+      const named = new Set(entries.map((e) => e.ref));
+      for (const block of specimen.blocks || []) {
+        if (block.type !== 'media' || known.has(block.ref) || named.has(block.ref)) continue;
+        named.add(block.ref);
+        entries.push({ id: null, ref: String(block.ref), caption: null, position: null, origin: null, reason: 'reference-unresolved', restorable: false });
+      }
+      return entries;
+    },
+    restoreOmittedMedia: (specimen, target, supply, options) => {
+      if (!options || !options.proof) return err(NO_PROOF('restoreOmittedMedia'));
+      const entries = specimen.mediaOmitted || [];
+      const entry = entries.find((e) => e.id === target || e.ref === target);
+      if (!entry) return err(`restoreOmittedMedia: "${target}" is not among this specimen's omitted media`);
+      if (!supply || !supply.bytes) return err(`restoreOmittedMedia: "${entry.ref}" needs its bytes`);
+      const taken = usedIds(options.proof);
+      let id = contentId('media', { of: specimen.id, ref: entry.ref });
+      for (let i = 1; taken.has(id); i += 1) id = contentId('media', { of: specimen.id, ref: entry.ref, i });
+      const ref = { id, mime: supply.mime, bytes: supply.bytes.length, width: 1, height: 1, dataUri: `data:${supply.mime};base64,AA==`, alt: entry.caption, digest: `dg_${id}` };
+      const block = { type: 'media', ref: id };
+      if (entry.caption) block.caption = entry.caption;
+      const blocks = specimen.blocks.slice();
+      blocks.splice(Math.min(entry.position, blocks.length), 0, block);
+      const rest = entries.filter((e) => e !== entry);
+      return ok({
+        ...specimen,
+        blocks,
+        media: [...(specimen.media || []), ref],
+        mediaOmitted: rest,
+        mediaUnresolved: rest.map((e) => e.ref),
+      });
+    },
 
     seedRecipes: () => [fixtureRecipe(), {
       id: contentId('recipe', 'channel-variants'),

@@ -127,8 +127,25 @@ export const JS_NETWORK_TOKENS = [
   { re: /\bnew\s+Function\s*\(/g, what: 'new Function()' },
 ];
 
-/** Any absolute URL, in any syntax. */
-const ABSOLUTE_URL_RE = /[a-zA-Z][a-zA-Z0-9+.\-]*:\/\/[^\s"'`)>\]<]*/g;
+/**
+ * Any absolute URL, in any syntax.
+ *
+ * The scheme is bounded at 32 characters, and that bound is load-bearing rather
+ * than cosmetic. Unbounded (`[a-zA-Z0-9+.\-]*`), the engine restarts the greedy
+ * scheme run at every position of every alphanumeric string in the document,
+ * looking for a `://` that is not there — quadratic, and a document is exactly
+ * where long alphanumeric strings live. A 485KB base64 font in a `src: url(...)`
+ * took `scanCss` **166 seconds**, so a seller who attached four licensed weights
+ * watched the studio hang before being told the artifact was over budget (P4).
+ * Bounded, the same scan is milliseconds.
+ *
+ * Nothing is given up for it. The longest scheme IANA has registered is 20
+ * characters; a base64 body cannot contain a `:` at all, so it cannot hide a
+ * scheme; and no engine resolves a 33-character scheme, so a URL behind one is
+ * not a URL anything would fetch. `test/emit/scanner.test.mjs` asserts both the
+ * long-scheme case and the run-of-letters case.
+ */
+const ABSOLUTE_URL_RE = /[a-zA-Z][a-zA-Z0-9+.\-]{0,31}:\/\/[^\s"'`)>\]<]*/g;
 
 /**
  * Is a URL one of the three the artifact may carry, whole?

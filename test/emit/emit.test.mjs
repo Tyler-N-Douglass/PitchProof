@@ -193,14 +193,82 @@ test('user CSS is applied last and is really in the file', async () => {
   assert.match(html, /letter-spacing:-0\.01em/);
 });
 
+/**
+ * A proof whose brand claims `embeddable` on one face, the way L5's
+ * `attachUserFont` leaves it — the only state §7 allows a font to be embedded
+ * from.
+ * @param {string} family
+ */
+function proofWithEmbeddableFace(family) {
+  const base = emitProof();
+  return {
+    ...base,
+    brand: {
+      ...base.brand,
+      faces: [
+        { family, fallbackStack: [family, 'Arial', 'sans-serif'], weightsSeen: [400, 700], role: 'body', metricDelta: null, embeddable: true },
+        ...base.brand.faces,
+      ],
+    },
+  };
+}
+
 test('licence-asserted fonts are embedded and unasserted ones are not', async () => {
   const fonts = [
     { family: 'Northwind Sans', dataUri: 'data:font/woff2;base64,AAAA', weight: 400, licenseAsserted: true },
     { family: 'Foundry Display', dataUri: 'data:font/woff2;base64,BBBB', weight: 700, licenseAsserted: false },
   ];
-  const { html } = await emitOk(emitProof(), {}, { fonts });
+  const { html } = await emitOk(proofWithEmbeddableFace('Northwind Sans'), {}, { fonts });
   assert.match(html, /font-family: "Northwind Sans"/);
   assert.ok(!html.includes('Foundry Display'), 'a face nobody asserted a licence for is never embedded (§7)');
+});
+
+test('a font whose face is not marked embeddable is not embedded, and the caller is told (P9)', async () => {
+  // §7 makes `TypeFace.embeddable` the assertion and `attachUserFont` the only
+  // route to it. `deps.fonts` carries the bytes the frozen contract has nowhere
+  // to put (L10-D2) — it is not a second way to make the claim.
+  const fonts = [{ family: 'Sohne', dataUri: 'data:font/woff2;base64,AAAA', weight: 400, licenseAsserted: true }];
+  const { html, value } = await emitOk(emitProof(), {}, { fonts });
+
+  assert.ok(!html.includes('Sohne'), 'a face the model does not mark embeddable must not reach the artifact');
+  assert.ok(!html.includes('@font-face'), 'and no @font-face rule should be written at all');
+
+  const finding = value.findings.find((f) => f.code === 'FONT_UNAVAILABLE' && f.message.includes('Sohne'));
+  assert.ok(finding, 'the emitter must say which font it declined to embed');
+  assert.equal(finding.severity, 2, 'the artifact renders the fallback preflight measured, so this does not block');
+  assert.match(finding.message, /embeddable/);
+  assert.deepEqual(value.fonts.embedded, [], 'nothing was embedded');
+  assert.deepEqual(value.fonts.refused.map((r) => r.family), ['Sohne']);
+});
+
+test('marking the face embeddable is what opens the door (P9)', async () => {
+  const fonts = [{ family: 'Sohne', dataUri: 'data:font/woff2;base64,AAAA', weight: 400, licenseAsserted: true }];
+  const { html, value } = await emitOk(proofWithEmbeddableFace('Sohne'), {}, { fonts });
+  assert.match(html, /@font-face/);
+  assert.match(html, /font-family: Sohne/);
+  assert.deepEqual(value.fonts.refused, []);
+  assert.equal(value.findings.filter((f) => f.code === 'FONT_UNAVAILABLE' && f.locus.where === 'deps.fonts').length, 0);
+});
+
+test('the family match ignores quoting and case, and never ignores the flag (P9)', async () => {
+  const proof = proofWithEmbeddableFace('Söhne Breit');
+  const fonts = [{ family: '  "söhne breit" ', dataUri: 'data:font/woff2;base64,AAAA', weight: 400, licenseAsserted: true }];
+  const { value } = await emitOk(proof, {}, { fonts });
+  assert.deepEqual(value.fonts.refused, [], 'the same family spelled differently is the same family');
+
+  // The flag itself is never inferred: a face that carries a file but no claim
+  // is still refused.
+  const unclaimed = emitProof();
+  const withFace = {
+    ...unclaimed,
+    brand: {
+      ...unclaimed.brand,
+      faces: [{ family: 'Söhne Breit', fallbackStack: ['Arial'], weightsSeen: [400], role: 'body', metricDelta: null, embeddable: false }],
+    },
+  };
+  const refusedRun = await emitOk(withFace, {}, { fonts });
+  assert.equal(refusedRun.value.fonts.refused.length, 1);
+  assert.match(refusedRun.value.fonts.refused[0].reason, /not marked embeddable/);
 });
 
 test('the brand theme is compiled into --pp-* variables and never --st-*', async () => {

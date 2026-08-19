@@ -857,7 +857,19 @@ export function budgetAssets(proof, maxBytes, options = {}) {
   // the allocator gets the precision of a fine ladder at the cost of a coarse
   // one, and the file lands just under the budget instead of far under it (P7).
 
+  // The dial's exponent runs over the assets the ladder can actually reach, not
+  // over every asset in the proof: a payload-resident image the budgeter has
+  // already excluded still holds a rank, and reading `rank` straight would leave
+  // a gap in the gradient — the same shape of error as counting a shared payload
+  // twice. Position among the budgeted assets is what "least important" means
+  // here, and it preserves the ordering exactly.
   const count = assets.length;
+  const position = new Map(
+    assets.slice().sort((a, b) => a.rank - b.rank).map((a, i) => [a.dataUri, i]),
+  );
+  const dialScale = (/** @type {AssetEntry} */ a, /** @type {number} */ q) => (
+    scaleForQuality(q, /** @type {number} */ (position.get(a.dataUri)), count)
+  );
   const prefixOf = new Map(assets.map((a) => [a.dataUri, dataUriPrefixBytes(a.dataUri)]));
   /** Every re-encode this call has performed, keyed by asset and scale. */
   /** @type {Map<string, {produced: {dataUri: string, width: number, height: number, bytes: number, how: string}, predicted: number, scale: number}|null>} */
@@ -955,7 +967,7 @@ export function budgetAssets(proof, maxBytes, options = {}) {
   const predictTotal = (q) => {
     let sum = 0;
     for (const a of assets) {
-      const scale = scaleForQuality(q, a.rank, count);
+      const scale = dialScale(a, q);
       const original = /** @type {number} */ (originalBytes.get(a.dataUri));
       const known = attempts.get(keyOf(a, scale));
       let bytes;
@@ -978,7 +990,7 @@ export function budgetAssets(proof, maxBytes, options = {}) {
     const chosen = new Map();
     let total = 0;
     for (const a of assets) {
-      const entry = resolve(a, scaleForQuality(q, a.rank, count));
+      const entry = resolve(a, dialScale(a, q));
       chosen.set(a.dataUri, entry);
       total += costOf(a.dataUri, entry ? entry.produced.bytes : /** @type {number} */ (originalBytes.get(a.dataUri)));
     }

@@ -292,3 +292,45 @@ the lane that consumes it rather than the lanes that maintain it. Recorded so
 that whoever next reads `availableFamilies` knows the invariant is enforced
 upstream on purpose, and where.
 
+
+---
+
+## D-L12-11 — L6's omitted-media surface is the studio's obligation and is not in `API.md` Part 3
+
+**Raised by:** L12, this pass. **Status:** open, for the integrator.
+
+**What.** L6 landed `unresolvedMediaRefs(specimen)` and
+`restoreOmittedMedia(specimen, target, supply, options)` for CRITIQUE-3 P6, and
+declares them in **Part 5** (the "reached through" table). `API.md` Part 3's L6
+fence still reads:
+
+```js
+buildSpecimen(capture, {kind?, imageQuality, clock, idMinter}): Specimen
+restoreBlock(specimen, removedEntry): Specimen         // stripping is reversible
+```
+
+**Why it matters here rather than as a formality.** D-L12-6 established that
+Part 3 is the only thing `test/ui/lane-conformance.test.mjs` reads: for every
+export declared in a lane's Part 3 fence, the adapter must call it or explain in
+`LANE_SURFACE_NOTES` why not. Both of these are now called
+(`services.omittedMedia`, `services.restoreOmittedMedia`), so nothing is broken
+today. What is missing is the *obligation*: if a future pass drops either call,
+the conformance test will not notice, and the failure mode is the one this whole
+surface exists to prevent — a capture that silently did less than the seller
+thought, with no screen saying so.
+
+The `restoreBlock` line in the fence carries the comment "stripping is
+reversible", which is precisely the kind of promise these two make about media,
+and precisely why they belong beside it.
+
+**Asked for.** Two lines in Part 3's L6 fence:
+
+```js
+unresolvedMediaRefs(specimen): string[]
+restoreOmittedMedia(specimen, target, supply, {imageQuality?, idMinter?}): Specimen  // an omitted image is restorable
+```
+
+**Not blocking.** L12 has wired both and guarded them in
+`test/ui/critique-3.test.mjs` against the rendered panels, so the behaviour is
+checked from this side regardless. This is about which side the *requirement*
+lives on.

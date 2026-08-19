@@ -557,6 +557,16 @@ html, body {
 .st-stripped-score { font-size: 11px; color: var(--st-text-faint); }
 .st-stripped-text { margin: 5px 0 0; font-size: 11.5px; color: var(--st-text-dim); }
 
+/* Images a capture could not bring (CRITIQUE-3 P6's follow-on). Marked with the
+   warning rule rather than the blocking one: the emit is open, which is exactly
+   why the panel has to be the thing that says the picture is not there. */
+.st-omitted { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.st-omitted-item { padding: 8px 10px; border: 1px solid var(--st-border); border-left: 2px solid var(--st-warn); border-radius: var(--st-radius-sm); background: var(--st-ground); }
+.st-omitted-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.st-omitted-head code { font-size: 11px; color: var(--st-text-dim); overflow-wrap: anywhere; }
+.st-omitted-caption { margin: 5px 0 0; font-size: 11.5px; color: var(--st-text-dim); }
+.st-omitted-item .st-field { margin-top: 7px; }
+
 .st-blocks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; counter-reset: block; }
 .st-block { padding: 8px; border: 1px solid var(--st-border); border-radius: var(--st-radius-sm); background: var(--st-ground); }
 .st-block-head { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
@@ -652,6 +662,12 @@ html, body {
 
 .st-fixlog { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
 .st-fixlog-item { display: flex; align-items: center; gap: 8px; padding: 4px 7px; border: 1px solid var(--st-border); border-radius: var(--st-radius-sm); background: var(--st-ground); }
+.st-fixlog-batch { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; color: var(--st-text-dim); font-size: 11px; }
+
+/* An auto-fix that ran and did not help. It reads as a spent affordance rather
+   than as an offer, which is the whole point of CRITIQUE-3 P2: the button and
+   the sentence must not look alike when one of them cannot work. */
+.st-finding-spent { border-left: 2px solid var(--st-border-strong); padding-left: 8px; margin-top: 6px; font-style: italic; }
 
 /* ------------------------------------------------------------------- emit */
 

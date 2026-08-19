@@ -28,6 +28,7 @@ import { contentHash } from '../core/hash.js';
 import { utf8Length, parseDataUri, base64Decode, utf8Decode } from '../core/bytes.js';
 import { sceneRevealsNothing } from '../runtime/beats.js';
 import { SPINE } from '../runtime/deck.js';
+import { renditionIsToolDraft } from './autofix.js';
 import { makeFinding, sortFindings } from './finding.js';
 import { severityOf } from './severity.js';
 import { detectOverflow, faceResolutions, resolveBoxFace, advanceDeltaOf } from './overflow.js';
@@ -246,12 +247,25 @@ const assetMissing = {
         if (!block || block.type !== 'media') return;
         if (own.has(block.ref) || globalMedia.has(block.ref)) return;
         const specimenId = kind === 'specimen' ? owner.id : owner.specimenId || null;
+        // The auto-fix removes the block, which is an edit to what the room will
+        // see. On a specimen that is legal because §18.3 has a place to say it
+        // happened, and L11's fixer writes there through L6's `markEdited`. On a
+        // rendition the prospect declared as their own material, or that a
+        // person signed off on, §4 gives the tool nowhere to say anything — so
+        // no auto-fix is offered and the message says why (L11-D30). The
+        // condition is the fixer's own, stated once here so the rule and the
+        // fixer cannot drift.
+        const draft = kind === 'specimen' || renditionIsToolDraft(proof, owner.id);
+        const why = owner.provenance === 'client-supplied'
+          ? 'This rendition is marked client-supplied, so the blocks in it are the prospect\'s own material'
+          : 'This rendition has been promoted to verified-by-user, so someone has signed off on the blocks in it';
         out.push(makeFinding({
           code: 'ASSET_MISSING',
           locus: { specimenId: specimenId || undefined, assetId: block.ref },
           key: `block:${owner.id}:${i}`,
-          autoFixAvailable: true,
-          message: `Block ${i} of ${kind} "${owner.title || owner.label || owner.id}" shows media "${block.ref}", and no media reference with that id exists in the proof. It would render as a broken image in front of the client.`,
+          autoFixAvailable: draft,
+          message: `Block ${i} of ${kind} "${owner.title || owner.label || owner.id}" shows media "${block.ref}", and no media reference with that id exists in the proof. It would render as a broken image in front of the client.`
+            + (draft ? '' : ` ${why}, and §4 gives a rendition no field for recording that the tool changed it — so removing the block is not offered as an auto-fix. Supply the image, or remove the block yourself.`),
           detail: { ownerKind: kind, ownerId: owner.id, blockIndex: i, ref: block.ref },
         }));
       });

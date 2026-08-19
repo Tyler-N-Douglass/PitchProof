@@ -1073,3 +1073,265 @@ new boot-time logic in the one place ordinary tests cannot reach, and the test
 fixture that decodes an artifact's model (`test/fixtures/emit/artifact-dom.mjs`)
 calls the real function against a five-line document stub rather than
 re-implementing the rule it is checking.
+
+---
+
+## E35 — The refusal names the largest thing in the file, and an unreachable budget spends nothing (P4)
+
+**Unsettled by:** §13 asks for "a report of exactly what was degraded and by how
+much", and §22.5 for a refusal. Neither says what a refusal owes the seller when
+the thing holding the file open is not an image.
+
+**The finding.** A seller attached four weights of a licensed font — 485KB,
+54% of the file — set a 420KB budget, and was told:
+
+```
+[SIZE_BUDGET_EXCEEDED] The artifact is 895224 bytes, 475224 over the 420000-byte
+budget, after 5 degradation(s). 1 asset(s) could not be degraded:
+md_14d5cd1f989c (178 bytes — image/png cannot be re-encoded any smaller …)
+```
+
+Five of the prospect's own images had been resampled on the way to a number the
+file could never reach, and the obstacle named was the smallest object in the
+room. `budget.js` already stated the rule this broke, about a different payload:
+*"a seller told 'nothing else can be degraded' while a megabyte of inline SVG
+sits in the payload has been told something untrue."*
+
+**Decision, in two parts.**
+
+1. **A budget the ladder cannot reach degrades nothing.** `budgetAssets` now
+   answers "can this budget be met at all" before it spends a pixel, and answers
+   it two ways: arithmetically, when the document's reserve alone is already over
+   the ceiling; and by measurement, by taking every asset to the floor of the
+   ladder once and looking. If neither fits, the plan is empty, the proof comes
+   back the same object it went in as, and the result carries
+   `unreachable: true` with the reason in a sentence. The emit is refused either
+   way — degrading the client's photographs on the way to a refusal costs them
+   real quality and buys nobody anything.
+
+2. **Every refusal says where the bytes are.** `fixedCostOf` decomposes the
+   reserve into named components — embedded fonts (with the families and how
+   many faces), the presentation runtime, the model payload, the artifact
+   stylesheet, the brand theme, the user stylesheet, the media table, the
+   pre-rendered opening beat, and the document scaffolding that is left over —
+   and `describeFixedCost` names them largest-first in the finding. It is a
+   decomposition, not an estimate: every component is the byte length of a
+   string the emitter wrote, less any asset payload written inside it, and
+   `test/emit/budget.test.mjs` asserts that the components sum to
+   `reserveBytes` exactly and that `reserveBytes + assetBytes` is the file.
+
+**Measured**, on a corpus proof carrying four weights of a real 485KB font on a
+face the brand marks embeddable:
+
+```
+4 weights: bytes 925024   assetBytes 10478   reserve 914546
+census: embedded fonts 485516 [4 faces: Sohne] · the presentation runtime 290155
+      · the model payload 50992 · the artifact stylesheet 40277 · the brand theme 782
+      · the media table 9 · the pre-rendered opening beat 33945 · scaffolding 12870
+census sums to 914546 = reserveBytes, exactly
+
+maxBytes 420000:  REFUSED, 0 degradations
+maxBytes 700000:  REFUSED, 0 degradations
+maxBytes 900000:  REFUSED, 0 degradations
+maxBytes 1200000: emitted 925024, 0 degradations
+```
+
+and the refusal now reads:
+
+```
+The artifact is 925024 bytes, 505024 over the 420000-byte budget. Nothing was
+degraded: the document costs 914546 bytes before a single image, which is already
+494546 bytes over the 420000-byte budget, so no amount of image degradation could
+meet it. Where the bytes are: embedded fonts 485516 bytes (4 faces: Sohne); the
+presentation runtime 290155 bytes; the model payload 50992 bytes; the artifact
+stylesheet 40277 bytes; everything else 47606 bytes. Images are 10478 bytes of the
+file (1.1%).
+```
+
+**Why not put the font on the ladder.** Because a typeface cannot be resampled.
+Subsetting is the real answer and it is out of scope; what was in scope was the
+emitter telling the truth about which thing is large. `EmitResult.budget.fixedCost`
+carries the same census to any caller that would rather draw it than read it.
+
+---
+
+## E36 — One quality dial, bisected on measurements, instead of a six-rung ladder (P7)
+
+**Unsettled by:** §13 — "downscale progressively until under budget" — without a
+granularity.
+
+**The finding.** With a 1.6MP photographic hero on a 1,594,939-byte artifact the
+old allocator overshot by up to **47.5×**: to shed 7,975 bytes it took the hero
+from 1600×1000 to 1200×750 and threw away 378,857. It returned the *identical
+file* at every budget across a 25% range, so the setting did nothing over most of
+its span, and the step ranking ran backwards in effect — ranks 5 and 6, the least
+important assets, took `steps: 0` while rank 0, the hero, took `steps: 1`.
+
+Both halves came from the same design. `SCALE_LADDER` was six rungs
+(`1, 0.75, 0.5, 0.35, 0.25, 0.15`), so the smallest downward move available on
+any asset was to give up 44% of its bytes; and the greedy loop spent assets in a
+queue — least important first, one rung at a time — so the only asset large
+enough to matter was the one the queue reached last, and it moved a whole rung
+whatever the need was.
+
+**Decision.** The ladder is gone. In its place is one number, `q`, and every
+asset's linear scale is `q` raised to a power that grows with its importance
+rank: `q` for rank 0, `q³` for the last rank (`scaleForQuality`,
+`IMPORTANCE_SPREAD`). `q = 1` is the lossless pass, `q = 0` is the floor, and
+everything between downscales *everything*, the least important fastest. §13's
+"progressively" is read as one dial over the whole set rather than as a queue in
+which the least important asset is destroyed before the most important is
+touched.
+
+The dial is found by bisection, and the bracket is only ever moved by a
+**measurement**:
+
+1. Measure `q = 1` — the lossless re-encode. It costs no pixels, so it happens
+   whatever the budget is.
+2. Measure `q = 0` — the floor. This answers E35's "can this be met at all"
+   exactly, and gives every asset a second point on its own byte curve.
+3. Bisect between them, at most `MEASURED_PROBES` (5) times. Each candidate is
+   chosen by solving the *predicted* total — which is free — and then weighed by
+   a real decode-resample-encode. The search stops when the unused budget is
+   within 2% of what has been given up, or when the bracket is one quantum wide.
+
+Predictions are read off each picture's **own measured curve**
+(`logInterpolate`): emitted bytes against linear scale is close to a power law
+for a given image, two measurements fix both constants, and the exponent is then
+this photograph's rather than an assumption about photographs. That matters
+because `predictEmittedBytes`' area model is wrong in a knowable direction — the
+corpus hero is 1,181,306 bytes at full size and 61,122 at 15%, where area
+predicts 26,500 — and a search that bisects on a systematically wrong model
+converges on the wrong answer. It is E26's rule ("predict from a measurement of
+*this* image") with the exponent measured too.
+
+Every scale the encoder sees is quantized to `SCALE_QUANTUM` (1/1024), so §5's
+byte-identical re-emit survives a search that is otherwise continuous.
+
+**The invariant, restated.** §17.10 asks that "degradation is monotonic in
+importance rank". It used to be a property of the loop's visiting order, and the
+critic showed it was not true in general — small assets whose re-encode gave
+nothing back sat at `steps: 0` below assets that had been resampled. It is now a
+property of the formula: `scaleForQuality` is monotone in both arguments, so a
+less important asset never keeps more pixels than a more important one, and
+`steps` is `scaleSteps(scale)` — hundredths of linear size given up, `0` if and
+only if no pixel was. The one clause is assets the codec could not resample at
+all: they gave up nothing, so there is nothing to order them by, and their line
+says "re-encoded losslessly" rather than claiming a resample they did not do.
+Both statements are asserted across five budgets in
+`test/emit/budget.test.mjs`.
+
+**Measured**, on the critic's own fixture — a 1.6MP photographic hero
+(1,181,306 bytes as a data URI) on a 1,621,254-byte artifact, savings computed
+from `len(html)` rather than from anything the emitter reports:
+
+| budget | needed | result | actual saving | overshoot | was |
+|---|---|---|---|---|---|
+| 1,613,147 | 8,107 | 1,612,617 | 8,637 | **1.1×** | 47.5× |
+| 1,588,828 | 32,426 | 1,588,757 | 32,497 | **1.0×** | 11.9× |
+| 1,540,191 | 81,063 | 1,538,685 | 82,569 | **1.0×** | 4.8× |
+| 1,459,128 | 162,126 | 1,454,257 | 166,997 | **1.0×** | 2.4× |
+| 1,297,003 | 324,251 | 1,293,221 | 328,033 | **1.0×** | 1.2× |
+
+The hero now goes 1600×1000 → 1591×994 to shed 8,107 bytes, where it used to go
+to 1200×750; every budget produces a different file; and the reported saving is
+still the real saving, to within 1–35 bytes at every one.
+
+**Cost.** Seven measured re-encodes per asset at worst, against two before. On
+the fixture above one `emit()` takes about 10 seconds where it took 6. That is
+the price of not throwing away a third of the client's hero to save half a
+percent, and it is paid only when a budget actually binds.
+
+---
+
+## E37 — The label's paint is measured, not its `color` declaration (P8)
+
+**Unsettled by:** §18.1 — the label "cannot be styled to invisibility (contrast
+and size floors enforced at emit)" — which names two floors and no properties.
+
+**The finding.** Two of thirty-nine CSS attacks were emitted and then verified to
+work in Chromium:
+
+```css
+.pp-provenance{-webkit-text-fill-color:transparent}   /* colour unchanged and compliant; text gone */
+.pp-provenance{filter:blur(20px)}                     /* 12px type under a 20px blur */
+```
+
+E32 had already moved this check once — from "is this declaration on our list"
+to "is there room for the text" — and the same question applied again. Adding two
+properties to a list would have been the same mistake in a third decade.
+
+**Decision.** Two measurements, each closing a class rather than a spelling.
+
+1. **The glyph paint, not `color`.** `glyphPaint()` computes what actually fills
+   a glyph: `-webkit-text-fill-color` where it is set, `color` otherwise. The
+   contrast floor is then measured on that. `color:transparent`,
+   `-webkit-text-fill-color:transparent`, and a fill at 2% alpha are one finding
+   rather than three rules, and the properties are marked inherited because they
+   are — a rule on `<body>` reaches the label's text exactly as `color` does. A
+   zero-alpha fill falls through to `-webkit-text-stroke-color` when there is a
+   stroke wide enough to draw, because outlined type is a design and not a hiding
+   place; a stroke of zero width paints nothing and rescues nothing.
+
+2. **A filter is either a colour transfer or a blur.** `parseFilter()` splits
+   `filter` into the two different things filters do. The colour transfers —
+   `opacity`, `brightness`, `contrast`, `invert`, `grayscale`, `saturate`,
+   `sepia` — are evaluated exactly, on the two colours §18.1 already measures, so
+   `filter:brightness(0)`, `filter:opacity(0)`, `grayscale(1) brightness(12)`
+   and `contrast(0)` are all the *same* contrast finding. Blur is the one
+   operation on text that is not a function of colour, so it gets the one
+   measurement colour cannot make: the radius against the type it is applied to.
+   `LABEL_MAX_BLUR_EM` is 0.04 — a third of a pixel on 12px type, a softness a
+   designer might want and a reader will not notice — and 20px is fifty times a
+   12px face's stem width. It is a ratio for the same reason the size floor is,
+   so that `blur(1.6em)` is already answered.
+
+**What this deliberately does not do.** The colour transfer is applied from the
+label's own `filter`, and to the backdrop as well only when the label paints an
+opaque background of its own — because a filter on an *ancestor* filters the
+illustrative content with the label, which is a broken deck rather than a
+provenance leak, and the critic checked each of those in a browser and agreed.
+The one ancestor case still named is a transfer that paints at zero alpha, which
+erases without touching anything else's legibility. Blur does compose down the
+chain, in quadrature, because a blurred ancestor really does blur the label.
+
+**Measured.** Both holes now refuse at emit; the thirty-seven the critic's sweep
+already caught still refuse; and five things a real stylesheet does —
+`blur(0.3px)`, `drop-shadow(...)`, `saturate(1.2)`, a fill colour that is simply
+a colour, `-webkit-text-fill-color:currentColor` — still pass, along with
+`invert(1)` on a label that paints its own background, which inverts the
+background with the text and is a light label rather than a hidden one. A rule
+that listed `invert` would have refused that; a measurement does not.
+
+---
+
+## E38 — `deps.fonts` cannot embed a face the model does not mark embeddable (P9)
+
+**Unsettled by:** §7 puts the assertion on `TypeFace.embeddable`; L10-D2 records
+that `TypeFace` has nowhere to carry the bytes, which is why `deps.fonts` exists
+at all.
+
+**The finding.** Passing a real font in `deps.fonts` embedded it whatever the
+brand said, so `embeddable` was one door into §7's law and `deps.fonts` was a
+second. The artifact then rendered in the embedded face while preflight had
+measured all 125 `TEXT_OVERFLOW` findings against Arial.
+
+**Decision.** `partitionFonts()` embeds a `deps.fonts` entry only when the
+proof's own brand carries a face of that family marked `embeddable: true`.
+Family matching normalizes quoting, case and surrounding space, so `"söhne
+breit"` and `Söhne Breit` are the same family; the flag itself is never inferred
+from anything. A refused entry is reported as `FONT_UNAVAILABLE` at severity 2 —
+its declared severity — naming the family and the route: attach the licensed
+file to the face through L5's `attachUserFont`, which is the only function in the
+repository that sets the flag.
+
+**Why severity 2 and not a refusal.** Because nothing about the artifact is then
+a lie: it renders the fallback stack, which is exactly what preflight measured
+against, and L11 already raises `FONT_UNAVAILABLE` for the substitution itself.
+What the seller is owed is the reason their attached font did not appear, and a
+severity-2 finding is where that belongs. `EmitResult.fonts` carries
+`{embedded, refused}` for a caller that wants to say so in its own words.
+
+`licenseAsserted: true` is still required and still not sufficient: a font
+nobody asserted a licence for is neither embedded nor mentioned, exactly as
+before.

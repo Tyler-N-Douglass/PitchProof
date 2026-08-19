@@ -703,3 +703,207 @@ holds no break table of its own, and `services.sceneOverflow` runs L8's
 The scene editor's "Text fit" section therefore moved with the corrected engine
 in the same pass the sweep did, which is the whole point of the two surfaces
 sharing one measurement.
+
+---
+
+## L12-27 — The id sequence's state is the document, not the minter
+
+**Names:** CRITIQUE-3 P1 (severity 1), §5.
+
+**Unsettled by:** §5 fixes the determinism law — "every id is generated from a
+seeded PRNG … or content hash" — and L1 publishes both. Neither says how long a
+minter lives, and the studio is the only place where several lanes mint into one
+document.
+
+**Decision.** `minterFor(seed, {taken, salt})` walks past every id the project
+already uses and records what it hands out. `taken` is **required**: there is no
+way to construct a minter that cannot see the project. `src/ui/services.js`
+computes it from the proof (`usedIds`), so every lane call that mints — today
+`buildSpecimen`, `buildBrand` and `restoreOmittedMedia` — takes `options.proof`
+and refuses without it, naming the omission as a wiring fault. `newDoc` takes
+the same treatment for the project id.
+
+**Why the fix is not a longer-lived counter.** The old minter was
+`contentId(kind, {seed, n})` with `n` counting from zero, constructed fresh per
+capture — so the first id every capture minted was the same string. Three pasted
+pages all came back `sp_004ebe5c150e`; `specimenById` held one entry for three
+specimens; six scenes staged across three of the prospect's pages all resolved
+to the third. Nothing refused it, because `validateProofShape` has no uniqueness
+check and the studio is the only producer of proofs no test read back.
+
+A counter is state with a lifetime, and **every lifetime a counter could have is
+wrong somewhere**: per call collides on the second call; per session collides
+after a reload; per project collides after importing a project built elsewhere,
+where the ids in the file were minted by a different sequence. The state that
+has to survive all four is the set of ids the document already carries — and the
+document is the one thing that *does* survive a reload, an import, an undo and a
+redo, because it is what is persisted. So the minter is handed that set, exactly
+as `ui/model.mintId` has always done for the ids the studio mints itself. There
+is now one rule in this lane rather than two.
+
+`salt` makes the walk rare rather than routine: `captureSalt` seeds it with the
+capture's own identity, so two different pages differ on the first try and only
+a genuine re-capture of the same page has to step. Both parts are deterministic
+— the same capture minted against the same project gives the same id, on any
+machine, in any order.
+
+**The brand is the one exception, and it is deliberate.** `buildBrand` excludes
+the brand it is about to replace from `taken`, because a brand is replaced
+rather than appended: holding its ids back would make a second extraction of the
+same site produce a different brand from the first, which contradicts L5's own
+rule that "a recapture that found the same brand is the same brand".
+
+**Checked, not assumed.** `test/ui/critique-3.test.mjs` builds a proof through
+the real adapter and the real capture actions and asserts every id in it is its
+own — specimens, media, renditions, scenes, beats, branches, recipes, brand,
+logos — across four lifetimes: successive captures, a capture after an undo and
+after a redo, a capture after a reload from the store, and captures into an
+imported `.pitchproof.json`. Two captures of the *same* page are asserted to be
+two addressable specimens. And the consequence is asserted the way the runtime
+computes it: `new Map(proof.specimens.map((s) => [s.id, s]))` holds one entry per
+specimen and the scenes resolve to different pages. In the built
+`dist/pitchproof-studio.html`, driven from an empty Chromium profile: three
+pastes give three ids, a fourth capture after a full browser reload gets its own,
+and the assembled proof holds 128 ids with 0 collisions.
+
+**Two things checked while in here.** Every other minting site in this lane
+already walked a `taken` set (`actions.mint`, `project.duplicate`,
+`branch.create`'s scene id) and needed nothing. `newDoc` did not: every project
+made on the same day carries the same seed by `project.new`'s construction, so
+the project id — which is the storage key — fell to the clock alone to separate
+it, and two made inside one tick would have had the second overwrite the first.
+It now walks the project list.
+
+**The fake adapter enforces the same precondition.** `test/fixtures/ui/`
+`studio-fixture.mjs` is outside `src/ui/**` and was changed on purpose: its
+`buildSpecimen` produced unique ids by an accident of its own call counter while
+the real one produced the same id every time, so every studio test agreed with a
+defect none of them could see. A fake that accepts a call the real one refuses
+is not a fake. Recorded here for the same reason as L12-25.
+
+---
+
+## L12-28 — A repair that changes nothing is not a repair, and the panel stops offering it
+
+**Names:** CRITIQUE-3 P2 (severity 1), §14, §6.
+
+**Unsettled by:** §14 asks for auto-fix "where safe and reversible" and says
+every one is logged and undoable. It does not say what the studio owes a seller
+when a fix runs and the finding does not move.
+
+**Decision.** Three things, in `src/ui/gate.js` (the ledger), `rehearse.autoFix`
+and the Rehearse panel:
+
+1. **A fix is run before it is committed.** A fix is a pure `(proof) => Proof`,
+   so what it did is knowable in advance: apply it, compare digests, and if the
+   proof came back unchanged, commit nothing. Nothing goes on the undo stack —
+   an entry whose undo does nothing is how an undo stack stops being
+   trustworthy, which is L12-5's rule applied to a fix rather than to an edit.
+2. **The attempt is recorded, keyed by the finding's id**, which is
+   content-derived from its code, locus and key and is therefore the same string
+   when the same finding comes back. `'no-change'` withdraws the button in
+   favour of a sentence; `'applied'` is provisional, and the next sweep
+   reconciles it to `'returned'` if the finding is still standing. A fix that
+   declared `effect: 'plan'` or `'mitigates'` is never marked returned — its
+   finding standing is the contract, and the panel says so under the button.
+3. **The panel says how much of the list a button could ever clear**, per
+   severity group and for the whole sweep, before the first click: *"Of 8
+   findings, 3 have an auto-fix on offer and 5 have none and need a hand edit."*
+   When nothing is left that a button can clear, the controls are gone and a
+   notice says so rather than leaving a dead button on screen.
+
+**Why, given P1 was the cause.** It was: with every specimen sharing one id the
+`ASSET_MISSING` fix resolved `locus` to the wrong specimen, found a block whose
+`ref` did not match, and returned the proof untouched — twenty-four consecutive
+times over 136 seconds, with the button offered after each. Fixing P1 closes
+that instance. It does not close the shape. A repair loop that cannot make
+progress has to be able to say so whatever the cause, because the next cause
+will not be P1, and a seller who is told "this did not help" after one click
+loses one click rather than forty.
+
+The measured difference, in the built studio from an empty profile: 8 findings,
+3 with a fix on offer → one click → 5 findings, 0 with a fix on offer, the
+terminal sentence on screen, in 1 second. The critic measured 40 clicks and 232
+seconds ending with three findings and a disabled emit.
+
+**What is deliberately not done.** No finding is dismissed, no severity is
+lowered, and nothing here opens the emit. Withdrawing a button is a statement
+about the *button*, not about the finding: the finding stays, at its severity,
+blocking, with its message and its locus.
+
+---
+
+## L12-29 — Apply-all is a second route, not a replacement
+
+**Names:** CRITIQUE-3 P11, §14.
+
+**Unsettled by:** L11 publishes `applyAll` and §14 makes rehearsal "the last
+pass before walking in". Nothing says whether the studio should offer it.
+
+**Decision.** `rehearse.autoFixAll` calls `services.applyAllFixes`, which calls
+L11's `applyAll` — the lane's own threading, not a second copy of it in the
+studio. It lands as **one** command with one undo, whose history entry carries
+every label it rolled up so the fix log names each fix rather than the click.
+The per-finding buttons stay.
+
+**Why both.** There is a real argument for one at a time — a seller should see
+each change — and the honest answer is that they still can: every fix has its
+own button, every application is a separate line in the fix log, and apply-all's
+entry lists what it did. What one-at-a-time actually cost was not attention but
+*sweeps*: each application invalidates the preflight, correctly, so clearing N
+findings cost N clicks and N full sweeps on the one screen §14 calls the last
+pass before the room. The choice is not "see each change" versus "see none"; it
+is "see each change on the sweep that follows" versus "wait five seconds N
+times". And the seller who wants them one at a time has the buttons.
+
+Apply-all skips any fix the ledger has already shown to be inert (L12-28), and
+if a whole pass leaves the proof unchanged it records every fix in it as inert
+and says the loop is over — which is the terminating condition stated out loud
+rather than inferred from a count that stopped moving.
+
+---
+
+## L12-30 — A capture that could not bring the pictures says so, on three screens
+
+**Names:** CRITIQUE-3 P6 (L6's follow-on), §6, §18.
+
+**Unsettled by:** L6 now holds a `media` block whose bytes were never captured
+out of the block stream rather than emitting a reference the artifact would
+render as a broken image (its D-L6-21). That is right, and it says nothing about
+whose job it is to tell the seller. `src/ui/services.js` had never called
+`unresolvedMediaRefs`; the record sat on the specimen and no surface read it.
+
+**Decision.** `services.omittedMedia(specimen)` merges L6's held-back entries
+with `unresolvedMediaRefs`, and three screens read it:
+
+- **at capture**, a sticky warning naming how many images did not come, which
+  ones, and where the file picker is;
+- **on the specimen**, a section per image with its recorded position, its
+  caption, and a file input — `specimen.supplyMedia` → L6's
+  `restoreOmittedMedia`, which puts the block back at the exact position it was
+  taken from, with its caption. Restoring does not mark the specimen edited:
+  §18.3's stamp is about changes to their page, and this is their picture
+  arriving;
+- **on the emit panel**, immediately under "Every check has passed", a list of
+  what the file will not contain.
+
+**Why the third one is not redundant.** L6's change closed a severity-1 emit
+blocker and moved the failure one step out: the emit now succeeds and the deck
+ships without the product photograph. That is worse than the blocker unless
+something says so, because the blocker at least stopped the seller. The emit
+panel is the screen that writes the file, and "Nothing stands between this proof
+and a file" reads as "and the deck is complete" to anybody who has not been told
+otherwise. This does not block and does not raise a finding — it makes shipping
+without the pictures a decision rather than an accident.
+
+**Its relation to P2.** The same shape and a different cause. P2 was a *repair*
+that did less than the seller thought; this is a *capture* that did. In both the
+studio's account of the project had drifted from the project and nothing on
+screen closed the gap. They are unrelated in mechanism: P2's cause was P1's id
+collision, and this one arrived with L6's fix for a defect P1 had nothing to do
+with. What they share is the remedy — the studio says what actually happened —
+and that is why they were worth doing in one pass.
+
+**An entry that is `restorable: false`** — a `media` block still standing in the
+stream whose `ref` resolves to nothing — is named but gets no picker: there is
+no recorded position to return it to, and `ASSET_MISSING` is the honest route.

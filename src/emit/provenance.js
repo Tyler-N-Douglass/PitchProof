@@ -101,6 +101,23 @@ export const LABEL_MIN_WIDTH_EM = 6;
  */
 export const LABEL_MIN_TRACKING_EM = -0.1;
 
+/**
+ * The blurriest a label may be, as a fraction of its own font size (P8).
+ *
+ * `filter: blur(r)` is a Gaussian of standard deviation `r`, and what it
+ * destroys is stroke structure. A regular text face draws its stems at roughly
+ * an eighth of its font size — about 1.5px on 12px type — and a Gaussian whose
+ * σ approaches that spreads each stem across its neighbours until the word is a
+ * smear. At 0.04em the blur is a third of a pixel on 12px type: a softness a
+ * designer might want and a reader will not notice. At 20px, the attack, it is
+ * fifty times the stem.
+ *
+ * This is deliberately a *ratio*, not a pixel count, for the same reason the
+ * size floor is measured against the line box rather than listed: the next
+ * spelling of the attack is `blur(1.6em)`, and a ratio has already answered it.
+ */
+export const LABEL_MAX_BLUR_EM = 0.04;
+
 /** Overflow values that cut the label off rather than letting it spill. */
 const CLIPPING_OVERFLOW = new Set(['hidden', 'clip']);
 
@@ -363,9 +380,19 @@ export function judgeLabelStyle(chain, rules) {
     if (translateOff) reasons.push(`transform:${style.props.transform} on ${who} moves it off screen`);
     if ((style.props.scale || '').trim() === '0') reasons.push(`scale:0 on ${who}`);
 
-    const filter = (style.props.filter || '').replace(/\s+/g, '').toLowerCase();
-    const filterOpacity = /opacity\(([\d.]+)%?\)/.exec(filter);
-    if (filterOpacity && parseFloat(filterOpacity[1]) === 0) reasons.push(`filter:opacity(0) on ${who}`);
+    // A filter on an *ancestor* paints that ancestor's whole subtree, label and
+    // illustrative content together, so a colour transfer there is a broken
+    // deck rather than a hidden label and the contrast measurement below —
+    // which reads the label's own filter — is not the right instrument for it.
+    // The one case worth naming here is the one that erases without touching
+    // anything else's legibility: a fully transparent layer.
+    if (i < chain.length - 1) {
+      const ancestorFilter = parseFilter(style.props.filter || '', style.fontSizePx);
+      if (ancestorFilter.transfer) {
+        const probe = ancestorFilter.transfer({ r: 255, g: 255, b: 255, a: 1 });
+        if (probe.a === 0) reasons.push(`filter:${String(style.props.filter).trim()} on ${who} paints it at zero alpha`);
+      }
+    }
   }
 
   if (self.effectiveOpacity === 0) reasons.push('opacity:0 — the label is styled to invisibility');
@@ -391,13 +418,31 @@ export function judgeLabelStyle(chain, rules) {
     }
   }
 
+  // C9/P8. The contrast floor is measured on the paint that reaches the glyph,
+  // after the label's own filter has had its way with it — not on the `color`
+  // declaration, which is only where the paint usually comes from. That is what
+  // makes `-webkit-text-fill-color:transparent` and `filter:brightness(0)` the
+  // same finding as `color:transparent`, rather than three rules.
   const background = resolveBackground(chain, computed);
-  const foregroundRaw = parseColor(self.props.color || '') || { r: 0, g: 0, b: 0, a: 1 };
-  const foreground = compositeOver({ ...foregroundRaw, a: foregroundRaw.a * self.effectiveOpacity }, background);
-  const ratio = contrastRatio(foreground, background);
+  const paint = glyphPaint(self);
+  const ownFilter = parseFilter(self.props.filter || '', self.fontSizePx);
+  const painted = ownFilter.transfer ? ownFilter.transfer(paint.color) : paint.color;
+  // The label's own filter paints the label's own background too; the backdrop
+  // it sits on belongs to an ancestor and is not filtered with it. Applying the
+  // transfer to the backdrop as well would be right only when the label paints
+  // an opaque background of its own, and that is exactly when it does.
+  const ownBackground = parseColor(backgroundColorOf(self) || '');
+  const filteredBackground = ownFilter.transfer && ownBackground && ownBackground.a >= 0.95
+    ? ownFilter.transfer(ownBackground)
+    : background;
+  const foreground = compositeOver({ ...painted, a: painted.a * self.effectiveOpacity }, filteredBackground);
+  const ratio = contrastRatio(foreground, filteredBackground);
   if (!(ratio >= CONTRAST_AA_BODY)) {
+    const source = paint.via === 'color' ? '' : ` (the glyph paint comes from ${paint.via})`;
+    const filtered = ownFilter.transfer ? ` after filter:${String(self.props.filter).trim()}` : '';
     reasons.push(
-      `computed contrast is ${ratio.toFixed(2)}:1 (${toHex(foreground)} on ${toHex(background)}), below the ${CONTRAST_AA_BODY}:1 floor §18.1 enforces`,
+      `computed contrast is ${ratio.toFixed(2)}:1 (${toHex(foreground)} on ${toHex(filteredBackground)})${source}${filtered}, `
+      + `below the ${CONTRAST_AA_BODY}:1 floor §18.1 enforces`,
     );
   }
 
@@ -410,6 +455,9 @@ export function judgeLabelStyle(chain, rules) {
       foreground: toHex(foreground),
       background: toHex(background),
       opacity: Number(self.effectiveOpacity.toFixed(3)),
+      glyphPaint: toHex(painted),
+      glyphPaintFrom: paint.via,
+      blurPx: round(room.blurPx),
       lineBoxPx: round(room.lineBoxPx),
       boxHeightPx: room.boxHeightPx === null ? null : round(room.boxHeightPx),
       boxWidthPx: room.boxWidthPx === null ? null : round(room.boxWidthPx),
@@ -448,9 +496,17 @@ export function judgeLabelStyle(chain, rules) {
  * auto` on a short box leaves the label reachable, and the runtime's own scene
  * container is exactly that. `hidden` and `clip` are not reachable.
  *
+ * A fourth measurement joined the three above for P8. `filter: blur(20px)`
+ * leaves every one of them satisfied — the box is the right size, the tracking
+ * is normal, the contrast between the two colours is unchanged — and the label
+ * is an unreadable smear, because blur is the one thing a filter does that is
+ * not a function of colour. So the blur radius is measured against the type it
+ * is applied to, the same way the box is measured against the line box: a
+ * ratio, in the units the attack has to survive.
+ *
  * @param {import('./css.js').ElementDesc[]} chain     html → label
  * @param {import('./css.js').ComputedStyle[]} computed
- * @returns {{reasons: string[], lineBoxPx: number, boxHeightPx: number|null, boxWidthPx: number|null, clipped: boolean, trackingPx: number, scale: number}}
+ * @returns {{reasons: string[], lineBoxPx: number, boxHeightPx: number|null, boxWidthPx: number|null, clipped: boolean, trackingPx: number, scale: number, blurPx: number}}
  */
 export function judgeLabelRoom(chain, computed) {
   const self = computed[computed.length - 1];
@@ -468,6 +524,7 @@ export function judgeLabelRoom(chain, computed) {
   let clipped = false;
   let trackingPx = 0;
   let scale = 1;
+  let blurPx = 0;
 
   for (let i = 0; i < computed.length; i++) {
     const style = computed[i];
@@ -521,10 +578,24 @@ export function judgeLabelRoom(chain, computed) {
       }
     }
 
+    // Blur composes down the chain: a blurred ancestor blurs the label inside
+    // it, and a label blurred inside a blurred ancestor is blurred twice. Two
+    // Gaussians add in quadrature, which is what σ means.
+    const own = parseFilter(style.props.filter || '', style.fontSizePx).blurPx;
+    if (own > 0) blurPx = Math.sqrt(blurPx * blurPx + own * own);
+
     scale *= scaleFactorOf(style);
   }
 
-  return { reasons, lineBoxPx, boxHeightPx, boxWidthPx, clipped, trackingPx, scale };
+  const blurFloor = LABEL_MAX_BLUR_EM * fontSizePx;
+  if (blurPx > blurFloor) {
+    reasons.push(
+      `the label is painted under a ${round(blurPx)}px blur against ${round(fontSizePx)}px type — `
+      + `past the ${LABEL_MAX_BLUR_EM}em ceiling (${round(blurFloor)}px), which is where the strokes of the glyphs stop resolving (§18.1)`,
+    );
+  }
+
+  return { reasons, lineBoxPx, boxHeightPx, boxWidthPx, clipped, trackingPx, scale, blurPx };
 }
 
 /**
@@ -577,6 +648,154 @@ export function scaleFactorOf(style) {
 
 /** @param {number} n @returns {number} */
 function round(n) { return Math.round(n * 100) / 100; }
+
+/**
+ * What actually fills the label's glyphs (P8).
+ *
+ * `color` is the *default* source of the glyph paint, not the paint itself.
+ * `-webkit-text-fill-color` replaces it — in Chromium, WebKit and Gecko alike —
+ * and `.pp-provenance{-webkit-text-fill-color:transparent}` therefore leaves
+ * `color` reading a perfectly compliant `#3d4350` while the text is not there.
+ * A check that reads `color` is checking a declaration; a check that reads the
+ * paint is checking the thing §18.1 is about.
+ *
+ * A glyph with no fill can still be legible if it is *stroked*, so a zero-alpha
+ * fill falls through to `-webkit-text-stroke-color` when there is a stroke wide
+ * enough to draw — that is outlined type, which is a design, not a hiding
+ * place. A stroke of zero width paints nothing and does not rescue it.
+ *
+ * @param {import('./css.js').ComputedStyle} style
+ * @returns {{color: import('./color-value.js').Rgba, via: string}}
+ */
+export function glyphPaint(style) {
+  const props = style.props || {};
+  const named = parseColor(props.color || '') || { r: 0, g: 0, b: 0, a: 1 };
+
+  const fillRaw = String(props['-webkit-text-fill-color'] || '').trim();
+  let paint = named;
+  let via = 'color';
+  if (fillRaw && fillRaw.toLowerCase() !== 'currentcolor') {
+    const parsed = parseColor(fillRaw);
+    if (parsed) { paint = parsed; via = '-webkit-text-fill-color'; }
+  }
+  if (paint.a >= 0.05) return { color: paint, via };
+
+  // Nothing fills the glyph. Is anything drawing its outline?
+  const strokeShorthand = String(props['-webkit-text-stroke'] || '').trim();
+  const widthRaw = String(props['-webkit-text-stroke-width'] || '').trim()
+    || (strokeShorthand ? strokeShorthand.split(/\s+/)[0] : '');
+  const widthPx = resolveLengthPx(widthRaw, style.fontSizePx, style.fontSizePx);
+  if (!(widthPx !== null && widthPx > 0)) return { color: paint, via };
+
+  const strokeColourRaw = String(props['-webkit-text-stroke-color'] || '').trim()
+    || (strokeShorthand ? strokeShorthand.split(/\s+/).slice(1).join(' ') : '');
+  const stroke = strokeColourRaw && strokeColourRaw.toLowerCase() !== 'currentcolor'
+    ? parseColor(strokeColourRaw)
+    : named;
+  if (!stroke || stroke.a < 0.05) return { color: paint, via };
+  return { color: stroke, via: '-webkit-text-stroke-color' };
+}
+
+/**
+ * A `filter` value, read as the two different things a filter does (P8).
+ *
+ * Every filter function is either a **colour transfer** — a function from the
+ * pixel it was going to paint to the pixel it paints instead — or a **spatial**
+ * operation that moves light between pixels. The first can be evaluated exactly
+ * on the two colours §18.1 already measures, which is what turns
+ * `filter:opacity(0)`, `brightness(0)`, `invert(1)`, `grayscale(1)` and every
+ * combination of them from a list of spellings into one contrast measurement.
+ * The second cannot, and for text there is only one that matters: blur.
+ *
+ * Unknown functions are ignored rather than guessed at. `drop-shadow` adds a
+ * shadow behind the glyphs without touching them, and a filter nobody has
+ * implemented is not a hiding place until somebody does.
+ *
+ * @param {string} value
+ * @param {number} fontSizePx  for `em`-relative blur radii
+ * @returns {{transfer: ((c: import('./color-value.js').Rgba) => import('./color-value.js').Rgba)|null, blurPx: number, names: string[]}}
+ */
+export function parseFilter(value, fontSizePx = 16) {
+  const text = String(value || '').trim();
+  if (!text || text.toLowerCase() === 'none') return { transfer: null, blurPx: 0, names: [] };
+
+  /** @type {((c: any) => any)[]} */
+  const steps = [];
+  /** @type {string[]} */
+  const names = [];
+  let blurPx = 0;
+
+  const fn = /([a-z-]+)\(([^)]*)\)/gi;
+  let hit;
+  while ((hit = fn.exec(text)) !== null) {
+    const name = hit[1].toLowerCase();
+    const raw = hit[2].trim();
+    names.push(name);
+    if (name === 'blur') {
+      const px = resolveLengthPx(raw, fontSizePx, fontSizePx);
+      if (px !== null && px > blurPx) blurPx = px;
+      continue;
+    }
+    const amount = filterAmount(raw);
+    if (amount === null) continue;
+    if (name === 'opacity') steps.push((c) => ({ ...c, a: c.a * amount }));
+    else if (name === 'brightness') steps.push((c) => channels(c, (v) => v * amount));
+    else if (name === 'contrast') steps.push((c) => channels(c, (v) => (v - 127.5) * amount + 127.5));
+    else if (name === 'invert') steps.push((c) => channels(c, (v) => v * (1 - amount) + (255 - v) * amount));
+    else if (name === 'grayscale') steps.push((c) => mixToward(c, luma(c), amount));
+    else if (name === 'saturate') steps.push((c) => saturate(c, amount));
+    else if (name === 'sepia') steps.push((c) => sepia(c, amount));
+  }
+
+  const transfer = steps.length
+    ? (/** @type {import('./color-value.js').Rgba} */ c) => steps.reduce((acc, step) => step(acc), c)
+    : null;
+  return { transfer, blurPx, names };
+}
+
+/** `50%`, `0.5`, `0` — the number a filter function takes. @param {string} raw @returns {number|null} */
+function filterAmount(raw) {
+  const text = String(raw).trim();
+  if (!text) return 1;
+  const n = parseFloat(text);
+  if (!Number.isFinite(n)) return null;
+  return text.endsWith('%') ? n / 100 : n;
+}
+
+/** @param {import('./color-value.js').Rgba} c @param {(v: number) => number} f */
+function channels(c, f) {
+  const clamp = (v) => Math.max(0, Math.min(255, v));
+  return { r: clamp(f(c.r)), g: clamp(f(c.g)), b: clamp(f(c.b)), a: c.a };
+}
+
+/** @param {import('./color-value.js').Rgba} c */
+function luma(c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; }
+
+/** @param {import('./color-value.js').Rgba} c @param {number} grey @param {number} amount */
+function mixToward(c, grey, amount) {
+  const mix = (v) => v * (1 - amount) + grey * amount;
+  return channels(c, mix);
+}
+
+/** @param {import('./color-value.js').Rgba} c @param {number} amount */
+function saturate(c, amount) {
+  const grey = luma(c);
+  return channels(c, (v) => grey + (v - grey) * amount);
+}
+
+/** @param {import('./color-value.js').Rgba} c @param {number} amount */
+function sepia(c, amount) {
+  const r = 0.393 * c.r + 0.769 * c.g + 0.189 * c.b;
+  const g = 0.349 * c.r + 0.686 * c.g + 0.168 * c.b;
+  const b = 0.272 * c.r + 0.534 * c.g + 0.131 * c.b;
+  const clamp = (v) => Math.max(0, Math.min(255, v));
+  return {
+    r: clamp(c.r * (1 - amount) + r * amount),
+    g: clamp(c.g * (1 - amount) + g * amount),
+    b: clamp(c.b * (1 - amount) + b * amount),
+    a: c.a,
+  };
+}
 
 /**
  * The colour actually behind the label: the nearest painted ancestor, with any

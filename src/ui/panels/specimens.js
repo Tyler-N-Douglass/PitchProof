@@ -12,6 +12,12 @@
  *   - **raw HTML is opt-in per specimen**, and the opt-in records who and when.
  *   - **an edited specimen says so.** §18.3 requires the artifact to admit it,
  *     so every text edit stamps the specimen and the stamp is visible here.
+ *   - **an image the capture could not bring says so, and has a way back.**
+ *     L6 holds a `media` block whose bytes were never captured out of the block
+ *     stream (its D-L6-21, for CRITIQUE-3 P6) — right, and silent until a
+ *     screen shows it. A capture that quietly dropped the product photograph
+ *     and then emitted cleanly is a worse failure than the emit blocker it
+ *     replaced, because the blocker at least stopped the seller.
  *
  * @module ui/panels/specimens
  */
@@ -25,7 +31,7 @@ import {
   blockEditableText, blockIsPreformatted, blockSummary, blockUsesMonospace,
   findSpecimen, rawOptIn, specimenIsEdited, strippedBlocks,
 } from '../model.js';
-import { KIND_CHOICES } from '../actions.js';
+import { IMAGE_ACCEPT, KIND_CHOICES } from '../actions.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
 
 /**
@@ -155,6 +161,8 @@ function renderSpecimen(app, specimen) {
           : null))
       : null),
 
+    renderOmittedMedia(app, specimen),
+
     section({
       title: 'What was stripped as chrome',
       subtitle: 'Every removal carries the reason and the score that made it, and every one is reversible (§8).',
@@ -220,6 +228,62 @@ function renderSpecimen(app, specimen) {
         rawBox(escapeForPreview(specimen.raw), 'st-raw-source'))
       : null,
     !specimen.raw ? notice('info', 'No raw HTML was captured for this specimen — it came from a document or image importer.') : null));
+}
+
+/**
+ * The images this capture could not bring, and the way to bring them.
+ *
+ * §6's paste route — the one the studio's own copy calls "Works when nothing
+ * else does" — has markup and no bytes, so every image on the page arrives as a
+ * reference to a file that is not there. L6 holds those blocks back; this is
+ * where the seller finds out, and it is the only screen that says so.
+ *
+ * Each entry carries a file picker rather than a message, because a message
+ * alone would leave the seller with a deck they now know is missing the product
+ * photograph and no way to put it in. `restoreOmittedMedia` returns the block
+ * to the exact position it was taken from, with its caption, so supplying the
+ * file is a repair rather than a re-edit.
+ *
+ * An entry that is `restorable: false` is a `media` block still standing in the
+ * stream whose `ref` resolves to nothing. There is no held-back position to
+ * return it to, so it gets the sentence and no picker: the sweep raises
+ * `ASSET_MISSING` for it, and that is the honest route.
+ *
+ * @param {any} app
+ * @param {any} specimen
+ */
+function renderOmittedMedia(app, specimen) {
+  const omitted = app.services.omittedMedia(specimen) || [];
+  if (!omitted.length) return null;
+  const restorable = omitted.filter((e) => e.restorable);
+  return section({
+    title: `Images this capture could not bring · ${omitted.length}`,
+    subtitle: 'Pasted markup carries no bytes, so an image on the page arrives as a reference to a file that is not here (§6).',
+  },
+  notice('warn', restorable.length
+    ? `${plural(omitted.length, 'image')} ${omitted.length === 1 ? 'was' : 'were'} left out of the content below rather than shown to the client as ${omitted.length === 1 ? 'a broken picture' : 'broken pictures'}. The proof will emit without ${omitted.length === 1 ? 'it' : 'them'} and say nothing on stage, so this is the screen that says it. Supply the file and the image goes back exactly where it stood, with its caption.`
+    : `${plural(omitted.length, 'image')} ${omitted.length === 1 ? 'is' : 'are'} referenced by a block in this specimen with no file behind ${omitted.length === 1 ? 'it' : 'them'}. The rehearsal sweep raises ASSET_MISSING for ${omitted.length === 1 ? 'it' : 'them'}, and the emit stays closed until ${omitted.length === 1 ? 'it is' : 'they are'} resolved.`),
+  h('ul', { class: 'st-omitted' }, omitted.map((entry, i) => h('li', {
+    class: 'st-omitted-item', [KEY_ATTR]: entry.id || `${entry.ref}:${i}`,
+  },
+  h('div', { class: 'st-omitted-head' },
+    badge(entry.restorable ? 'left out' : 'unresolved', 'warn'),
+    h('code', { class: 'st-mono' }, truncate(entry.ref, 56)),
+    entry.position === null ? null : h('span', { class: 'st-dim st-mono' }, `position ${entry.position}`),
+    entry.origin === 'stripped' ? h('span', { class: 'st-dim' }, 'inside a stripped region') : null),
+  entry.caption ? h('p', { class: 'st-omitted-caption' }, `“${truncate(entry.caption, 120)}”`) : null,
+  entry.restorable
+    ? h('label', { class: 'st-field' },
+      h('span', { class: 'st-field-label' }, 'Supply this image'),
+      h('input', {
+        class: 'st-input st-file', type: 'file', accept: IMAGE_ACCEPT,
+        [ACT_ATTR]: 'specimen.supplyMedia',
+        [ARG_ATTR]: `${specimen.id}|${entry.id || entry.ref}`,
+        [KEY_ATTR]: `omitted-${specimen.id}-${entry.id || i}`,
+        'aria-label': `Supply the image file for ${entry.ref}`,
+      }),
+      h('span', { class: 'st-field-hint' }, '.png, .jpg, .webp, .gif, .avif or .svg. It goes back at the position above, with its caption, and does not mark the specimen edited — it is their picture arriving, not a change to their page.'))
+    : h('p', { class: 'st-field-hint' }, 'This one is referenced by a block rather than held back, so there is no recorded position to return it to. Remove the block, or re-capture the page with its assets folder.')))));
 }
 
 /**

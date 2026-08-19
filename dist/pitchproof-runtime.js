@@ -3470,7 +3470,8 @@ function renderSource(ctx, sourceBlocks, count) {
     'data-pp-el': ctx.el('source/count'),
     'data-pp-group': 'source',
   },
-  h('p', { class: 'pp-fan-count-number', 'data-pp-tx': 'badgeNumber' }, String(count)),
+
+  h('p', { class: 'pp-fan-count-number', 'data-pp-tx': 'badgeNumber', 'data-pp-lines': '1' }, String(count)),
   h('p', { class: 'pp-fan-count-label', 'data-pp-tx': 'badgeLabel' }, count === 1 ? 'rendition' : 'renditions')));
 }
 
@@ -5726,6 +5727,7 @@ function collectTextBoxes(node, env) {
           const lines = Math.max(1, Math.floor(Number(attrs['data-pp-lines'])) || 1);
           box.containerHeightPx = round3(lines * resolved.style.fontSizePx * resolved.style.lineHeight);
         }
+
         if (fit) {
           box.fitsContent = true;
           box.fit = fit;
@@ -6030,6 +6032,7 @@ __exports["renderSceneTree"] = __require("scene/measure.js").renderSceneTree;
 __exports["normalizeContext"] = __require("scene/measure.js").normalizeContext;
 __exports["plainText"] = __require("scene/measure.js").plainText;
 __exports["textOverflowOf"] = __require("scene/measure.js").textOverflowOf;
+__exports["fitReason"] = __require("scene/measure.js").fitReason;
 __exports["insetLength"] = __require("scene/measure.js").insetLength;
 __exports["declaredTrackWidth"] = __require("scene/measure.js").trackWidth;
 __exports["BRAND_BORDER_INSET"] = __require("scene/measure.js").BRAND_BORDER_INSET;
