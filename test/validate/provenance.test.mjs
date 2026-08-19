@@ -16,6 +16,8 @@ import assert from 'node:assert/strict';
 import {
   runPreflight, autoFixes, hasPromotionRecord, promotionRecord, reviewReachable,
 } from '../../src/validate/index.js';
+import { promoteProvenance, hasPromotionRecord as recipeHasPromotionRecord } from '../../src/recipe/index.js';
+import { hasPromotionRecord as emitHasPromotionRecord } from '../../src/emit/promotion.js';
 import { cleanProof, defectProof, copy, NOW, CLEAN_DOCUMENT } from '../fixtures/validate/defects.mjs';
 
 const preflight = (proof, options = {}) => runPreflight(proof, { clock: () => NOW, ...options });
@@ -31,23 +33,70 @@ test('a verified-by-user rendition with no promotion record blocks emit', async 
   assert.equal(finding.autoFixAvailable, true);
 });
 
-test('a verified-by-user rendition with a promotion record is accepted', async () => {
+/**
+ * The regression for the defect L10 reported as L10-D9. L11 used to carry its own
+ * reader for the promotion record — a regex looking for an English sentence — and
+ * it did not recognise the delimited record `promoteProvenance` actually writes.
+ * A correctly promoted rendition therefore drew a severity-1 `PROVENANCE_UNLABELED`
+ * from preflight, so the studio greyed out the emit button on an honest proof
+ * while `emit()` accepted the same proof without complaint. There is now one
+ * reader, L7's (L11-D19).
+ *
+ * This test builds the record the only supported way — by calling L7's
+ * `promoteProvenance` — so it cannot pass against a reader that agrees with a
+ * hand-written imitation of the format instead of the format itself.
+ */
+test('a rendition promoted by L7 is accepted, and preflight agrees with the emitter', async () => {
   const proof = copy(defectProof('PROVENANCE_UNLABELED'));
-  proof.renditions[0].notes = 'Promoted to verified-by-user by j.okafor@northwind.example at 2026-02-05T14:12:00Z after side-by-side review.';
-  assert.equal(hasPromotionRecord(proof.renditions[0]), true);
-  assert.deepEqual(promotionRecord(proof.renditions[0]), {
-    by: 'j.okafor@northwind.example',
-    at: '2026-02-05T14:12:00Z',
-  });
+  const promoted = promoteProvenance(
+    { ...proof.renditions[0], provenance: 'illustrative' },
+    { by: 'j.okafor@northwind.example', at: '2026-02-05T14:12:00.000Z' },
+  );
+  proof.renditions[0] = promoted;
+
+  assert.equal(hasPromotionRecord(promoted), true, 'L11 must read the record L7 wrote');
+  assert.equal(emitHasPromotionRecord(promoted), true, 'and so must L10');
+  const record = promotionRecord(promoted);
+  assert.equal(record.by, 'j.okafor@northwind.example');
+  assert.equal(record.at, '2026-02-05T14:12:00.000Z');
+  assert.equal(record.of, promoted.id);
+
   const findings = await preflight(proof);
   assert.deepEqual(findings.filter((f) => f.code === 'PROVENANCE_UNLABELED'), []);
 });
 
-test('a structured promotion record is accepted too, so L7 may carry it as a field', () => {
-  assert.equal(hasPromotionRecord({ provenance: 'verified-by-user', notes: null, promotion: { by: 'a@b.example', at: '2026-02-05T00:00:00Z' } }), true);
-  assert.equal(hasPromotionRecord({ notes: null, promotion: { by: '', at: '2026-02-05T00:00:00Z' } }), false);
+test('preflight and the emitter read the promotion record with the same function', () => {
+  assert.equal(hasPromotionRecord, recipeHasPromotionRecord,
+    'L11 re-exports L7\'s reader rather than implementing a second one');
+  assert.equal(emitHasPromotionRecord({ provenance: 'verified-by-user', notes: 'Promoted by Dana at 2026-02-05T00:00:00Z.' }), false);
+  assert.equal(hasPromotionRecord({ provenance: 'verified-by-user', notes: 'Promoted by Dana at 2026-02-05T00:00:00Z.' }), false,
+    'an English sentence is not a promotion record, and forging one must stay hard');
   assert.equal(hasPromotionRecord({ notes: 'Looks good to me.' }), false);
   assert.equal(hasPromotionRecord(null), false);
+  assert.equal(promotionRecord(null), null);
+});
+
+test('a record copied onto another rendition does not verify', () => {
+  const donor = promoteProvenance(
+    { ...cleanProof().renditions[0], id: 'rd_donor', provenance: 'illustrative' },
+    { by: 'Dana Okafor', at: '2026-02-05T14:12:00.000Z' },
+  );
+  const thief = { ...donor, id: 'rd_thief' };
+  assert.equal(hasPromotionRecord(donor), true);
+  assert.equal(hasPromotionRecord(thief), false, 'the record names the rendition it was written for');
+});
+
+test('the reader preflight defaults to needs no injection to agree with L10', async () => {
+  const proof = copy(defectProof('PROVENANCE_UNLABELED'));
+  proof.renditions[0] = promoteProvenance(
+    { ...proof.renditions[0], provenance: 'illustrative' },
+    { by: 'Dana Okafor', at: '2026-02-05T14:12:00.000Z' },
+  );
+  const byDefault = (await preflight(proof)).filter((f) => f.code === 'PROVENANCE_UNLABELED');
+  const injected = (await preflight(proof, { hasPromotionRecord: emitHasPromotionRecord }))
+    .filter((f) => f.code === 'PROVENANCE_UNLABELED');
+  assert.deepEqual(byDefault, []);
+  assert.deepEqual(injected, byDefault, 'injecting L10\'s reader changes nothing — L10 may drop the injection');
 });
 
 test('an illustrative rendition is not a finding on its own — it is labelled, not forbidden', async () => {

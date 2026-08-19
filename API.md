@@ -590,7 +590,9 @@ type SceneMeasurement = {
   sceneId: string; breakpoint: 'sm'|'md'|'lg';
   boxes: { elementId: string|null; role: string; text: string;
            style: TextStyle; containerWidthPx: number; containerHeightPx: number;
-           whiteSpace?: string; overflowWrap?: string; maxLines?: number }[];
+           whiteSpace?: string; overflowWrap?: string; maxLines?: number;
+           textOverflow: 'clip'|'ellipsis';       // always present, derived from the CSS
+           fontStack?: string[]; containerId?: string; slot?: string }[];
 };
 ```
 
@@ -601,6 +603,25 @@ detector cannot see it.
 
 Every illustrative rendition a layout renders must carry an element with class
 `pp-provenance` inside the same subtree. L10 asserts it at emit.
+
+`textOverflow` is **always present** and is derived from the stylesheet, never
+authored: `'ellipsis'` where the element carries `data-pp-clamp` (the one-line
+rule declares `text-overflow: ellipsis` outright), `'clip'` otherwise; a layout
+may state it directly with `data-pp-to`. `test/scene/css-agreement.test.mjs`
+parses `scenes.css` and asserts the declared value for every clamp the layouts
+actually stamp, so measurement and stylesheet cannot drift.
+
+This field is what §22.2's **severity** hangs on, which is why it is not
+optional. L11 grades on whether the viewer can see that text was cut: `clip` is
+severity 1, `ellipsis` is severity 2, and an undeclared value is severity 1
+because that is CSS's own initial value. Height overflow is ungraded by it —
+`text-overflow` is horizontal, and text running past the bottom of a box carries
+no ellipsis anywhere.
+
+Boxes that stack in one column share a `containerId` (`splitCell:before`,
+`sideNote:notes`, `indexRow:index`, …), which is how L11 aggregates cumulative
+overflow across siblings. A box's *position* within its container is still
+unavailable — a documented gap (dispute 25), not a worked-around one.
 
 ### L9 Branches — `src/branch/index.js`
 

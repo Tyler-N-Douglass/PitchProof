@@ -265,17 +265,23 @@ export const URL_LABEL_BUDGET = 48;
  * still does not fit, the stylesheet ellipsises it and `measureScene` reports
  * `textOverflow: 'ellipsis'`, so the truncation is graded as visible rather
  * than as data lost silently (CRITIQUE-1 F6).
+ *
+ * The budget is a parameter because it is a property of the *container*, not of
+ * URLs: `URL_LABEL_BUDGET` is sized for a panel meta line, and `systemMap`'s
+ * node is a fifth of that width with two lines to spend. A caller that knows
+ * its own box passes its own number (`labelBudget` in the map).
  * @param {string|null|undefined} url
+ * @param {number} [budget]   characters the label may run to before elision
  * @returns {string|null}
  */
-export function displayUrl(url) {
+export function displayUrl(url, budget = URL_LABEL_BUDGET) {
   if (typeof url !== 'string' || !url.trim()) return null;
   const stripped = url.trim()
     .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
     .replace(/^\/\//, '')
     .replace(/\/+$/, '');
   if (!stripped) return null;
-  if (stripped.length <= URL_LABEL_BUDGET) return stripped;
+  if (stripped.length <= budget) return stripped;
 
   const parts = stripped.split('/').filter(Boolean);
   if (parts.length < 3) return stripped;   // host plus one segment: nothing to elide
@@ -288,12 +294,13 @@ export function displayUrl(url) {
 /**
  * The meta line for a specimen: host and path, capture kind, locale.
  * @param {import('../core/contracts.d.ts').Specimen|null} specimen
+ * @param {{urlBudget?: number}} [options]  the container's own label budget
  * @returns {string|null}
  */
-export function specimenMeta(specimen) {
+export function specimenMeta(specimen, options = {}) {
   if (!specimen) return null;
   const parts = [];
-  const url = displayUrl(specimen.sourceUrl);
+  const url = displayUrl(specimen.sourceUrl, options.urlBudget ?? URL_LABEL_BUDGET);
   if (url) parts.push(url);
   if (specimen.locale) parts.push(specimen.locale);
   if (!url && specimen.kind) parts.push(specimen.kind);

@@ -30,9 +30,10 @@
  */
 
 import { h } from '../../core/vdom.js';
-import { layoutText } from '../../core/text-metrics.js';
+import { layoutText, measureText } from '../../core/text-metrics.js';
 import { MAP_DESIGN } from '../geometry.js';
 import { styleForRole } from '../type-scale.js';
+import { renderedFamily } from '../brand-access.js';
 import {
   sceneHead, provenanceLabel, emptyState,
   specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger,
@@ -82,7 +83,14 @@ export function systemMap(ctx) {
   const transform = { x: MAP.transformX, y: 210, w: MAP.nodeW, h: 120 };
 
   const sourceLabel = specimenTitle(ctx.specimen);
-  const sourceMeta = specimenMeta(ctx.specimen) || (ctx.specimen ? ctx.specimen.kind : 'no specimen attached');
+  // The source node's meta line is a URL, and it is elided against the room a
+  // *map node* gives it rather than against the panel-column budget in
+  // parts.js — two lines of 172 design units, not one line of a 320px column.
+  const nodeInnerW = MAP.nodeW - MAP.nodePad * 2;
+  const urlBudget = labelBudget('mapNodeMeta', nodeInnerW, MAP.metaLines, ctx.brand)
+    - (ctx.specimen && ctx.specimen.locale ? String(ctx.specimen.locale).length + 5 : 0);
+  const sourceMeta = specimenMeta(ctx.specimen, { urlBudget: Math.max(8, urlBudget) })
+    || (ctx.specimen ? ctx.specimen.kind : 'no specimen attached');
   const transformLabel = ctx.scene.subhead ? String(ctx.scene.subhead) : 'Transformation';
   const recipeCount = new Set(rends.map((r) => r.recipeId).filter(Boolean)).size;
   const transformMeta = recipeCount === 1 ? '1 recipe' : `${recipeCount} recipes`;
@@ -214,8 +222,12 @@ export function outputBoxes(count) {
 function node(ctx, spec) {
   const { box } = spec;
   const innerW = box.w - MAP.nodePad * 2;
-  const titleLines = wrap(spec.title, 'mapNodeTitle', innerW, MAP.titleLines, ctx.brand);
-  const metaLines = spec.meta ? wrap(spec.meta, 'mapNodeMeta', innerW, MAP.metaLines, ctx.brand) : [];
+  const title = wrap(spec.title, 'mapNodeTitle', innerW, MAP.titleLines, ctx.brand);
+  const meta = spec.meta
+    ? wrap(spec.meta, 'mapNodeMeta', innerW, MAP.metaLines, ctx.brand)
+    : { lines: [], truncated: false };
+  const titleLines = title.lines;
+  const metaLines = meta.lines;
   const blockH = titleLines.length * MAP.lineStep.title + metaLines.length * MAP.lineStep.meta;
   const firstBaseline = box.y + (box.h - blockH) / 2 + MAP.lineStep.title * 0.75;
   const x = box.x + MAP.nodePad;
@@ -251,6 +263,9 @@ function node(ctx, spec) {
       'data-pp-unit-w': String(innerW),
       'data-pp-unit-h': String(MAP.lineStep.title),
       'data-pp-ws': 'nowrap',
+      // The wrap ellipsises what it had to cut, so a truncation here is one the
+      // viewer can see rather than a label that silently stops (§22.2).
+      'data-pp-to': title.truncated ? 'ellipsis' : null,
     }, line))),
   metaLines.length
     ? h('text', {
@@ -267,6 +282,7 @@ function node(ctx, spec) {
       'data-pp-unit-w': String(innerW),
       'data-pp-unit-h': String(MAP.lineStep.meta),
       'data-pp-ws': 'nowrap',
+      'data-pp-to': meta.truncated ? 'ellipsis' : null,
     }, line)))
     : null);
 }
@@ -287,15 +303,78 @@ function node(ctx, spec) {
  */
 export function wrap(text, role, maxUnits, maxLines, brand) {
   const value = String(text ?? '').trim();
-  if (!value) return [];
-  const { style } = styleForRole(role, 'md', brand, { scale: 1 });
+  if (!value) return { lines: [], truncated: false };
+  const style = mapStyle(role, brand);
   const laid = layoutText(value, style, {
     maxWidthPx: maxUnits,
     whiteSpace: 'normal',
     overflowWrap: 'anywhere',
     maxLines,
   });
-  return laid.lines.map((line) => line.text);
+
+  // A wrapped line keeps the space that ended it. `layoutText` measures the
+  // line without it — a break collapses trailing whitespace — but the string it
+  // returns still carries it, and SVG puts that string in a `<tspan>` where
+  // `measureScene` reads it back and reports a run wider than its node. The
+  // overflow was in the measurement, not on the screen; trimming here is what
+  // makes the two agree.
+  const lines = laid.lines.map((line) => line.text.trim()).filter((line, i, all) => line !== '' || all.length === 1);
+  if (!laid.clamped || lines.length === 0) return { lines, truncated: false };
+
+  // Clamped: the tail of the label is gone. SVG cannot ellipsise for us, and a
+  // label that simply stops is exactly the silent truncation §22.2 exists to
+  // stop — the presenter cannot tell a short URL from a cut one. Mark it, and
+  // shorten the last line until the mark fits with it.
+  const last = lines.length - 1;
+  let text2 = lines[last];
+  while (text2.length > 1 && measureText(`${text2}…`, style) > maxUnits) {
+    text2 = text2.slice(0, -1).replace(/\s+$/, '');
+  }
+  lines[last] = `${text2}…`;
+  return { lines, truncated: true };
+}
+
+/**
+ * The style an SVG label is broken and drawn at, in the drawing's design units.
+ *
+ * The family is the one the artifact will *render* in, not the one the brand
+ * asked for. CSS breaks its own lines in whatever face it ended up with; SVG
+ * does not, so a break computed from an unavailable family's metrics is a break
+ * that holds in the studio and fails on the projector. `renderedFamily` applies
+ * the same substitution L11 measures against, so the two cannot disagree.
+ * @param {string} role
+ * @param {import('../../core/contracts.d.ts').BrandSystem} brand
+ * @returns {import('../../core/text-metrics.js').TextStyle}
+ */
+function mapStyle(role, brand) {
+  const spec = styleForRole(role, 'md', brand, { scale: 1 });
+  return { ...spec.style, family: renderedFamily(brand, spec.face, spec.style.weight) };
+}
+
+/**
+ * How many characters of a label a map node can hold across all of its lines.
+ *
+ * `URL_LABEL_BUDGET` in parts.js is sized for a panel meta line — a 320px
+ * column at 10px in a monospace face. A map node is 172 design units wide and
+ * gives its meta two lines, which is a different and much smaller budget, and
+ * eliding a URL against the column's number is what left the map's meta line
+ * running past its node with nothing on screen to say so. This is the map's own
+ * number, computed from the map's own geometry.
+ * @param {string} role
+ * @param {number} maxUnits
+ * @param {number} maxLines
+ * @param {import('../../core/contracts.d.ts').BrandSystem} brand
+ * @returns {number}
+ */
+export function labelBudget(role, maxUnits, maxLines, brand) {
+  const style = mapStyle(role, brand);
+  // A representative advance rather than a per-character sum: the budget is a
+  // character count handed to an eliding function, and the elision is checked
+  // by the wrap that follows it.
+  const sample = 'n.example/equipment-heat-exchangers';
+  const perChar = measureText(sample, style) / sample.length;
+  if (!(perChar > 0)) return 0;
+  return Math.max(8, Math.floor((maxUnits * maxLines) / perChar) - 1);
 }
 
 /**

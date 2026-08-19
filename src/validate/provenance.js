@@ -17,52 +17,40 @@
  *    mode. `normalizeEmitOptions` forces the flag true for those builds; a proof
  *    that still carries false has bypassed normalisation.
  *
- * `hasPromotionRecord` is implemented here rather than imported from L7 because
- * `API.md` does not declare it on L7's surface, and a lane imports only declared
- * surfaces. It is injectable, so the integrator can hand L7's version in without
- * touching this module.
+ * **The reader is L7's.** `hasPromotionRecord` is not implemented here. It is
+ * re-exported from `validate/lane-recipe.js`, which bridges to the module that
+ * writes the record in the first place, exactly as `lane-brand.js` and
+ * `lane-scene.js` bridge to L4 and L8. L11 carried its own reader for one round
+ * (L11-D7) and the two disagreed: L7 writes a delimited `[[pp-promotion:1;…]]`
+ * record, L11's regex was looking for an English sentence, and preflight raised
+ * a severity-1 `PROVENANCE_UNLABELED` against honestly promoted renditions that
+ * `emit()` was happy to accept. L11-D19 records the correction. `deps
+ * .hasPromotionRecord` still exists as an injection seam, but the default is now
+ * the same function L10 calls, so nothing has to be injected for the two to
+ * agree.
  *
  * @module validate/provenance
  */
 
-/**
- * The promotion record `promoteProvenance` writes into `Rendition.notes`. Read
- * liberally: who and when, in that order, however the sentence is phrased.
- */
-export const PROMOTION_PATTERN =
-  /promot(?:ed|ion)\b[^.\n]*?\bby\s+(.+?)\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}(?:[T ][0-9:.]+Z?)?)/i;
+import { hasPromotionRecord, readPromotionRecord } from './lane-recipe.js';
+
+export { hasPromotionRecord, readPromotionRecord };
+export { PROMOTION_RECORD_RE, PROMOTION_RECORD_VERSION } from './lane-recipe.js';
 
 /**
- * Does this rendition carry evidence that a person promoted it?
+ * The promotion record that currently stands for a rendition, or `null`.
  *
- * Accepts either the note L7 writes, or a structured `promotion: {by, at}`
- * field if a lane adds one (§4 permits optional extensions).
+ * The same shape L10's `promotionRecord` returns, because it is the same
+ * function underneath: `{version, by, at, of, from, raw, signatureValid}`.
+ * `by` and `at` — who promoted it and when, the two things §9 names — are
+ * always present on a record that verifies.
  *
- * @param {import('../core/contracts.d.ts').Rendition & {promotion?: {by?: string, at?: string}}} rendition
- * @returns {boolean}
- */
-export function hasPromotionRecord(rendition) {
-  if (!rendition) return false;
-  const structured = /** @type {any} */ (rendition).promotion;
-  if (structured && typeof structured.by === 'string' && structured.by.trim()
-      && typeof structured.at === 'string' && structured.at.trim()) {
-    return true;
-  }
-  const notes = typeof rendition.notes === 'string' ? rendition.notes : '';
-  return PROMOTION_PATTERN.test(notes);
-}
-
-/**
- * The promotion record, parsed, or null.
- * @param {any} rendition
- * @returns {{by: string, at: string}|null}
+ * @param {import('../core/contracts.d.ts').Rendition} rendition
+ * @returns {{version: number, by: string, at: string, of: string, from: string, raw: string, signatureValid: boolean}|null}
  */
 export function promotionRecord(rendition) {
-  if (!rendition) return null;
-  const structured = rendition.promotion;
-  if (structured && structured.by && structured.at) return { by: String(structured.by), at: String(structured.at) };
-  const m = PROMOTION_PATTERN.exec(typeof rendition.notes === 'string' ? rendition.notes : '');
-  return m ? { by: m[1].trim(), at: m[2].trim() } : null;
+  if (!rendition || typeof rendition !== 'object') return null;
+  return readPromotionRecord(rendition);
 }
 
 /**

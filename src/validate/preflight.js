@@ -94,6 +94,22 @@ export function resolveBreakpoints(breakpoints) {
 }
 
 /**
+ * The lookup maps every layout context needs: specimens, renditions, and every
+ * media reference either of them carries, by id.
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @returns {{specimenById: Map<string, any>, renditionById: Map<string, any>, mediaById: Map<string, any>}}
+ */
+export function assetMaps(proof) {
+  const specimenById = new Map((proof.specimens || []).map((s) => [s.id, s]));
+  const renditionById = new Map((proof.renditions || []).map((r) => [r.id, r]));
+  /** @type {Map<string, any>} */
+  const mediaById = new Map();
+  for (const specimen of proof.specimens || []) for (const m of specimen.media || []) mediaById.set(m.id, m);
+  for (const rendition of proof.renditions || []) for (const m of rendition.media || []) mediaById.set(m.id, m);
+  return { specimenById, renditionById, mediaById };
+}
+
+/**
  * The `LayoutContext` L8 measures against — the same shape
  * `Runtime.layoutContext()` builds, so preflight and the artifact see one scene.
  * @param {import('../core/contracts.d.ts').Proof} proof
@@ -132,12 +148,7 @@ export function layoutContextFor(proof, scene, specimenById, renditionById, medi
  * @returns {{sceneId: string, breakpoint: string, boxes: any[]}[]}
  */
 export function measureDeck(proof, deck, breakpoints, deps) {
-  const specimenById = new Map((proof.specimens || []).map((s) => [s.id, s]));
-  const renditionById = new Map((proof.renditions || []).map((r) => [r.id, r]));
-  /** @type {Map<string, any>} */
-  const mediaById = new Map();
-  for (const specimen of proof.specimens || []) for (const m of specimen.media || []) mediaById.set(m.id, m);
-  for (const rendition of proof.renditions || []) for (const m of rendition.media || []) mediaById.set(m.id, m);
+  const { specimenById, renditionById, mediaById } = assetMaps(proof);
 
   /** @type {any[]} */
   const out = [];
@@ -176,12 +187,7 @@ export function measureDeck(proof, deck, breakpoints, deps) {
  * @returns {(scene: any) => any}
  */
 export function makeSceneRenderer(proof) {
-  const specimenById = new Map((proof.specimens || []).map((s) => [s.id, s]));
-  const renditionById = new Map((proof.renditions || []).map((r) => [r.id, r]));
-  /** @type {Map<string, any>} */
-  const mediaById = new Map();
-  for (const specimen of proof.specimens || []) for (const m of specimen.media || []) mediaById.set(m.id, m);
-  for (const rendition of proof.renditions || []) for (const m of rendition.media || []) mediaById.set(m.id, m);
+  const { specimenById, renditionById, mediaById } = assetMaps(proof);
   if (missingLayouts().length > 0) registerAllLayouts();
   return (scene) => renderLayout(layoutContextFor(proof, scene, specimenById, renditionById, mediaById));
 }
@@ -225,6 +231,63 @@ export function renderedElementIds(proof, deck, render) {
 }
 
 /**
+ * The structural path behind every element id a scene's beats can name.
+ *
+ * `Beat.reveals` holds element ids, and `elementId(sceneId, path)` mixes the
+ * scene id into the hash — so the same element in two otherwise identical scenes
+ * has two different ids, and anything that compares scenes by their reveal ids
+ * is comparing scene ids with extra steps. That is what made the content half of
+ * `DUPLICATE_SCENE` dead code: a duplicate scene's reveals never matched its
+ * original's, and the only scenes whose reveals *did* match were scenes sharing
+ * an id, which the other half of the rule already caught.
+ *
+ * The hash is one-way, but the path vocabulary is not a secret: it is whatever
+ * the layout passed to `ctx.el()`. Rendering the scene with `el` set to the
+ * identity returns those paths in document order, and `elementId(scene.id, path)`
+ * maps each one back to the id the model actually holds. The result is an
+ * id → path table, which lets a rule talk about *which element* a beat reveals in
+ * terms that survive a change of scene id. See L11-D20.
+ *
+ * The table is **deck-wide, not per scene**, and deliberately so. A scene copied
+ * structurally rather than rebuilt keeps the ids of the scene it was copied from,
+ * so its beats reveal `elementId(original.id, path)`. Looking those up in the
+ * copy's own table would find nothing; looking them up across the deck finds the
+ * path they name. Both kinds of duplicate — the rebuilt twin and the deep copy —
+ * therefore reduce to the same shape, which is what they look like on screen. Ids
+ * are 40-bit content hashes of `{sceneId, path}`, so a lookup landing on another
+ * scene's entry means the two genuinely name the same path.
+ *
+ * Scenes that render no revealable element, and scenes whose layout throws,
+ * contribute nothing — the same silence `renderedElementIds` keeps, for the same
+ * reason.
+ *
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @param {any} deck
+ * @returns {Map<string, string>} elementId → structural path
+ */
+export function revealPathIndex(proof, deck) {
+  /** @type {Map<string, string>} */
+  const out = new Map();
+  const { specimenById, renditionById, mediaById } = assetMaps(proof);
+  if (missingLayouts().length > 0) registerAllLayouts();
+  for (const scene of deck.sceneById.values()) {
+    /** @type {string[]} */
+    let paths;
+    try {
+      const ctx = layoutContextFor(proof, scene, specimenById, renditionById, mediaById);
+      const tree = renderLayout({ ...ctx, el: (path) => path });
+      paths = collectByAttr(tree, REVEAL_ATTR)
+        .map((el) => el.a[REVEAL_ATTR])
+        .filter((p) => typeof p === 'string' && p !== '');
+    } catch {
+      continue;
+    }
+    for (const path of paths) out.set(elementId(scene.id, path), path);
+  }
+  return out;
+}
+
+/**
  * The §14 automated sweep.
  *
  * @param {import('../core/contracts.d.ts').Proof} proof
@@ -256,6 +319,7 @@ export async function runPreflight(proof, options = {}) {
   const ctx = {
     renderScene,
     renderedElementIds: renderedElementIds(proof, deck, renderScene),
+    revealPaths: revealPathIndex(proof, deck),
     proof,
     deck,
     breakpoints,

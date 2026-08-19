@@ -25,7 +25,7 @@ import {
   FINDING_CODES, QUALITY_STEPS, blockText, countWords,
 } from '../core/contracts.js';
 import { contentHash } from '../core/hash.js';
-import { utf8Length, parseDataUri } from '../core/bytes.js';
+import { utf8Length, parseDataUri, base64Decode, utf8Decode } from '../core/bytes.js';
 import { sceneRevealsNothing } from '../runtime/beats.js';
 import { makeFinding, sortFindings } from './finding.js';
 import { severityOf } from './severity.js';
@@ -104,6 +104,45 @@ function mediaBytes(media) {
   const parsed = typeof media.dataUri === 'string' ? parseDataUri(media.dataUri) : null;
   if (parsed && Number.isFinite(parsed.bytes)) return parsed.bytes;
   return typeof media.dataUri === 'string' ? Math.floor(media.dataUri.length * 0.75) : 0;
+}
+
+/** `parseDataUri`, but a malformed percent-escape is "not a data URI" rather than a throw. */
+function safeParseDataUri(uri) {
+  try { return parseDataUri(uri); } catch { return null; }
+}
+
+/** The text a data URI carries, or `''` when it cannot be decoded. */
+function dataUriText(parsed) {
+  try {
+    return parsed.base64 ? utf8Decode(base64Decode(parsed.body)) : decodeURIComponent(parsed.body);
+  } catch { return ''; }
+}
+
+/**
+ * Does a `LogoAsset` carry a payload the artifact can actually draw?
+ *
+ * §4 documents `LogoAsset.data` as "inline SVG markup or data URI" for **either**
+ * `kind`, so a `kind: 'svg'` logo holding `data:image/svg+xml,…` is contract-legal
+ * and this rule accepts it (L11-D21). What it still refuses is a payload with
+ * nothing in it: an SVG-typed data URI whose decoded body has no `<svg` element
+ * is as empty as an empty string, and the check that catches inline markup with
+ * no `<svg` in it should catch that too rather than waving it through on the
+ * strength of the `data:` prefix. A data URI of some other type is accepted —
+ * a PNG payload on a `kind: 'svg'` logo is a mislabelled kind, not a missing
+ * asset, and `ASSET_MISSING` is not the code for it.
+ *
+ * @param {string} kind  `'svg'` or `'raster'`
+ * @param {string} data  the trimmed payload
+ * @returns {boolean}
+ */
+export function logoPayloadUsable(kind, data) {
+  if (!data) return false;
+  const parsed = safeParseDataUri(data);
+  if (kind !== 'svg') return Boolean(parsed);
+  if (/<svg[\s>]/i.test(data)) return true;
+  if (!parsed) return false;
+  if (/^image\/svg\+xml\b/i.test(parsed.mime)) return /<svg[\s>]/i.test(dataUriText(parsed));
+  return parsed.bytes > 0;
 }
 
 /** Days between two ISO instants, positive when `later` is after `earlier`. */
@@ -201,13 +240,12 @@ const assetMissing = {
 
     for (const logo of (proof.brand && proof.brand.logos) || []) {
       const data = typeof logo.data === 'string' ? logo.data.trim() : '';
-      const ok = logo.kind === 'svg' ? /<svg[\s>]/i.test(data) : Boolean(parseDataUri(data));
-      if (ok) continue;
+      if (logoPayloadUsable(logo.kind, data)) continue;
       out.push(makeFinding({
         code: 'ASSET_MISSING',
         locus: { assetId: logo.id },
         key: `logo:${logo.id}`,
-        message: `The ${logo.variant} logo carries no usable ${logo.kind === 'svg' ? 'SVG markup' : 'data URI'}. The artifact would present the prospect's brand without their mark.`,
+        message: `The ${logo.variant} logo carries no usable ${logo.kind === 'svg' ? 'SVG markup or data URI' : 'data URI'}. The artifact would present the prospect's brand without their mark.`,
         detail: { logoId: logo.id, variant: logo.variant, kind: logo.kind },
       }));
     }
@@ -739,6 +777,48 @@ const specimenEmpty = {
   },
 };
 
+/**
+ * A scene's beat structure, with the scene id divided out.
+ *
+ * `Beat.reveals` names element ids and `elementId(sceneId, path)` derives them
+ * from the scene id, so two scenes that are duplicates in every visible way
+ * still hold entirely different reveal ids. Hashing the ids therefore answers
+ * "do these scenes share an id?", not "do these scenes show the same thing?" —
+ * which is why the content half of `DUPLICATE_SCENE` never fired. This maps each
+ * id back to the structural path the layout revealed it at, using the deck-wide
+ * table preflight recovers by rendering every scene (`revealPathIndex`), so the
+ * shape that comes out describes *which elements* each beat reveals rather than
+ * which hashes it happens to hold. The table spans the deck rather than the one
+ * scene, so a scene deep-copied from another — keeping the original's ids in its
+ * beats — resolves to the same paths as its original, which is what a seller's
+ * copy-paste duplicate actually looks like.
+ *
+ * An id no scene in the deck renders — a stale reveal left behind by an edit, or
+ * an id typed by hand — falls back to the ordinal of its first appearance in this
+ * scene's own beats. That is still id-free, so two scenes carrying the same
+ * structural mistake still fingerprint alike, and it never leaks a scene id into
+ * the hash.
+ *
+ * Beat order is kept: the same reveals in a different order are a different
+ * telling. Order *within* a beat is not, because a beat reveals its elements
+ * together, so each beat's labels are sorted.
+ *
+ * @param {import('../core/contracts.d.ts').Scene} scene
+ * @param {Map<string, string>} [pathById]  element id → structural path, deck-wide
+ * @returns {string[][]} one sorted label list per beat, in beat order
+ */
+export function beatShape(scene, pathById) {
+  /** @type {Map<string, number>} */
+  const ordinals = new Map();
+  const label = (id) => {
+    const path = pathById ? pathById.get(id) : undefined;
+    if (typeof path === 'string') return `@${path}`;
+    if (!ordinals.has(id)) ordinals.set(id, ordinals.size);
+    return `#${ordinals.get(id)}`;
+  };
+  return (scene.beats || []).map((b) => (b.reveals || []).map(label).sort());
+}
+
 /** @type {Rule} */
 const duplicateScene = {
   code: 'DUPLICATE_SCENE',
@@ -768,6 +848,7 @@ const duplicateScene = {
       }));
     }
 
+    const revealPaths = ctx.revealPaths instanceof Map ? ctx.revealPaths : new Map();
     /** @type {Map<string, {sceneId: string, where: string}[]>} */
     const byContent = new Map();
     for (const { scene, branchId } of allScenes(proof)) {
@@ -777,7 +858,7 @@ const duplicateScene = {
         subhead: scene.subhead,
         specimenId: scene.specimenId,
         renditionIds: scene.renditionIds || [],
-        beats: (scene.beats || []).map((b) => (b.reveals || []).slice().sort()),
+        beats: beatShape(scene, revealPaths),
       });
       if (!byContent.has(fingerprint)) byContent.set(fingerprint, []);
       byContent.get(fingerprint).push({ sceneId: scene.id, where: branchId ? `branch ${branchId}` : 'the spine' });

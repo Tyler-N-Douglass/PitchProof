@@ -15,6 +15,8 @@
  * @module scene/brand-access
  */
 
+import { FALLBACK_CANDIDATES, normalizeFamily, resolveFace } from '../core/text-metrics.js';
+
 /** The default stacks, matching `--pp-font-display|body|mono` in runtime.css. */
 export const DEFAULT_STACKS = {
   display: ['system-ui', 'sans-serif'],
@@ -42,6 +44,77 @@ export function faceFor(brand, role) {
     ? chosen.fallbackStack.slice()
     : [chosen.family, ...DEFAULT_STACKS[role]];
   return { family: chosen.family, fallbackStack: stack, role, embeddable: !!chosen.embeddable };
+}
+
+/**
+ * CSS generic families: always present, and they resolve to a platform face.
+ * The same list L11's `resolveBoxFace` uses; kept here because a layout may not
+ * import from the lane that validates it.
+ */
+const GENERIC_FAMILIES = new Set([
+  'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
+  'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded', 'math', 'emoji',
+]);
+
+/**
+ * The families an emitted artifact can count on: any brand face the user
+ * supplied a licensed file for, plus the system faces `core/text-metrics.js`
+ * holds published metrics for.
+ * @param {import('../core/contracts.d.ts').BrandSystem|null|undefined} brand
+ * @returns {string[]}
+ */
+export function availableFamilies(brand) {
+  /** @type {string[]} */
+  const out = [];
+  const seen = new Set();
+  const add = (name) => {
+    const key = normalizeFamily(name);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(name);
+  };
+  for (const face of (brand && brand.faces) || []) if (face && face.embeddable) add(face.family);
+  for (const name of FALLBACK_CANDIDATES) add(name);
+  return out;
+}
+
+/**
+ * The family a type role will *actually* be drawn in, once the artifact has
+ * substituted whatever the viewer's machine does not have.
+ *
+ * This exists for `systemMap` and nothing else. Every other layout hands its
+ * text to CSS, which breaks lines in whatever face it ended up with — the
+ * requested family is the honest thing to report there, and L11 resolves it.
+ * SVG has no line breaking, so `systemMap` computes its own breaks; computing
+ * them from the metrics of a family the artifact will not use produces lines
+ * that fit in the studio and run out of their node on the projector. The
+ * substitution has to happen *before* the break, which means here.
+ *
+ * The rule is L11's (`resolveBoxFace` in src/validate/overflow.js): walk the
+ * declared stack — the family the brand asked for, then the fallback stack it
+ * declared — and take the first family the artifact can count on; failing that,
+ * let `resolveFace` pick the closest available family by metric distance. It is
+ * stated twice because L11 depends on L8 and the dependency cannot run both
+ * ways; the half that matters, the metric model, is shared in
+ * `core/text-metrics.js`. Recorded in docs/decisions/L8-scenes.md.
+ *
+ * @param {import('../core/contracts.d.ts').BrandSystem|null|undefined} brand
+ * @param {'display'|'body'|'mono'} role
+ * @param {number} [weight]
+ * @returns {string}
+ */
+export function renderedFamily(brand, role, weight = 400) {
+  const face = faceFor(brand, role);
+  const available = availableFamilies(brand);
+  const availKeys = new Set(available.map(normalizeFamily));
+
+  for (const name of [face.family, ...face.fallbackStack]) {
+    const key = normalizeFamily(name);
+    if (!key) continue;
+    if (availKeys.has(key)) return name;
+    if (GENERIC_FAMILIES.has(key)) break;   // a generic ends the stack: nothing after it renders
+  }
+  return resolveFace(face.family, { available, weight }).resolved;
 }
 
 /**
