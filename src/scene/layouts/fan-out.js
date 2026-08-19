@@ -90,7 +90,13 @@ function renderSource(ctx, sourceBlocks, count) {
     'data-pp-el': ctx.el('source/count'),
     'data-pp-group': 'source',
   },
-  h('p', { class: 'pp-fan-count-number', 'data-pp-tx': 'badgeNumber' }, String(count)),
+  // `data-pp-lines`, because `.pp-fan-count-number` is a block in normal flow:
+  // its box is its own line, not the 536px `fanSource` column it inherited,
+  // which is why no height check on this role could fire at all (DEFERRED.md).
+  // One line is what the design gives it, and a badge that needed two would
+  // squeeze `.pp-fan-source-body` — which *is* `overflow: hidden` — by exactly
+  // that much.
+  h('p', { class: 'pp-fan-count-number', 'data-pp-tx': 'badgeNumber', 'data-pp-lines': '1' }, String(count)),
   h('p', { class: 'pp-fan-count-label', 'data-pp-tx': 'badgeLabel' }, count === 1 ? 'rendition' : 'renditions')));
 }
 

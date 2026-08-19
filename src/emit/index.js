@@ -47,7 +47,8 @@ export {
   budgetAssets, collectAssets, dedupeAssets, rankAssets, locateAssets, degradeAsset, minifySvg,
   applyReplacements, beatIndexResolver, sizeBudgetFinding, predictEmittedBytes,
   countAssetCopies, assetFootprint,
-  dataUriPrefixBytes, SCALE_LADDER, PNG_CONTAINER_BYTES,
+  dataUriPrefixBytes, scaleForQuality, quantizeScale, scaleSteps, describeFixedCost,
+  SCALE_FLOOR, SCALE_QUANTUM, IMPORTANCE_SPREAD, MEASURED_PROBES, PNG_CONTAINER_BYTES,
 } from './budget.js';
 
 export {

@@ -115,13 +115,21 @@ html, body {
   color: var(--pp-on-surface-alt);
   border: var(--pp-border-width) solid var(--pp-border);
   font-size: 13px;
-  max-width: min(60ch, 70vw);
+  max-width: calc(100% - (2 * var(--pp-stage-pad)));
 }
 
 .pp-branch-badge-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.pp-branch-badge-label[data-pp-unnamed] {
+  opacity: 0.7;
+  font-style: italic;
 }
 
 .pp-branch-badge-key {

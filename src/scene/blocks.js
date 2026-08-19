@@ -157,6 +157,15 @@ export function blockBody(block, o) {
       }, String(block.text ?? ''));
     }
 
+    // The marker column is `--pp-sc-list-marker-w`, and a two-digit ordinal is
+    // wider than it: "18." measures 16.68px against a 16px track at `md`. The
+    // model is right about that advance — Chromium draws the same ink to within
+    // 0.01px — and the track is right too, because it is the gutter the *copy*
+    // is indented by, not a frame the mark is drawn inside. Nothing paints at
+    // its edge and nothing clips there, so the numeral is drawn in full and the
+    // extent at which anything is lost is the room the row gives it. That is
+    // what `data-pp-fit="spill"` says, and geometry-browser.test.mjs checks the
+    // no-clip half of it in Chromium rather than taking it as read.
     case 'list': {
       const items = Array.isArray(block.items) ? block.items : [];
       const limit = o.maxListItems && items.length > o.maxListItems ? o.maxListItems : items.length;
@@ -164,11 +173,11 @@ export function blockBody(block, o) {
       const rest = items.length - shown.length;
       return h(block.ordered ? 'ol' : 'ul', { class: 'pp-list', 'data-pp-ordered': block.ordered ? 'true' : 'false' },
         shown.map((item, i) => h('li', { class: 'pp-list-item', 'data-pp-inset': 'list-marker-w' },
-          h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w' }, block.ordered ? `${i + 1}.` : '•'),
+          h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w', 'data-pp-fit': 'spill' }, block.ordered ? `${i + 1}.` : '•'),
           h('span', { class: 'pp-list-text', 'data-pp-tx': 'listItem', 'data-pp-clamp': o.clampParagraph || null }, String(item ?? '')))),
         rest > 0
           ? h('li', { class: 'pp-list-more', 'data-pp-inset': 'list-marker-w' },
-            h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w' }, '·'),
+            h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w', 'data-pp-fit': 'spill' }, '·'),
             h('span', { class: 'pp-list-text', 'data-pp-tx': 'caption' }, `${rest} more ${rest === 1 ? 'item' : 'items'} in the source`))
           : null);
     }

@@ -2015,8 +2015,15 @@ class Runtime extends Emitter {
 
   renderBranchBadge() {
     const seq = sequenceOf(this.deck, this.nav.sequenceId);
+
+    const objection = typeof seq.objection === 'string' ? seq.objection.trim() : '';
     return h('div', { class: 'pp-branch-badge', 'data-pp-branch': seq.id },
-      h('span', { class: 'pp-branch-badge-label' }, seq.objection || 'Branch'),
+      h('span', {
+        class: 'pp-branch-badge-label',
+        'data-pp-tx': 'branchBadge',
+        'data-pp-clamp': '2',
+        ...(objection ? {} : { 'data-pp-unnamed': 'true' }),
+      }, objection || 'Unnamed branch'),
       h('span', { class: 'pp-branch-badge-key' }, 'R to return'));
   }
 
@@ -2874,11 +2881,11 @@ function blockBody(block, o) {
       const rest = items.length - shown.length;
       return h(block.ordered ? 'ol' : 'ul', { class: 'pp-list', 'data-pp-ordered': block.ordered ? 'true' : 'false' },
         shown.map((item, i) => h('li', { class: 'pp-list-item', 'data-pp-inset': 'list-marker-w' },
-          h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w' }, block.ordered ? `${i + 1}.` : '•'),
+          h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w', 'data-pp-fit': 'spill' }, block.ordered ? `${i + 1}.` : '•'),
           h('span', { class: 'pp-list-text', 'data-pp-tx': 'listItem', 'data-pp-clamp': o.clampParagraph || null }, String(item ?? '')))),
         rest > 0
           ? h('li', { class: 'pp-list-more', 'data-pp-inset': 'list-marker-w' },
-            h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w' }, '·'),
+            h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w', 'data-pp-fit': 'spill' }, '·'),
             h('span', { class: 'pp-list-text', 'data-pp-tx': 'caption' }, `${rest} more ${rest === 1 ? 'item' : 'items'} in the source`))
           : null);
     }
@@ -5663,7 +5670,9 @@ function collectTextBoxes(node, env) {
       };
     }
 
-    if (attrs['data-pp-width'] !== undefined && attrs['data-pp-width'] !== null) {
+    const fit = fitReason(attrs);
+
+    if (attrs['data-pp-width'] !== undefined && attrs['data-pp-width'] !== null && fit !== 'spill') {
       const fixed = trackWidth(String(attrs['data-pp-width']), bp, next.widthPx);
       next = { ...next, widthPx: fixed };
     }
@@ -5713,7 +5722,14 @@ function collectTextBoxes(node, env) {
         box.containerId = next.containerId;
         box.slot = next.slot;
 
-        if (attrs['data-pp-fit']) box.fitsContent = true;
+        if (attrs['data-pp-lines'] !== undefined && attrs['data-pp-lines'] !== null) {
+          const lines = Math.max(1, Math.floor(Number(attrs['data-pp-lines'])) || 1);
+          box.containerHeightPx = round3(lines * resolved.style.fontSizePx * resolved.style.lineHeight);
+        }
+        if (fit) {
+          box.fitsContent = true;
+          box.fit = fit;
+        }
         boxes.push(box);
       }
 
@@ -5734,6 +5750,12 @@ function collectTextBoxes(node, env) {
     ledger: false,
   });
   return boxes;
+}
+
+function fitReason(attrs) {
+  const declared = attrs['data-pp-fit'];
+  if (declared === undefined || declared === null || declared === false) return null;
+  return declared === 'spill' ? 'spill' : 'shrink';
 }
 
 function insetLength(token, bp, brand = null) {
@@ -5778,6 +5800,7 @@ __exports["normalizeContext"] = normalizeContext;
 __exports["renderSceneTree"] = renderSceneTree;
 __exports["measureScene"] = measureScene;
 __exports["collectTextBoxes"] = collectTextBoxes;
+__exports["fitReason"] = fitReason;
 __exports["insetLength"] = insetLength;
 __exports["BRAND_BORDER_INSET"] = BRAND_BORDER_INSET;
 __exports["trackWidth"] = trackWidth;

@@ -11,7 +11,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  budgetAssets, collectAssets, dedupeAssets, countAssetCopies, assetFootprint, rankAssets, minifySvg, SCALE_LADDER,
+  budgetAssets, collectAssets, dedupeAssets, countAssetCopies, assetFootprint, rankAssets, minifySvg,
+  scaleForQuality, quantizeScale, scaleSteps, describeFixedCost, SCALE_FLOOR, SCALE_QUANTUM,
 } from '../../src/emit/budget.js';
 import { emit } from '../../src/emit/index.js';
 import { utf8Length, parseDataUri } from '../../src/core/bytes.js';
@@ -211,9 +212,50 @@ test('emit degrades and fits when it can, and reports every line', async () => {
   }
 });
 
-test('the ladder is ordered and starts with a lossless re-encode', () => {
-  assert.equal(SCALE_LADDER[0], 1);
-  for (let i = 1; i < SCALE_LADDER.length; i++) assert.ok(SCALE_LADDER[i] < SCALE_LADDER[i - 1]);
+test('the quality dial is ordered, bounded, and starts with a lossless re-encode (P7)', () => {
+  // q = 1 is the lossless pass: every asset keeps every pixel.
+  for (const rank of [0, 3, 7]) assert.equal(scaleForQuality(1, rank, 8), 1);
+  // q = 0 is the floor, and nothing ever goes below it.
+  for (const rank of [0, 3, 7]) assert.equal(scaleForQuality(0, rank, 8), SCALE_FLOOR);
+  for (const q of [0.001, 0.05, 0.2]) assert.ok(scaleForQuality(q, 7, 8) >= SCALE_FLOOR);
+
+  // Monotone in the dial: turning it up never shrinks an asset further.
+  for (const rank of [0, 4, 7]) {
+    let previous = 0;
+    for (const q of [0.1, 0.3, 0.5, 0.7, 0.9, 0.99]) {
+      const scale = scaleForQuality(q, rank, 8);
+      assert.ok(scale >= previous, `rank ${rank}: q ${q} gave ${scale} after ${previous}`);
+      previous = scale;
+    }
+  }
+
+  // Monotone in importance: a less important asset never keeps more pixels.
+  for (const q of [0.2, 0.5, 0.8, 0.97]) {
+    let previous = 1;
+    for (let rank = 0; rank < 8; rank++) {
+      const scale = scaleForQuality(q, rank, 8);
+      assert.ok(scale <= previous, `q ${q}: rank ${rank} kept ${scale} against ${previous} for the rank above it`);
+      previous = scale;
+    }
+  }
+
+  // Every scale the encoder sees is on the quantum grid, so §5's byte-identical
+  // re-emit survives a search that is otherwise continuous.
+  for (const q of [0.137, 0.4991, 0.8888]) {
+    const scale = scaleForQuality(q, 2, 8);
+    assert.equal(scale, quantizeScale(scale), `${scale} is not on the ${SCALE_QUANTUM} grid`);
+  }
+});
+
+test('steps is a monotone reading of the scale, and 0 means no pixel was given up (P7)', () => {
+  assert.equal(scaleSteps(1), 0);
+  assert.ok(scaleSteps(0.9999) >= 1, 'any resampling at all must read as at least one step');
+  let previous = -1;
+  for (const scale of [1, 0.99, 0.9, 0.75, 0.5, 0.25, SCALE_FLOOR]) {
+    const steps = scaleSteps(scale);
+    assert.ok(steps >= previous, `scale ${scale} read ${steps} after ${previous}`);
+    previous = steps;
+  }
 });
 
 test('an identical asset used twice is carried once and degraded once', () => {

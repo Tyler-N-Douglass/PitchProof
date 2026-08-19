@@ -841,6 +841,7 @@ withdraw something another lane depends on.
 | L4 | `brand/color.js` | `ContrastSolveError` | `solveRoles` throws it; callers must handle it |
 | L5 | `brand/theme.js` | `assertNoStudioVars` | D11 made mechanical: throws on any `--st-` name in artifact CSS |
 | L6 | `specimen/index.js` | `unresolvedMediaRefs` | L11's `ASSET_MISSING` |
+| L6 | `specimen/index.js` | `restoreOmittedMedia`, `omitUnresolvedMedia` | A `media` block whose bytes were never captured is held out of the stream rather than emitted as a reference that refuses the artifact (CRITIQUE-3 P6). `restoreOmittedMedia` puts it back, in position, when the seller supplies the file |
 | L6 | `specimen/index.js` | `setRawHtmlOptIn`, `rawFallbackBlocks` | §8's per-specimen raw opt-in |
 | L6 | `specimen/index.js` | `markEdited` | §18.3's "if a specimen was edited, the artifact says so" |
 | L6 | `specimen/index.js` | `inferKind`, `blocksWithTrace`, `restoreAllBlocks` | L12's specimen panel |

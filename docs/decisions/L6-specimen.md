@@ -655,6 +655,17 @@ that runs: resolve first (F4), hold back what still resolves to nothing (P6).
 D-L6-15's promise — visible, never silently dropped — is kept in full, and moved
 off the one carrier that blocks the emit.
 
+**One thing this tightened rather than loosened.** Holding a block back is only
+right when the bytes really are absent, so resolution now runs on **every**
+route, not just the importer's. Blockification resolves an `<img src>` by exact
+key and basename; `resolveMediaRef`'s ladder also tries the relative and
+percent-decoded forms. Before, an `<img src="/img/tube%20bundle.png">` over an
+asset named `/img/tube bundle.png` produced a dangling ref on the HTML route —
+under D-L6-21 that would have become a *dropped* block, for a defect that is
+only a lookup. `resolveBlockMedia` is idempotent, so running it over the HTML
+route as well costs nothing and closes the gap between the two ladders. Asserted
+in `test/specimen/media-refs.test.mjs`.
+
 **Why not keep the block and let L11 handle it.** Three reasons, in order of
 weight. It makes §6's documented fallback unusable, which is the finding. Its
 only offered remedy deletes the prospect's own content (see below). And the

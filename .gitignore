@@ -1,3 +1,10 @@
 node_modules/
 *.local
 .tmp/
+
+# Lane scratch files. Agents write probes at the repo root while measuring
+# something, and `git add -A` committed one (`.dbg2.mjs`, in 399c4c1) before
+# anyone noticed. A dotfile at the root is never part of this build.
+.dbg*
+.probe*
+.scratch*

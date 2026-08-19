@@ -699,10 +699,24 @@ export function applyReplacements(proof, byPayload) {
  * @property {number} beforeBytes     what the **document** spent on this payload: `copies × utf8Length(dataUri)`
  * @property {number} afterBytes      what it spends now
  * @property {number} savedBytes      exactly `beforeBytes - afterBytes`, and exactly the bytes the file lost
- * @property {number} steps
+ * @property {number} scale           the linear scale actually applied; 1 means no pixel was given up
+ * @property {number} steps           `scaleSteps(scale)` — hundredths of linear size given up, 0 iff lossless
  * @property {string[]} assetIds      every asset id carrying this payload; one
  *                                    line covers all of them, because degrading
  *                                    the payload degrades every reference to it
+ */
+
+/**
+ * @typedef {object} BudgetResult
+ * @property {DegradationLine[]} plan
+ * @property {import('../core/contracts.d.ts').Proof} proof
+ * @property {number} assetBytes
+ * @property {number} budget
+ * @property {boolean} fits
+ * @property {{assetId: string, bytes: number, reason: string}[]} undegradable
+ * @property {boolean} unreachable    the budget cannot be met by degrading assets at all (P4)
+ * @property {string|null} reason     why, in a sentence, when `unreachable`
+ * @property {number} quality         the dial the search settled on: 1 is untouched, 0 is the floor
  */
 
 /**
@@ -718,12 +732,13 @@ export function applyReplacements(proof, byPayload) {
  * @param {(scene: import('../core/contracts.d.ts').Scene) => any} [options.renderScene]
  * @param {number} [options.quality]
  * @param {(input: any) => any} [options.resample]
- * @returns {{plan: DegradationLine[], proof: import('../core/contracts.d.ts').Proof, assetBytes: number, budget: number, fits: boolean, undegradable: {assetId: string, bytes: number, reason: string}[]}}
+ * @returns {BudgetResult}
  */
 export function budgetAssets(proof, maxBytes, options = {}) {
   const quality = options.quality ?? (proof.emitOptions && proof.emitOptions.imageQuality) ?? 0.85;
   const reserve = Math.max(0, Number(options.reserveBytes) || 0);
-  const budget = Math.max(0, (Number(maxBytes) || 0) - reserve);
+  const ceiling = Math.max(0, Number(maxBytes) || 0);
+  const budget = Math.max(0, ceiling - reserve);
 
   const everyAsset = dedupeAssets(collectAssets(proof));
   locateAssets(proof, everyAsset, options.renderScene);
@@ -758,139 +773,375 @@ export function budgetAssets(proof, maxBytes, options = {}) {
   /** Keyed by payload: the whole cost of that payload to the document. */
   const copyCount = new Map(assets.map((a) => [a.dataUri, copiesOf(a)]));
   const costOf = (/** @type {string} */ key, /** @type {number} */ bytes) => (copyCount.get(key) || 1) * bytes;
-  let total = assets.reduce((sum, a) => sum + costOf(a.dataUri, a.bytes), 0);
+  const startTotal = assets.reduce((sum, a) => sum + costOf(a.dataUri, a.bytes), 0);
 
-  /** @type {Map<string, {dataUri: string, width: number, height: number, bytes: number}>} */
-  const replacements = new Map();
-  /** @type {Map<string, {steps: number, how: string, predicted: number}>} */
-  const progress = new Map();
-  /** @type {{assetId: string, bytes: number, reason: string}[]} */
-  const undegradable = [];
+  /** Bytes carried inside the compressed payload, named whenever the budget is missed. */
+  const payloadLines = () => payloadResident.map((asset) => ({
+    assetId: asset.assetId,
+    bytes: asset.bytes,
+    reason: 'carried inside the compressed model payload rather than written into the document, so the budgeter cannot measure — or honestly promise — a saving on it; shrink it before it reaches the emitter',
+  }));
 
-  if (total > budget) {
-    // Greedy: always spend the least important asset that still has a step.
-    // A pass "advances" whenever any asset still had a ladder step to try,
-    // even when that step produced nothing — the first step is a lossless
-    // re-encode, and an image that was already encoded well gives back no
-    // bytes for it. Stopping there would leave the budget unmet with the whole
-    // ladder untouched.
-    const order = assets.slice().sort((a, b) => b.rank - a.rank);
-    // -1, so the first step attempted is ladder index 0: a lossless re-encode.
-    /** @type {Map<string, number>} */
-    const stepIndex = new Map(assets.map((a) => [a.dataUri, -1]));
-    /** The scale and measured cost the last successful step left behind. */
-    /** @type {Map<string, {scale: number, bytes: number}>} */
-    const lastGood = new Map(assets.map((a) => [a.dataUri, { scale: 1, bytes: a.bytes }]));
-    /** @type {Set<string>} */
-    const exhausted = new Set();
-
-    let advanced = true;
-    while (total > budget && advanced) {
-      advanced = false;
-      for (const asset of order) {
-        if (total <= budget) break;
-        const key = asset.dataUri;
-        if (exhausted.has(key)) continue;
-        const next = /** @type {number} */ (stepIndex.get(key)) + 1;
-        if (next >= SCALE_LADDER.length) { exhausted.add(key); continue; }
-
-        stepIndex.set(key, next);
-        advanced = true;
-        if (next === SCALE_LADDER.length - 1) exhausted.add(key);
-
-        const scale = SCALE_LADDER[next];
-        const current = replacements.get(key);
-        const currentBytes = current ? current.bytes : asset.bytes;
-        const anchor = /** @type {{scale: number, bytes: number}} */ (lastGood.get(key));
-
-        // Predicted before the work, from the last measurement of this same
-        // image. `predictEmittedBytes` explains why that beats a formula.
-        const predicted = next === 0
-          ? Math.round(asset.bytes * 0.97)
-          : predictEmittedBytes(anchor.bytes, anchor.scale, scale, dataUriPrefixBytes(asset.dataUri));
-
-        const produced = degradeAsset({ ...asset, bytes: /** @type {number} */ (originalBytes.get(key)) }, scale, { quality, resample: options.resample });
-        if (!produced) continue;
-        if (produced.bytes >= currentBytes) continue;
-
-        total -= costOf(key, currentBytes - produced.bytes);
-        replacements.set(key, produced);
-        lastGood.set(key, { scale, bytes: produced.bytes });
-        progress.set(key, { steps: next, how: produced.how, predicted });
-      }
-    }
-
-    // Only an asset that was tried to exhaustion and still could not give
-    // anything back is "undegradable", and only when the budget was actually
-    // missed — otherwise the list would name assets the allocator simply never
-    // needed to touch.
-    if (total > budget) {
-      for (const asset of assets) {
-        if (replacements.has(asset.dataUri)) continue;
-        const parsed = parseDataUri(asset.dataUri);
-        const mime = parsed ? parsed.mime : 'unknown';
-        undegradable.push({
-          assetId: asset.assetId,
-          bytes: costOf(asset.dataUri, asset.bytes),
-          reason: `${mime} cannot be re-encoded any smaller by the in-repo codec; supply a host resampler (deps.resample) or capture it smaller`,
-        });
-      }
-    }
-  }
-
-  // Named whenever the budget is missed, whether or not the ladder ran: a
-  // seller told "nothing else can be degraded" while a megabyte of inline SVG
-  // sits in the payload has been told something untrue.
-  if (total > budget || reserve > (Number(maxBytes) || 0)) {
-    for (const asset of payloadResident) {
-      undegradable.push({
-        assetId: asset.assetId,
-        bytes: asset.bytes,
-        reason: 'carried inside the compressed model payload rather than written into the document, so the budgeter cannot measure — or honestly promise — a saving on it; shrink it before it reaches the emitter',
-      });
-    }
-  }
-
-  /** @type {DegradationLine[]} */
-  const plan = [];
-  for (const asset of assets) {
-    const replacement = replacements.get(asset.dataUri);
-    if (!replacement) continue;
-    const step = progress.get(asset.dataUri);
-    const before = /** @type {number} */ (originalBytes.get(asset.dataUri));
-    const fromSize = /** @type {{w: number, h: number}} */ (originalSize.get(asset.dataUri));
-    // Every byte figure on the line is what the **document** paid, not what one
-    // copy of the payload weighs (C2). A hero the opening beat paints is
-    // written into the pre-rendered markup and into the media table both, and a
-    // seller reading "saved 1.0MB" about a file that lost 2.0MB has been given
-    // a number about nothing.
-    const copies = copyCount.get(asset.dataUri) || 1;
-    plan.push({
-      assetId: asset.assetId,
-      assetIds: asset.assetIds.slice(),
-      rank: asset.rank,
-      from: { w: fromSize.w, h: fromSize.h, quality },
-      to: { w: replacement.width, h: replacement.height, quality },
-      copies,
-      predictedBytes: copies * (step ? step.predicted : before),
-      actualBytes: copies * replacement.bytes,
-      reason: step ? step.how : 're-encoded',
-      beforeBytes: copies * before,
-      afterBytes: copies * replacement.bytes,
-      savedBytes: copies * (before - replacement.bytes),
-      steps: step ? step.steps : 0,
-    });
-  }
-  plan.sort((a, b) => a.rank - b.rank);
-
-  return {
+  /**
+   * @param {DegradationLine[]} plan
+   * @param {Map<string, {dataUri: string, width: number, height: number, bytes: number}>} replacements
+   * @param {number} total
+   * @param {number} dial
+   * @returns {BudgetResult}
+   */
+  const settled = (plan, replacements, total, dial) => ({
     plan,
     proof: applyReplacements(proof, replacements),
     assetBytes: total,
     budget,
     fits: total <= budget,
-    undegradable,
+    undegradable: total <= budget ? [] : payloadLines(),
+    unreachable: false,
+    reason: null,
+    quality: dial,
+  });
+
+  /**
+   * The budget cannot be met by touching assets, so no asset is touched (P4).
+   *
+   * Degrading the prospect's photographs to reach a number the file was never
+   * going to reach costs them real quality and buys nothing: the emit is
+   * refused either way. What the seller needs is the reason, and the reason is
+   * never the picture — it is whatever the ladder cannot resample.
+   *
+   * @param {string} reason
+   * @param {{assetId: string, bytes: number, reason: string}[]} blocked
+   * @returns {BudgetResult}
+   */
+  const unreachable = (reason, blocked = []) => ({
+    plan: [],
+    proof,
+    assetBytes: startTotal,
+    budget,
+    fits: false,
+    undegradable: [...blocked, ...payloadLines()],
+    unreachable: true,
+    reason,
+    quality: 1,
+  });
+
+  // Named whenever the document is over its ceiling, whether or not the ladder
+  // ran: a seller told "nothing else can be degraded" while a megabyte of
+  // inline SVG sits in the payload has been told something untrue.
+  if (startTotal <= budget) {
+    return {
+      plan: [],
+      proof,
+      assetBytes: startTotal,
+      budget,
+      fits: true,
+      undegradable: reserve > ceiling ? payloadLines() : [],
+      unreachable: false,
+      reason: null,
+      quality: 1,
+    };
+  }
+
+  if (budget <= 0) {
+    return unreachable(
+      `the document costs ${reserve} bytes before a single image, which is already ${reserve - ceiling} bytes over the ${ceiling}-byte budget, `
+      + 'so no amount of image degradation could meet it',
+    );
+  }
+
+  // ---- the search ---------------------------------------------------------
+  //
+  // One dial, `q`, sets every asset's scale at once (`scaleForQuality`). The
+  // bisection runs on **predictions**, which cost nothing, and only the
+  // candidates it settles on are measured by a real decode-resample-encode. So
+  // the allocator gets the precision of a fine ladder at the cost of a coarse
+  // one, and the file lands just under the budget instead of far under it (P7).
+
+  const count = assets.length;
+  const prefixOf = new Map(assets.map((a) => [a.dataUri, dataUriPrefixBytes(a.dataUri)]));
+  /** Every re-encode this call has performed, keyed by asset and scale. */
+  /** @type {Map<string, {produced: {dataUri: string, width: number, height: number, bytes: number, how: string}, predicted: number, scale: number}|null>} */
+  const attempts = new Map();
+  /**
+   * Every measurement of every payload, ascending by scale.
+   *
+   * This is the curve the search reads. `predictEmittedBytes` models a picture
+   * as area — bytes fall with `scale²` — and that is the right model with one
+   * measurement to hand, but it is wrong in a knowable direction: downscaling
+   * also destroys detail, so a real photograph gives back *less* than the area
+   * ratio promises (the corpus hero: 1,181,306 bytes at full size, 61,122 at
+   * 15%, where area predicts 26,500). Two measurements of the same image fix
+   * that without a model of images in general — the exponent between them is
+   * this picture's own.
+   * @type {Map<string, {scale: number, bytes: number}[]>}
+   */
+  const curve = new Map(assets.map((a) => [a.dataUri, [{ scale: 1, bytes: a.bytes }]]));
+  /** Payloads the codec will not resample at all: vector art, and formats with no host resampler. */
+  /** @type {Set<string>} */
+  const noResample = new Set();
+
+  const keyOf = (/** @type {AssetEntry} */ a, /** @type {number} */ scale) => `${a.assetId}@${scale.toFixed(6)}`;
+
+  /**
+   * What the allocator expects this asset to cost at `scale`, before doing the
+   * work — read off this image's own measured curve wherever there is one, and
+   * from the area model when there is not (E26).
+   * @param {AssetEntry} a
+   * @param {number} scale
+   */
+  const predictFor = (a, scale) => {
+    const original = /** @type {number} */ (originalBytes.get(a.dataUri));
+    if (scale >= 1) return Math.round(original * 0.97);
+    const points = /** @type {{scale: number, bytes: number}[]} */ (curve.get(a.dataUri));
+    if (noResample.has(a.dataUri)) {
+      const lossless = attempts.get(keyOf(a, 1));
+      return lossless ? lossless.produced.bytes : original;
+    }
+    const exact = points.find((p) => p.scale === scale);
+    if (exact) return exact.bytes;
+    if (points.length >= 2) {
+      const [p, r] = nearestPair(points, scale);
+      const interpolated = logInterpolate(p, r, scale);
+      if (Number.isFinite(interpolated) && interpolated > 0) return Math.min(original, Math.round(interpolated));
+    }
+    const anchor = nearest(points, scale);
+    return Math.min(original, predictEmittedBytes(anchor.bytes, anchor.scale, scale, /** @type {number} */ (prefixOf.get(a.dataUri))));
   };
+
+  /**
+   * Re-encode one asset at one scale, once. Memoized: the search revisits
+   * scales, and a decode-resample-encode is the expensive thing here.
+   * @param {AssetEntry} a
+   * @param {number} scale
+   */
+  const attempt = (a, scale) => {
+    const key = keyOf(a, scale);
+    const hit = attempts.get(key);
+    if (hit !== undefined) return hit;
+    const original = /** @type {number} */ (originalBytes.get(a.dataUri));
+    const predicted = predictFor(a, scale);
+    const produced = degradeAsset({ ...a, bytes: original }, scale, { quality, resample: options.resample });
+    const entry = produced && produced.bytes < original ? { produced, predicted, scale } : null;
+    attempts.set(key, entry);
+    if (entry) {
+      const points = /** @type {{scale: number, bytes: number}[]} */ (curve.get(a.dataUri));
+      if (!points.some((p) => p.scale === scale)) {
+        points.push({ scale, bytes: produced.bytes });
+        points.sort((x, y) => x.scale - y.scale);
+      }
+    } else if (scale < 1) {
+      noResample.add(a.dataUri);
+    }
+    return entry;
+  };
+
+  /**
+   * The result actually applied to an asset at dial position `q`.
+   *
+   * Vector art does not downscale, and a picture already at its container floor
+   * gives nothing back — but both can still be re-encoded losslessly, and those
+   * bytes are free. So a scale the codec refuses falls back to the lossless
+   * pass rather than surrendering the saving it already made.
+   * @param {AssetEntry} a
+   * @param {number} scale
+   */
+  const resolve = (a, scale) => attempt(a, scale) || (scale < 1 ? attempt(a, 1) : null);
+
+  /**
+   * What the assets would cost at `q`, from measurements where they exist and
+   * predictions where they do not. Free — this is what the bisection runs on.
+   * @param {number} q
+   */
+  const predictTotal = (q) => {
+    let sum = 0;
+    for (const a of assets) {
+      const scale = scaleForQuality(q, a.rank, count);
+      const original = /** @type {number} */ (originalBytes.get(a.dataUri));
+      const known = attempts.get(keyOf(a, scale));
+      let bytes;
+      if (known) bytes = known.produced.bytes;
+      else if (known === null) {
+        const lossless = scale < 1 ? attempts.get(keyOf(a, 1)) : null;
+        bytes = lossless ? lossless.produced.bytes : original;
+      } else bytes = Math.min(original, predictFor(a, scale));
+      sum += costOf(a.dataUri, bytes);
+    }
+    return sum;
+  };
+
+  /**
+   * What the assets really cost at `q`, by doing the work.
+   * @param {number} q
+   */
+  const measure = (q) => {
+    /** @type {Map<string, {produced: any, predicted: number, scale: number}|null>} */
+    const chosen = new Map();
+    let total = 0;
+    for (const a of assets) {
+      const entry = resolve(a, scaleForQuality(q, a.rank, count));
+      chosen.set(a.dataUri, entry);
+      total += costOf(a.dataUri, entry ? entry.produced.bytes : /** @type {number} */ (originalBytes.get(a.dataUri)));
+    }
+    return { q, total, chosen };
+  };
+
+  /**
+   * The largest dial position whose *predicted* total fits, by bisection.
+   * @param {number} lo
+   * @param {number} hi
+   */
+  const solve = (lo, hi) => {
+    let a = lo;
+    let b = hi;
+    for (let i = 0; i < 40; i++) {
+      const mid = (a + b) / 2;
+      if (predictTotal(mid) <= budget) a = mid; else b = mid;
+    }
+    return a;
+  };
+
+  // The lossless pass. Nothing here costs a pixel, so it happens whatever the
+  // budget is, and it is the anchor every later prediction is measured from.
+  const lossless = measure(1);
+  if (lossless.total <= budget) return settled(...planFrom(lossless), 1);
+
+  let lo = 0;
+  let hi = 1;
+  /** @type {{q: number, total: number, chosen: Map<string, any>}|null} */
+  let fitting = null;
+
+  // If even the floor is predicted not to fit, check the floor once and stop:
+  // there is nothing between here and there worth the client's pixels.
+  if (predictTotal(0) > budget) {
+    const floor = measure(0);
+    if (floor.total > budget) {
+      /** @type {{assetId: string, bytes: number, reason: string}[]} */
+      const blocked = [];
+      for (const a of assets) {
+        if (floor.chosen.get(a.dataUri)) continue;
+        const parsed = parseDataUri(a.dataUri);
+        blocked.push({
+          assetId: a.assetId,
+          bytes: costOf(a.dataUri, a.bytes),
+          reason: `${parsed ? parsed.mime : 'unknown'} cannot be re-encoded any smaller by the in-repo codec; supply a host resampler (deps.resample) or capture it smaller`,
+        });
+      }
+      return unreachable(
+        `even with every asset at ${Math.round(SCALE_FLOOR * 100)}% of its linear size the artifact is ${reserve + floor.total} bytes, `
+        + `still over the ${ceiling}-byte budget, so nothing was degraded`,
+        blocked,
+      );
+    }
+    fitting = floor;
+    lo = 0;
+  }
+
+  const tolerance = (chosenTotal) => Math.max(1024, Math.round(0.02 * (startTotal - chosenTotal)));
+
+  for (let probe = 0; probe < MEASURED_PROBES && hi - lo > SCALE_QUANTUM; probe++) {
+    if (fitting && budget - fitting.total <= tolerance(fitting.total)) break;
+    let q = solve(lo, hi);
+    if (!(q > lo) || !(q < hi)) q = (lo + hi) / 2;
+    const probed = measure(q);
+    if (probed.total <= budget) {
+      if (!fitting || probed.total > fitting.total) fitting = probed;
+      lo = q;
+    } else {
+      hi = q;
+    }
+  }
+
+  if (!fitting) {
+    const floor = measure(0);
+    if (floor.total > budget) {
+      return unreachable(
+        `even with every asset at ${Math.round(SCALE_FLOOR * 100)}% of its linear size the artifact is ${reserve + floor.total} bytes, `
+        + `still over the ${ceiling}-byte budget, so nothing was degraded`,
+      );
+    }
+    fitting = floor;
+  }
+
+  return settled(...planFrom(fitting), fitting.q);
+
+  /**
+   * Turn a measured dial position into the report §13 asks for.
+   *
+   * Every byte figure is what the **document** paid, not what one copy of the
+   * payload weighs (C2). A hero the opening beat paints is written into the
+   * pre-rendered markup and into the media table both, and a seller reading
+   * "saved 1.0MB" about a file that lost 2.0MB has been given a number about
+   * nothing.
+   *
+   * @param {{q: number, total: number, chosen: Map<string, any>}} chosen
+   * @returns {[DegradationLine[], Map<string, any>, number]}
+   */
+  function planFrom(chosen) {
+    /** @type {Map<string, {dataUri: string, width: number, height: number, bytes: number}>} */
+    const replacements = new Map();
+    /** @type {DegradationLine[]} */
+    const plan = [];
+    for (const asset of assets) {
+      const entry = chosen.chosen.get(asset.dataUri);
+      if (!entry) continue;
+      replacements.set(asset.dataUri, entry.produced);
+      const before = /** @type {number} */ (originalBytes.get(asset.dataUri));
+      const fromSize = /** @type {{w: number, h: number}} */ (originalSize.get(asset.dataUri));
+      const copies = copyCount.get(asset.dataUri) || 1;
+      plan.push({
+        assetId: asset.assetId,
+        assetIds: asset.assetIds.slice(),
+        rank: asset.rank,
+        from: { w: fromSize.w, h: fromSize.h, quality },
+        to: { w: entry.produced.width, h: entry.produced.height, quality },
+        copies,
+        predictedBytes: copies * entry.predicted,
+        actualBytes: copies * entry.produced.bytes,
+        reason: entry.produced.how,
+        beforeBytes: copies * before,
+        afterBytes: copies * entry.produced.bytes,
+        savedBytes: copies * (before - entry.produced.bytes),
+        scale: entry.scale,
+        steps: scaleSteps(entry.scale),
+      });
+    }
+    plan.sort((a, b) => a.rank - b.rank);
+    return [plan, replacements, chosen.total];
+  }
+}
+
+/**
+ * @typedef {object} CostComponent
+ * @property {string} name    what this part of the file is, in the seller's words
+ * @property {number} bytes   what it costs the document
+ * @property {string} [detail] anything that makes the number actionable
+ */
+
+/**
+ * Name the largest things in the file that are not degradable images (P4).
+ *
+ * A refusal that says "1 asset could not be degraded: a 178-byte PNG" while
+ * 485KB of embedded font sits in the same file has pointed the seller at the
+ * smallest object in the room. The ladder only reaches images, so when the
+ * overage is dominated by something else — a font, the runtime, the model
+ * payload — the honest report is the one that says where the bytes are, in
+ * descending order, whether or not anything can be done about them here.
+ *
+ * @param {CostComponent[]} components
+ * @param {number} [limit]  how many to name before summarising the tail
+ * @returns {string}
+ */
+export function describeFixedCost(components, limit = 4) {
+  const real = (components || []).filter((c) => c && Number(c.bytes) > 0);
+  if (!real.length) return '';
+  const sorted = real.slice().sort((a, b) => b.bytes - a.bytes || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const shown = sorted.slice(0, Math.max(1, limit));
+  const rest = sorted.slice(shown.length);
+  const parts = shown.map((c) => `${c.name} ${c.bytes} bytes${c.detail ? ` (${c.detail})` : ''}`);
+  if (rest.length) {
+    parts.push(`everything else ${rest.reduce((n, c) => n + c.bytes, 0)} bytes`);
+  }
+  return `Where the bytes are: ${parts.join('; ')}.`;
 }
 
 /**

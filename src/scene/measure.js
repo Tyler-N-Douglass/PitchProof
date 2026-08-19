@@ -19,16 +19,35 @@
  *   data-pp-inset="a,b"     subtract these geometry tokens (or literal px) from the width
  *   data-pp-width="<t>"     this element's inner width *is* this token (or px)
  *   data-pp-max="<t>"       a `max-width` the stylesheet caps this element with
- *   data-pp-fit             this element is as wide as its words; the reported
- *                           width is the room it has, and is a bound
+ *   data-pp-fit="<why>"     this element's own box is not the extent at which
+ *                           its content is lost; the reported width is the
+ *                           *room* it has and is a bound, not an equality.
+ *                           Two shapes, two reasons, one consequence:
+ *                             shrink — the box is as wide as its words
+ *                                      (`inline-flex` pill, `inline-block` CTA)
+ *                             spill  — the box is a gutter reserved for a mark,
+ *                                      which the stylesheet neither paints at
+ *                                      nor clips (the list-marker column)
+ *   data-pp-lines="<n>"     this element's block box is exactly n line boxes of
+ *                           its own role — the height it is measured against
  *
- * The last two exist because the first three could only ever *narrow* a box by
- * a declared amount, and two shapes in the stylesheet are not that: a fixed
- * grid track (the list marker column, the source chip beside a scene headline)
- * and a `max-width` cap on prose. Both were previously invisible to the model,
- * which then handed the detector a container two to ten times wider than the
- * one Chromium draws — CRITIQUE-2's C1, and the single largest source of the
- * missed truncations it measured.
+ * `data-pp-width` and `data-pp-max` exist because `box`, `frac` and `inset`
+ * could only ever *narrow* a box by a declared amount, and two shapes in the
+ * stylesheet are not that: a fixed grid track (the list marker column, the
+ * source chip beside a scene headline) and a `max-width` cap on prose. Both
+ * were previously invisible to the model, which then handed the detector a
+ * container two to ten times wider than the one Chromium draws — CRITIQUE-2's
+ * C1, and the single largest source of the missed truncations it measured.
+ *
+ * `data-pp-lines` exists because a run whose box is its own content — a block
+ * in normal flow — inherited its slot's height, and a slot is the whole column.
+ * `badgeNumber` was measured against `fanSource`'s 536px rather than the 40px
+ * line box it actually occupies, so **no height check on that role could fire
+ * at any content, at any breakpoint** (DEFERRED.md). A hole in the measurement
+ * is not made safe by the box happening not to clip; it is made safe by
+ * measuring the box. The declared line count is an equality
+ * `test/scene/geometry-browser.test.mjs` checks against Chromium's own
+ * `clientHeight`, so it cannot drift from the stylesheet either.
  *
  * A token whose value is a percentage (`'100%'`, the stacked-at-`sm` form used
  * throughout `GEOM`) contributes **zero** to an inset and leaves a
@@ -79,6 +98,7 @@ import { layoutFunction } from './layouts/all.js';
  * @property {string} [containerId]           extension: boxes sharing one container
  * @property {string} [slot]                  extension: the geometry slot's name
  * @property {boolean} [fitsContent]          extension: `containerWidthPx` is the room this box has, not the box it fills
+ * @property {'shrink'|'spill'} [fit]         extension: why it is a room and not a box
  */
 
 /**
@@ -207,7 +227,13 @@ export function collectTextBoxes(node, env) {
       };
     }
 
-    if (attrs['data-pp-width'] !== undefined && attrs['data-pp-width'] !== null) {
+    const fit = fitReason(attrs);
+    // A `spill` box's declared track is a gutter, not a boundary: the mark in it
+    // is painted in full past its edge and nothing clips it, so the track is not
+    // the extent at which content is lost and must not be reported as one. The
+    // track itself stays on the element, where `scenes.css` sets it and
+    // test/scene/geometry-browser.test.mjs checks the browser draws it.
+    if (attrs['data-pp-width'] !== undefined && attrs['data-pp-width'] !== null && fit !== 'spill') {
       const fixed = trackWidth(String(attrs['data-pp-width']), bp, next.widthPx);
       next = { ...next, widthPx: fixed };
     }
@@ -267,7 +293,18 @@ export function collectTextBoxes(node, env) {
         // wider advances, would need. Reported so a reader of the measurement
         // can tell the two meanings apart; every other box is an equality
         // `test/scene/geometry-browser.test.mjs` checks against Chromium.
-        if (attrs['data-pp-fit']) box.fitsContent = true;
+        // A block in normal flow is as tall as its own lines, not as tall as the
+        // slot it sits in. Where the stylesheet gives an element a fixed number
+        // of them, the layout says so and the height check has a box to fire
+        // against — see the module note on `badgeNumber`.
+        if (attrs['data-pp-lines'] !== undefined && attrs['data-pp-lines'] !== null) {
+          const lines = Math.max(1, Math.floor(Number(attrs['data-pp-lines'])) || 1);
+          box.containerHeightPx = round3(lines * resolved.style.fontSizePx * resolved.style.lineHeight);
+        }
+        if (fit) {
+          box.fitsContent = true;
+          box.fit = fit;
+        }
         boxes.push(box);
       }
       // A text role never nests inside another; the coverage test asserts it,
@@ -289,6 +326,40 @@ export function collectTextBoxes(node, env) {
     ledger: false,
   });
   return boxes;
+}
+
+/**
+ * Why an element's reported container is the room it has rather than the box it
+ * fills, or `null` where it is the box.
+ *
+ * Both reasons make `containerWidthPx` a **bound**, and §22.2's direction rule
+ * is why a bound is acceptable at all: where the model and the page can honestly
+ * differ, the model must claim *less* room than the page has, so the error falls
+ * towards a warning nobody needed rather than a truncation nobody saw.
+ *
+ *  - `shrink`: the element is as wide as its words. Its box is narrower than the
+ *    room whenever the label is short, and the number that matters is the room —
+ *    what a longer label, or the same label in a brand face with wider advances,
+ *    would fill.
+ *  - `spill`: the element's box is a gutter the layout reserves for a mark. The
+ *    stylesheet paints nothing at its edge and clips nothing there, so a mark
+ *    wider than the gutter is drawn in full in space the design already leaves
+ *    empty, and the extent at which anything is actually lost is the room the
+ *    containing box gives it. The claim is not taken on trust: for every element
+ *    carrying it, test/scene/geometry-browser.test.mjs asserts in Chromium that
+ *    nothing between the mark and the stage clips, and that the mark's own ink
+ *    stays inside the room the model reports — so the box stays in the detector's
+ *    population and the declaration fails the run it stops being true.
+ *
+ * A bare `data-pp-fit` with no reason is `shrink`, which is what it meant before
+ * there was a second one.
+ * @param {Record<string, unknown>} attrs
+ * @returns {'shrink'|'spill'|null}
+ */
+export function fitReason(attrs) {
+  const declared = attrs['data-pp-fit'];
+  if (declared === undefined || declared === null || declared === false) return null;
+  return declared === 'spill' ? 'spill' : 'shrink';
 }
 
 /**

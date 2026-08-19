@@ -190,6 +190,36 @@ test('an importer block whose bytes were never captured is held back, recorded a
   assert.equal(specimen.blocks.length, 1, 'the input specimen is untouched');
 });
 
+/**
+ * The reason resolution runs before anything is held back: an `<img src>` that
+ * differs from the asset's own name only by percent-encoding names bytes that
+ * are present. Blockification tries the exact key and the basename; the fuller
+ * ladder in `resolveMediaRef` tries the decoded forms too, and now runs on the
+ * HTML route as well — otherwise D-L6-21 would drop a block over a lookup.
+ */
+test('an <img> that reaches its bytes only through the decoded form is resolved, not held back', () => {
+  const png = encodePng(new Uint8Array([9, 9, 9, 255, 8, 8, 8, 255, 7, 7, 7, 255, 6, 6, 6, 255]), 2, 2);
+  const html = '<!doctype html><html lang="en"><head><title>Spares</title></head><body><main>'
+    + '<h1>Spares</h1>'
+    + '<figure><img src="/img/tube%20bundle.png" alt="A tube bundle"><figcaption>Tube bundle</figcaption></figure>'
+    + '<p>The bundle pulls without breaking the shell connections, which is what makes an in-turnaround clean possible.</p>'
+    + '</main></body></html>';
+  const specimen = buildSpecimen({
+    kind: 'html',
+    sourceUrl: 'https://northwind.example/spares',
+    capturedAt: clock(),
+    html,
+    doc: parseHtml(html),
+    assets: [{ name: '/img/tube bundle.png', bytes: png, mime: 'image/png' }],
+    meta: {},
+  }, { clock, imageQuality: 0.85 });
+
+  assert.equal(specimen.media.length, 1);
+  assert.deepEqual(mediaBlockRefs(specimen), [specimen.media[0].id], 'the block found its bytes');
+  assert.deepEqual(specimen.mediaOmitted, [], 'and nothing was held back for a defect that was only a lookup');
+  assert.deepEqual(unresolvedMediaRefs(specimen), []);
+});
+
 test('F12 — a shared ledger inlines an asset once across the specimens of one project', () => {
   const assets = corpusImageAssets();
   const pages = CORPUS_PAGES.map((p) => ({

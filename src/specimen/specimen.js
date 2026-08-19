@@ -169,9 +169,8 @@ export function buildSpecimen(capture, options = {}) {
     // to the ids `captureMedia` minted for those exact bytes. Without this the
     // image is inlined in the proof and unreachable from the block that shows
     // it, which is a severity-1 ASSET_MISSING on every `.docx` or PDF that
-    // contains a picture.
-    const resolved = resolveBlockMedia(capture.blocks, media);
-    blocks = resolved.blocks;
+    // contains a picture. The rewrite itself now runs for every route, below.
+    blocks = capture.blocks;
     blockPositions = blocks.map((_, i) => i);
     locator = 'importer';
   } else if (doc) {
@@ -237,8 +236,18 @@ export function buildSpecimen(capture, options = {}) {
     }));
   }
 
-  // --- media the page referenced but the capture never brought bytes for --
+  // --- media refs: resolve, then hold back what resolves to nothing -------
   //
+  // Resolution first (D-L6-17): an importer's part name and an `<img src>` that
+  // differs from the asset's name only by percent-encoding or a leading `./`
+  // both name bytes that *are* here, and a block that misses them would be
+  // dropped below for a defect that is only a lookup. `resolveBlockMedia` is
+  // idempotent — a ref that is already a minted id is left alone — so running
+  // it over every route costs nothing and closes the gap between the two
+  // candidate ladders.
+  blocks = resolveBlockMedia(blocks, media).blocks;
+  stripped = stripped.map((entry) => ({ ...entry, blocks: resolveBlockMedia(entry.blocks, media).blocks }));
+
   // §6's paste and manual routes carry markup and no assets, so every `<img>`
   // on a pasted page resolves to nothing. A `media` block pointing at nothing
   // is a broken image in front of the client and a severity-1 `ASSET_MISSING`
@@ -597,13 +606,19 @@ export function restoreOmittedMedia(specimen, target, supply, options = {}) {
     : blocks.map((_, i) => i);
   let stripped = specimen.stripped || [];
 
-  if (entry.origin === 'stripped') {
+  const owner = entry.origin === 'stripped'
+    ? stripped.find((s) => s.id === entry.strippedId)
+    : null;
+  if (owner) {
     stripped = stripped.map((s) => {
-      if (s.id !== entry.strippedId) return s;
+      if (s !== owner) return s;
       const merged = insertAt(s.blocks, s.positions, block, entry.position);
       return { ...s, blocks: merged.blocks, positions: merged.positions };
     });
   } else {
+    // Either it came from the stream, or it came from a chrome region that has
+    // since been restored — in which case the region is back in the stream and
+    // so is the position this block stood at. Never nowhere.
     const merged = insertAt(blocks, blockPositions, block, entry.position);
     blocks = merged.blocks;
     blockPositions = merged.positions;

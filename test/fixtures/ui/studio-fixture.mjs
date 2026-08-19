@@ -16,6 +16,16 @@ import { contentId, elementId } from '../../../src/core/ids.js';
 import { defaultEmitOptions } from '../../../src/core/contracts.js';
 import { ok, err } from '../../../src/core/result.js';
 import { registerAllLayouts, sceneTemplates } from '../../../src/scene/index.js';
+import { usedIds } from '../../../src/ui/model.js';
+
+/**
+ * The sentence the real adapter returns for a lane call made without the proof
+ * whose ids the new ones must not collide with (CRITIQUE-3 P1). The fake says
+ * the same thing for the same reason.
+ * @param {string} method
+ * @returns {string}
+ */
+const NO_PROOF = (method) => `${method} was called without the project's proof, so the ids it mints could collide with ids the project already uses. Nothing was changed. This is a wiring fault in the studio (CRITIQUE-3 P1), not something you did.`;
 
 const AT = '2026-02-01T09:00:00.000Z';
 
@@ -277,12 +287,20 @@ export function fakeServices(options = {}) {
     contrast: (a, b) => (a === b ? 1 : 7.2),
     oklch: () => [0.5, 0.1, 200],
     deriveForContrast: () => '#0A0A0A',
-    buildBrand: (captures) => ok({
-      ...fixtureBrand(),
-      capturedAt: clock(),
-      sourceUrl: (captures[0] && captures[0].sourceUrl) || 'file://import',
-      confidence: { colors: 0.9, faces: 0.8, logos: 0.75, shape: 0.8, imagery: 0.78 },
-    }),
+    // The `proof` precondition is the real adapter's, and the fake enforces it
+    // for the reason CRITIQUE-3 P1 exists: the fake minted unique ids by an
+    // accident of its own call counter while the real adapter minted the same
+    // id every time, so every studio test agreed with a defect none of them
+    // could see. A fake that accepts a call the real one refuses is not a fake.
+    buildBrand: (captures, options) => {
+      if (!options || !options.proof) return err(NO_PROOF('buildBrand'));
+      return ok({
+        ...fixtureBrand(),
+        capturedAt: clock(),
+        sourceUrl: (captures[0] && captures[0].sourceUrl) || 'file://import',
+        confidence: { colors: 0.9, faces: 0.8, logos: 0.75, shape: 0.8, imagery: 0.78 },
+      });
+    },
     compileTheme: () => ({ css: ':root{--pp-primary:#123A8C}', vars: { '--pp-primary': '#123A8C' } }),
     artifactThemeCss: () => ':root{--pp-primary:#123A8C}',
     // §7's only route to `embeddable: true`, shaped like L5's: a file and a
@@ -320,7 +338,13 @@ export function fakeServices(options = {}) {
     },
     inverseLogo: (logo) => ({ ...logo, id: `${logo.id}_inv`, variant: 'inverse' }),
 
-    buildSpecimen: () => ok({ ...fixtureSpecimen(), id: contentId('specimen', `fake-${calls.length}`) }),
+    buildSpecimen: (capture, options) => {
+      if (!options || !options.proof) return err(NO_PROOF('buildSpecimen'));
+      const taken = usedIds(options.proof);
+      let id = contentId('specimen', `fake-${calls.length}`);
+      for (let i = 1; taken.has(id); i += 1) id = contentId('specimen', `fake-${calls.length}-${i}`);
+      return ok({ ...fixtureSpecimen(), id });
+    },
     setRawOptIn: (specimen, allowed, by) => ok({ ...specimen, rawOptIn: { allowed, by: allowed ? by : null, at: allowed ? clock() : null } }),
     restoreStripped: (specimen, entry) => ok({
       ...specimen,
@@ -453,8 +477,18 @@ export function fakeServices(options = {}) {
       .map((finding) => ({
         finding,
         label: `fix ${finding.code}`,
+        effect: 'resolves',
         apply: (p) => ({ ...p, prospectName: `${p.prospectName} (fixed)` }),
       })),
+    // L11's `applyAll`, threaded the same way the lane threads it (CRITIQUE-3
+    // P11). A fix that cannot find its target hands back the proof it was
+    // given, which is what makes the caller's digest comparison meaningful.
+    applyAllFixes: (proof, fixes) => {
+      if (!status.validate) return err('validate is not wired');
+      let current = proof;
+      for (const fix of fixes || []) current = fix.apply(current);
+      return ok(current);
+    },
     async dryRun(proof, onPosition) {
       const positions = [];
       for (const scene of proof.spine || []) {
