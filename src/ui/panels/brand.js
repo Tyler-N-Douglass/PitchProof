@@ -24,7 +24,8 @@ import { h, cx } from '../../core/vdom.js';
 import {
   badge, button, checkbox, empty, field, notice, pair, pairs, rawBox, section, select, swatch, toolbar,
 } from '../components.js';
-import { formatMetric, formatPercent, formatRatio, humanize } from '../format.js';
+import { FONT_ACCEPT } from '../actions.js';
+import { formatBytes, formatDateTime, formatMetric, formatPercent, formatRatio, humanize } from '../format.js';
 import {
   BRAND_GROUPS, LOW_CONFIDENCE, brandGroupEvidence, brandGroupIsStarterDefault, brandIsUntouched,
   pairedRole, reviewedGroups, unreviewedBrandGroups,
@@ -374,14 +375,76 @@ function renderFaces(app, brand) {
       face.metricDelta
         ? null
         : h('p', { class: 'st-field-hint' }, 'No delta yet: it is measured when a face is read off a real page, by comparing that face against the fallback that would replace it. Extract their site to have it filled in — the rehearsal sweep measures overflow against the fallback either way.'),
-      checkbox({
-        label: 'I have a licence for this font file and may embed it',
-        act: 'brand.setFaceEmbeddable',
-        arg: String(i),
-        checked: !!face.embeddable,
-        hint: '§7: a foundry webfont is never fetched and embedded on your behalf. This asserts you supplied a file you have rights to.',
-      }))))
+      renderFaceLicence(app, face, i))))
     : empty('No faces detected yet.', button({ act: 'brand.addFace', variant: 'primary' }, 'Add one by hand')));
+}
+
+/**
+ * The licence, which is the file.
+ *
+ * §7: "`embeddable` is false unless the user explicitly supplies a font file
+ * they assert they have rights to." What stood here was a checkbox that set the
+ * flag on its own — CRITIQUE-2 C3 — so the two FONT_UNAVAILABLE warnings
+ * vanished, the emit opened, and the artifact went out with no `@font-face` and
+ * the family still at the head of its stack: the client's machine rendered
+ * Arial while the studio claimed the face was embedded.
+ *
+ * There is no checkbox now. Choosing the file *is* the assertion, it is recorded
+ * against the operator's name and L5's clock, and removing the file withdraws
+ * the assertion in the same act — so the claim and the fact cannot move apart.
+ * @param {any} app
+ * @param {any} face
+ * @param {number} i
+ * @returns {import('../../core/vdom.js').VNode}
+ */
+function renderFaceLicence(app, face, i) {
+  const file = face.fontFile && typeof face.fontFile.dataUri === 'string' && face.fontFile.dataUri.startsWith('data:')
+    ? face.fontFile
+    : null;
+  const assertion = face.rightsAssertion || null;
+
+  if (face.embeddable && file) {
+    return h('div', { class: 'st-face-licence' },
+      pairs(
+        pair('Embedded file', h('span', { class: 'st-mono' }, file.fileName || 'the supplied file')),
+        pair('Size', h('span', { class: 'st-mono' }, formatBytes(fontBytes(file)))),
+        pair('Licence asserted by', assertion ? assertion.assertedBy : '—'),
+        pair('Asserted', assertion && assertion.assertedAt ? formatDateTime(assertion.assertedAt) : '—'),
+      ),
+      h('p', { class: 'st-field-hint' }, `The artifact carries this file as an @font-face rule, so ${face.family} renders on a machine that has never had it installed — and it counts against the emit's byte budget like any other asset.`),
+      toolbar(button({
+        act: 'brand.detachFont', arg: String(i), variant: 'quiet',
+        title: 'Remove the file and withdraw the assertion',
+      }, 'Remove the font file')));
+  }
+
+  if (face.embeddable && !file) {
+    // Nothing in this build can produce this state; a project saved by an older
+    // one can, and an imported .pitchproof.json can carry it from anywhere.
+    return h('div', { class: 'st-face-licence' },
+      notice('warn', `${face.family || 'This face'} is marked embeddable but carries no file, so the artifact would substitute ${resolvedFace(face)} while the sweep stayed quiet about it. Attach the licensed file, or withdraw the claim.`),
+      toolbar(button({ act: 'brand.detachFont', arg: String(i), variant: 'ghost' }, 'Withdraw the claim')));
+  }
+
+  return h('label', { class: 'st-field st-face-licence' },
+    h('span', { class: 'st-field-label' }, 'Attach the licensed font file'),
+    h('input', {
+      class: 'st-input st-file', type: 'file', accept: FONT_ACCEPT,
+      [ACT_ATTR]: 'brand.attachFont', [ARG_ATTR]: String(i), [KEY_ATTR]: `face-font-${i}`,
+      'aria-label': `Attach a licensed font file for ${face.family || 'this face'}`,
+    }),
+    h('span', { class: 'st-field-hint' }, app.ui.settings.operator
+      ? `.woff2, .woff, .ttf or .otf. Choosing a file asserts, in your name (${app.ui.settings.operator}), that you have the right to embed it in a file you hand a client — §7 is why nothing is ever fetched from a foundry on your behalf. Until one is attached, the artifact renders ${resolvedFace(face)} instead.`
+      : `.woff2, .woff, .ttf or .otf. Put your name in Settings first: choosing a file asserts a licence, and §7 records who asserted it. Until one is attached, the artifact renders ${resolvedFace(face)} instead.`));
+}
+
+/** @param {any} file @returns {number} */
+function fontBytes(file) {
+  if (typeof file.bytes === 'number' && file.bytes > 0) return file.bytes;
+  // A data: URI's base64 payload, decoded: 3 bytes for every 4 characters.
+  const base64 = String(file.dataUri || '').split(',')[1] || '';
+  const padding = (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0);
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
 }
 
 /** @param {any} face @returns {string} */

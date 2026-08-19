@@ -92,6 +92,30 @@ const checked = (ctx) => !!(ctx && ctx.value === true);
  */
 function operator(app) { return String(app.ui.settings.operator || '').trim(); }
 
+/** What the font picker offers. §13 embeds only what the user supplied. */
+export const FONT_ACCEPT = '.woff2,.woff,.ttf,.otf,font/woff2,font/woff,font/ttf,font/otf';
+
+/**
+ * The MIME type for a font file, or null when the file is not one.
+ *
+ * The extension decides, not the browser's `type`: hosts disagree about
+ * `font/*` and several report an empty string for `.woff2`. A file the studio
+ * cannot name is refused rather than embedded as `application/octet-stream`,
+ * because an `@font-face` src the client's browser will not parse is a font
+ * that silently does not load — the exact failure C3 was about.
+ * @param {string} name
+ * @param {string} [declared]
+ * @returns {string|null}
+ */
+export function fontMime(name, declared = '') {
+  const ext = String(name || '').toLowerCase().split('.').pop();
+  const table = { woff2: 'font/woff2', woff: 'font/woff', ttf: 'font/ttf', otf: 'font/otf' };
+  if (table[ext]) return table[ext];
+  const d = String(declared || '').toLowerCase();
+  for (const mime of Object.values(table)) if (d === mime) return mime;
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // The registry
 // ---------------------------------------------------------------------------
@@ -1720,6 +1744,27 @@ export function fakeFileInput(name) {
       name,
       type: 'text/html',
       arrayBuffer: async () => new TextEncoder().encode('<html><body><h1>Sample</h1></body></html>').buffer,
+    }],
+  };
+}
+
+/**
+ * A file input holding a font file, for `brand.attachFont`'s sample.
+ *
+ * The bytes are not a real WOFF2 and are not meant to be: nothing in the studio
+ * or the emitter parses a font file — §13 inlines it as a `data:` URI and the
+ * client's browser is what reads it. What the sample has to exercise is the
+ * route, which is where C3's defect lived.
+ * @param {string} name
+ * @returns {any}
+ */
+export function fakeFontInput(name) {
+  return {
+    value: '',
+    files: [{
+      name,
+      type: 'font/woff2',
+      arrayBuffer: async () => new Uint8Array([0x77, 0x4f, 0x46, 0x32, 0, 1, 0, 0]).buffer,
     }],
   };
 }

@@ -27,6 +27,7 @@ import {
 import { contentHash } from '../core/hash.js';
 import { utf8Length, parseDataUri, base64Decode, utf8Decode } from '../core/bytes.js';
 import { sceneRevealsNothing } from '../runtime/beats.js';
+import { SPINE } from '../runtime/deck.js';
 import { makeFinding, sortFindings } from './finding.js';
 import { severityOf } from './severity.js';
 import { detectOverflow, faceResolutions, resolveBoxFace, advanceDeltaOf } from './overflow.js';
@@ -225,7 +226,7 @@ const assetMissing = {
   code: 'ASSET_MISSING',
   severity: severityOf('ASSET_MISSING'),
   title: 'Missing asset',
-  inspects: 'every media block reference, media data URI, logo payload, and every scene reference to a specimen, a rendition or a branch',
+  inspects: 'every media block reference, media data URI, logo payload, and every scene reference to a specimen or a rendition',
   autoFixable: true,
   run(ctx) {
     const { proof, deck } = ctx;
@@ -285,20 +286,12 @@ const assetMissing = {
       }));
     }
 
-    const branchIds = new Set((proof.branches || []).map((b) => b.id));
+    // A scene anchoring a branch that is not in the proof is **not** reported
+    // here. It was, until CRITIQUE-2's C10: it is a branch-topology failure and
+    // it belongs in the branch bucket a consumer filters on, so it moved to the
+    // `BRANCH_UNREACHABLE` rule (L11-D25). This rule owns assets.
     for (const { scene, branchId } of allScenes(proof)) {
       const reachable = !deck || deck.sceneLocator.has(scene.id);
-      for (const anchored of scene.branchAnchors || []) {
-        if (branchIds.has(anchored)) continue;
-        out.push(makeFinding({
-          code: 'ASSET_MISSING',
-          severity: 2,
-          locus: { sceneId: scene.id, branchId: branchId || undefined },
-          key: `scene-anchor:${scene.id}:${anchored}`,
-          message: `Scene ${scene.id} anchors branch "${anchored}", which is not in the proof. The deck drops an anchor that names nothing, so the artifact offers no key for it — but the objection this scene was meant to answer now has no way in from here, and the studio still counts the anchor when it says how many branches the scene offers. Remove the anchor, or restore the branch it names.`,
-          detail: { sceneId: scene.id, branchId: anchored, kind: 'branch-anchor' },
-        }));
-      }
       if (scene.specimenId && !specimenById.has(scene.specimenId)) {
         out.push(makeFinding({
           code: 'ASSET_MISSING',
@@ -510,17 +503,29 @@ export function formatBytes(bytes) {
   return `${Math.round(n)} bytes`;
 }
 
-/** @type {Rule} */
+/**
+ * §11's reachability failures, from both ends of the anchor edge.
+ *
+ * The declared half is L9's coverage list: a branch with no anchoring scene and
+ * no jump-index entry. The other half is the mirror image — a scene whose
+ * `branchAnchors` names a branch the proof does not contain — and it lives here
+ * rather than under `ASSET_MISSING`, where it was filed until CRITIQUE-2's C10
+ * (L11-D25). Both are answers to one question a consumer asks by filtering on a
+ * code: *what is wrong with the branch graph?*
+ *
+ * @type {Rule}
+ */
 const branchUnreachable = {
   code: 'BRANCH_UNREACHABLE',
   severity: severityOf('BRANCH_UNREACHABLE'),
-  title: 'Branch with no way in',
-  inspects: '§11 coverage: every branch, for an anchoring scene or a jump-index entry, and what its scenes cost the artifact if neither exists',
+  title: 'Branch with no way in, or an anchor with no branch',
+  inspects: '§11 coverage from both ends: every branch, for an anchoring scene or a jump-index entry and what its scenes cost the artifact if it has neither; and every scene anchor, for the branch it names',
   autoFixable: true,
   run(ctx) {
     const coverage = ctx.deps.branchCoverage(ctx.deck);
     const byId = new Map((ctx.proof.branches || []).map((b) => [b.id, b]));
-    return sortFindings((coverage.unreachable || []).map((branchId) => {
+    /** @type {any[]} */
+    const out = (coverage.unreachable || []).map((branchId) => {
       const branch = byId.get(branchId);
       const cost = branchShipCost(ctx.proof, branch || { id: branchId, scenes: [] });
       const ships = cost.sceneCount === 0
@@ -542,7 +547,33 @@ const branchUnreachable = {
           exclusiveSources: cost.exclusiveSources,
         },
       });
-    }));
+    });
+
+    // The other end of the edge. `buildDeck` filters an anchor that names
+    // nothing, so no key is offered and nobody is stranded — severity 2, which
+    // is this code's declared value. What is wrong is that the model says this
+    // scene offers a branch: the studio counts the anchor when it reports how
+    // many branches a scene offers, and the objection the anchor was placed for
+    // has no way in from here.
+    const declared = new Set((ctx.proof.branches || []).map((b) => b && b.id).filter(Boolean));
+    for (const { scene, branchId } of allScenes(ctx.proof)) {
+      for (const anchored of scene.branchAnchors || []) {
+        if (declared.has(anchored)) continue;
+        out.push(makeFinding({
+          code: 'BRANCH_UNREACHABLE',
+          severity: 2,
+          locus: { sceneId: scene.id, branchId: anchored },
+          key: `ghost-anchor:${scene.id}:${anchored}`,
+          // No auto-fix: the two remedies are to delete an anchor the seller
+          // authored on purpose or to restore a branch that is not in the file,
+          // and a fix may not choose between them (L11-D25).
+          message: `Scene ${scene.id} anchors branch "${anchored}", which is not in the proof. The deck drops an anchor that names nothing, so the artifact offers no key for it — but the objection this scene was meant to answer now has no way in from here, and the studio still counts the anchor when it says how many branches the scene offers. Remove the anchor, or restore the branch it names.`,
+          detail: { sceneId: scene.id, branchId: anchored, kind: 'branch-anchor', inBranchId: branchId || null },
+        }));
+      }
+    }
+
+    return sortFindings(out);
   },
 };
 
@@ -947,17 +978,70 @@ export function beatShape(scene, pathById) {
   return (scene.beats || []).map((b) => (b.reveals || []).map(label).sort());
 }
 
-/** @type {Rule} */
+/**
+ * §4's only duplicate-identity code, and the deck has two id namespaces, not one.
+ *
+ * Scene ids are the obvious one. Branch ids are the other: `buildDeck` keys its
+ * sequences by `Branch.id` and the spine sentinel shares that keyspace, so two
+ * branches claiming one id — or a branch claiming `"spine"` — is the same defect
+ * one level up, and it was silent until CRITIQUE-2's C5 (L11-D26).
+ *
+ * @type {Rule}
+ */
 const duplicateScene = {
   code: 'DUPLICATE_SCENE',
   severity: severityOf('DUPLICATE_SCENE'),
-  title: 'Duplicate scene',
-  inspects: 'every scene id across the spine and every branch, and every scene\'s visible content — layout, copy, specimen, renditions and the shape of its beats',
+  title: 'Duplicate id in the deck',
+  inspects: 'every scene id and every branch id across the spine and every branch, the deck\'s spine sentinel, and every scene\'s visible content — layout, copy, specimen, renditions and the shape of its beats',
   autoFixable: false,
   run(ctx) {
     const { proof } = ctx;
     /** @type {any[]} */
     const out = [];
+
+    // ---- branch ids -------------------------------------------------------
+    // A deck indexes its branches by id, so only one branch can be the branch an
+    // id names. The other is dropped from the deck entirely — no anchor, no jump
+    // entry and no key reaches it — and every navigation that names the id opens
+    // the survivor instead. Severity 1, by the same argument that blocks a
+    // duplicated scene id, plus the whole authored branch that is lost with it.
+    /** @type {Map<string, any[]>} */
+    const branchesById = new Map();
+    for (const branch of proof.branches || []) {
+      if (!branch || typeof branch.id !== 'string') continue;
+      if (!branchesById.has(branch.id)) branchesById.set(branch.id, []);
+      branchesById.get(branch.id).push(branch);
+    }
+    for (const [branchId, group] of [...branchesById].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const named = group.map((b) => `"${b.objection || b.id}"`).join(' and ');
+      if (branchId === SPINE) {
+        out.push(makeFinding({
+          code: 'DUPLICATE_SCENE',
+          locus: { branchId },
+          key: `branch-id-spine:${branchId}`,
+          message: `Branch ${named} carries the id "${SPINE}", which is the id the deck gives the spine itself. The deck holds one sequence per id, so this branch replaces the whole spine: the proof's own scenes never enter the artifact and every return to the spine lands inside the branch. Give the branch its own id.`,
+          detail: { branchId, kind: 'spine-collision', occurrences: group.length, objections: group.map((b) => b.objection || null) },
+        }));
+        continue;
+      }
+      if (group.length < 2) continue;
+      out.push(makeFinding({
+        code: 'DUPLICATE_SCENE',
+        locus: { branchId },
+        key: `branch-id:${branchId}`,
+        message: `Branch id ${branchId} is claimed by ${group.length} branches (${named}). The deck holds one sequence per id, so only one of them is the branch this id names: the other's ${group.map((b) => (b.scenes || []).length).reduce((a, b) => a + b, 0) === 0 ? 'declaration' : 'scenes'} never enter the deck, and every anchor and every jump-index entry that names this id opens the same one — the presenter takes the objection the lost branch was written for, presses the key, and the client sees the other answer. Give each branch its own id.`,
+        detail: {
+          branchId,
+          kind: 'branch-id',
+          occurrences: group.length,
+          objections: group.map((b) => b.objection || null),
+          sceneCounts: group.map((b) => (b.scenes || []).length),
+          sceneIds: group.map((b) => (b.scenes || []).map((sc) => sc && sc.id).filter(Boolean)),
+        },
+      }));
+    }
+
+    // ---- scene ids --------------------------------------------------------
     /** @type {Map<string, string[]>} */
     const places = new Map();
     for (const { scene, branchId } of allScenes(proof)) {
@@ -976,6 +1060,7 @@ const duplicateScene = {
       }));
     }
 
+    // ---- duplicated scene content -----------------------------------------
     const revealPaths = ctx.revealPaths instanceof Map ? ctx.revealPaths : new Map();
     /** @type {Map<string, {sceneId: string, where: string}[]>} */
     const byContent = new Map();

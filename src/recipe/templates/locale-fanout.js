@@ -4,9 +4,20 @@
  *
  * What actually changes between the nine:
  *
- * - **Writing direction.** RTL markets render their prose as `raw` blocks
- *   carrying `dir="rtl"`, and every table row's cells are reversed, so the block
- *   list itself differs in type and in cell order — not merely in a CSS class.
+ * - **Writing direction.** Every block a rendition carries declares the market's
+ *   direction on the block itself, and an RTL market's table rows have their
+ *   cells reversed, so the block list differs in direction and in cell order —
+ *   not merely in a CSS class.
+ *
+ *   Until finding C8 this was done by wrapping RTL prose in `raw` blocks
+ *   carrying `dir="rtl"`. That was wrong in a way that only showed up two lanes
+ *   downstream: §8 forbids a layout from presenting a `raw` block as markup, so
+ *   the whole ar-SA rendition was flattened to plain text under a caption
+ *   reading "Source markup, shown as text" — the deck describing the difference
+ *   in a table row instead of showing it, and mislabelling this lane's own
+ *   output as the prospect's captured page source. Typed blocks carrying the
+ *   optional `dir`/`lang` extensions say the same thing in a form a layout can
+ *   act on. See D-L7-18.
  * - **Legal-line placement.** Germany and Japan put the legal line immediately
  *   above the call to action; the rest keep it in the footer. The block's index
  *   in the rendition differs accordingly, which is the thing a localisation lead
@@ -27,8 +38,11 @@
  * @module recipe/templates/locale-fanout
  */
 
-import { LOCALES, localizeText, formatContractRows, legalPlacementLabel } from '../locales.js';
-import { finish, bodyBlocks, legalLine, mapBlockText, cloneBlock, sectionHeading, slot } from '../blocks.js';
+import { LOCALES, localizeText, formatContractRows, legalPlacementLabel, sourceLanguage } from '../locales.js';
+import {
+  finish, bodyBlocks, legalLine, mapBlockText, cloneBlock, sectionHeading, slot,
+  withDirection, TOOL_LANG,
+} from '../blocks.js';
 import { flatten } from '../text.js';
 
 /** @type {import('../../core/contracts.d.ts').Recipe} */
@@ -56,32 +70,28 @@ function mirrorTable(block) {
 }
 
 /**
- * Wrap a prose block as a direction-carrying `raw` block. Balanced markup, no
- * network reference, no script — the emitter's scanner sees a plain element.
+ * Mark a block with the market's writing direction and the language its text is
+ * actually in.
+ *
+ * Two arguments, and the pairing is the whole judgment call (D-L7-18):
+ *
+ * - `dir` is the **market's**. It is the structural fact this recipe genuinely
+ *   produced — the ar-SA rendition of a page really is laid out right to left —
+ *   and it is what §9.1 asks the deck to show rather than describe.
+ * - `lang` is the **source's**, never the market's. The copy is reformatted, not
+ *   translated, so an ar-SA rendition of an English page is still English text.
+ *   Marking it `lang="ar-SA"` would be a claim about the content that is false,
+ *   which is §18.2 territory, and would additionally hand a screen reader an
+ *   Arabic voice for English words. Where the specimen declares no language,
+ *   nothing is claimed.
+ *
  * @param {import('../../core/contracts.d.ts').ContentBlock} block
- * @param {string} localeId
+ * @param {import('../locales.js').LocaleModel} locale
+ * @param {string|null} lang
  * @returns {import('../../core/contracts.d.ts').ContentBlock}
  */
-function asRtl(block, localeId) {
-  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  if (block.type === 'paragraph') {
-    return { type: 'raw', html: `<p dir="rtl" lang="${localeId}">${esc(block.text)}</p>` };
-  }
-  if (block.type === 'heading') {
-    return { type: 'raw', html: `<h${block.level} dir="rtl" lang="${localeId}">${esc(block.text)}</h${block.level}>` };
-  }
-  if (block.type === 'list') {
-    const tag = block.ordered ? 'ol' : 'ul';
-    const items = block.items.map((it) => `<li>${esc(it)}</li>`).join('');
-    return { type: 'raw', html: `<${tag} dir="rtl" lang="${localeId}">${items}</${tag}>` };
-  }
-  if (block.type === 'quote') {
-    const cite = block.attribution ? `<cite>${esc(block.attribution)}</cite>` : '';
-    return { type: 'raw', html: `<blockquote dir="rtl" lang="${localeId}"><p>${esc(block.text)}</p>${cite}</blockquote>` };
-  }
-  // A call to action stays a `cta` block: the layouts render it as a control,
-  // and direction is carried by the surrounding prose blocks.
-  return block;
+function directed(block, locale, lang) {
+  return withDirection(block, { dir: locale.dir, lang });
 }
 
 /**
@@ -98,40 +108,49 @@ export function render(specimen, options = {}) {
   const legal = legalLine(specimen);
   const body = bodyBlocks(specimen);
 
+  // The language the prospect's own words are in. Every source-derived block is
+  // marked with it; the tool's own structural labels are marked `en`, which is
+  // what they are. Neither is ever the market's tag — see `directed`.
+  const lang = sourceLanguage(specimen);
+
   return wanted.map((locale) => {
     /** @type {import('../../core/contracts.d.ts').ContentBlock[]} */
     const blocks = [];
 
-    blocks.push(sectionHeading(`Locale format contract — ${locale.name}`, 2));
+    // The card heading and the format-contract table are the studio's words, so
+    // they carry the market's direction and the tool's language, not the
+    // source's.
+    blocks.push(directed(sectionHeading(`Locale format contract — ${locale.name}`, 2), locale, TOOL_LANG));
     const contract = { type: /** @type {const} */('table'), header: true, rows: formatContractRows(locale) };
-    blocks.push(locale.dir === 'rtl' ? mirrorTable(contract) : contract);
+    blocks.push(directed(locale.dir === 'rtl' ? mirrorTable(contract) : contract, locale, TOOL_LANG));
 
+    // A legal line the source did not have is a labelled empty slot, and the
+    // slot's words are the tool's, not the prospect's (§18.2, §18.3).
     const localizedLegal = legal
-      ? mapBlockText(cloneBlock(legal.block), (s) => localizeText(s, locale))
-      : slot(`Legal line, ${legalPlacementLabel(locale.legalPlacement)}`);
+      ? directed(mapBlockText(cloneBlock(legal.block), (s) => localizeText(s, locale)), locale, lang)
+      : directed(slot(`Legal line, ${legalPlacementLabel(locale.legalPlacement)}`), locale, TOOL_LANG);
 
     let ctaSeen = false;
     for (const block of body) {
       const localized = mapBlockText(cloneBlock(block), (s) => localizeText(s, locale));
       if (block.type === 'cta' && !ctaSeen) {
         ctaSeen = true;
-        if (locale.legalPlacement === 'before-cta') {
-          blocks.push(locale.dir === 'rtl' ? asRtl(localizedLegal, locale.id) : localizedLegal);
-        }
+        if (locale.legalPlacement === 'before-cta') blocks.push(localizedLegal);
       }
-      if (localized.type === 'table' && locale.dir === 'rtl') { blocks.push(mirrorTable(localized)); continue; }
-      blocks.push(locale.dir === 'rtl' ? asRtl(localized, locale.id) : localized);
+      const shaped = localized.type === 'table' && locale.dir === 'rtl' ? mirrorTable(localized) : localized;
+      blocks.push(directed(shaped, locale, lang));
     }
 
-    if (locale.legalPlacement !== 'before-cta' || !ctaSeen) {
-      blocks.push(locale.dir === 'rtl' ? asRtl(localizedLegal, locale.id) : localizedLegal);
-    }
+    if (locale.legalPlacement !== 'before-cta' || !ctaSeen) blocks.push(localizedLegal);
 
     const notes = [
       `Structure applied for ${locale.name} (${locale.endonym}).`,
       `Direction ${locale.dir}; date ${locale.datePattern}; number ${locale.numberPattern}; legal line ${legalPlacementLabel(locale.legalPlacement)}.`,
       'Text is reformatted, not translated: no word, number or claim was added.',
-    ].join(' ');
+      locale.dir === 'rtl'
+        ? 'The layout is the market\u2019s; the words are still the source\u2019s, which is why they read left to right inside a right-to-left page.'
+        : null,
+    ].filter(Boolean).join(' ');
 
     return finish({
       specimen,
@@ -139,6 +158,11 @@ export function render(specimen, options = {}) {
       label: locale.id,
       blocks,
       notes,
+      dir: locale.dir,
+      // No rendition-level `lang`: a rendition mixes the source's language with
+      // the tool's own labels, so no single tag is true of the whole of it. That
+      // asymmetry is the argument for carrying language on the block and
+      // direction on both (D-L7-18).
     });
   });
 }
@@ -146,19 +170,34 @@ export function render(specimen, options = {}) {
 /**
  * The structural facts a test — or the studio inspector — can compare across
  * renditions to show the fan-out changed shape and not only strings.
+ *
+ * `signature` is the comparison that matters and the one finding C8 taught this
+ * module to make. Before the fix, direction was encoded in the *block type* —
+ * RTL prose was a `raw` block — so `types` alone distinguished ar-SA from en-US,
+ * and it did so by the very encoding that made the rendition unrenderable.
+ * Direction now rides on the block, where a layout can act on it, and the
+ * structural signature has to look at the block rather than only its type.
+ *
  * @param {import('../../core/contracts.d.ts').Rendition} rendition
- * @returns {{types: string[], legalIndex: number, rtlBlocks: number, contractRow: string[]}}
+ * @returns {{types: string[], dirs: (string|null)[], langs: (string|null)[], signature: string, legalIndex: number, rtlBlocks: number, rawBlocks: number, contractRow: string[]}}
  */
 export function structureOf(rendition) {
-  const types = rendition.blocks.map((b) => b.type);
-  const legalIndex = rendition.blocks.findIndex((b) => {
+  const blocks = rendition.blocks || [];
+  const types = blocks.map((b) => b.type);
+  const dirs = blocks.map((b) => (/** @type {any} */(b).dir || null));
+  const langs = blocks.map((b) => (/** @type {any} */(b).lang || null));
+  const signature = blocks
+    .map((b, i) => `${b.type}:${dirs[i] || '-'}${b.type === 'table' ? `:${(b.rows[0] || []).join('|')}` : ''}`)
+    .join(',');
+  const legalIndex = blocks.findIndex((b) => {
     const text = b.type === 'raw' ? b.html : b.type === 'paragraph' ? b.text : '';
     return /Legal line|©|\(c\)|rights reserved|Impressum|imprint|privacy|terms/i.test(String(text));
   });
-  const rtlBlocks = rendition.blocks.filter((b) => b.type === 'raw' && /dir="rtl"/.test(b.html)).length;
-  const table = rendition.blocks.find((b) => b.type === 'table');
+  const rtlBlocks = blocks.filter((b) => /** @type {any} */(b).dir === 'rtl').length;
+  const rawBlocks = blocks.filter((b) => b.type === 'raw').length;
+  const table = blocks.find((b) => b.type === 'table');
   const contractRow = table && table.type === 'table'
     ? (table.rows.find((r) => r.some((c) => flatten(c) === 'Date' || flatten(c) === 'Number')) || []).slice()
     : [];
-  return { types, legalIndex, rtlBlocks, contractRow };
+  return { types, dirs, langs, signature, legalIndex, rtlBlocks, rawBlocks, contractRow };
 }
