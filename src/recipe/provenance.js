@@ -39,20 +39,78 @@
  * | `at` | ISO-8601 instant from the caller's injected clock — `YYYY-MM-DDTHH:MM:SS[.mmm]Z` or with a `±HH:MM` offset |
  * | `of` | the id of the rendition being promoted; a record copied onto another rendition does not verify |
  * | `from` | the provenance the rendition held before promotion |
- * | `sig` | `shortHash({v, by, at, of, from}, 16)` — a self-consistency digest |
- *
- * `sig` is a checksum, not a signature: anyone holding the repo can compute it.
- * It exists to catch a **hand-edited or truncated** record, and to make a forged
- * record something a person has to construct deliberately rather than type. The
- * real defence is that a rendition claiming `'verified-by-user'` must carry a
- * record whose `of` matches its own id, and L10 refuses the emit when it does
- * not. Documented as a limitation rather than dressed up as authentication.
+ * | `sig` | `shortHash({v, by, at, of, from}, 16)` — an integrity digest, **not** a signature |
  *
  * Parsing: `readPromotionRecords(rendition)` returns every valid record, oldest
  * first; `readPromotionRecord(rendition)` returns the last one; and
  * `hasPromotionRecord(rendition)` is `readPromotionRecord(rendition) !== null`.
- * Records that fail their `sig` or name another rendition are ignored by all
- * three and surfaced by `verifyProvenance`.
+ * Records whose digest does not recompute, or which name another rendition, are
+ * ignored by all three and surfaced by `verifyProvenance`.
+ *
+ * ---
+ *
+ * ## What `sig` proves, and what it does not (finding F23)
+ *
+ * **It is tamper-evidence against corruption. It is not authentication.** The
+ * §20 critique found that a field named `signatureValid` invites every reader —
+ * of the code and of the studio — to take a `true` as "a person really promoted
+ * this". It does not mean that, and this module will not let the name imply it.
+ * `PromotionRecord` therefore carries **`recordIntact`**, which says what is
+ * true. `signatureValid` remains as an alias with the identical value, because
+ * L12's rendition panel and `src/validate/provenance.js`'s published typedef
+ * already read it (see `docs/decisions/L7-recipes.md` D-L7-11); new code should
+ * read `recordIntact`.
+ *
+ * `recordIntact === true` means exactly four things, and nothing else:
+ *
+ * 1. the record's format version is one this build knows;
+ * 2. its `at` is a real calendar instant;
+ * 3. its `by` decodes as UTF-8; and
+ * 4. `shortHash({v, by, at, of, from}, 16)` recomputes to the `sig` in the line.
+ *
+ * A fifth condition — `of` equals the rendition's own id — is applied by
+ * `readPromotionRecords`, not by the digest, and is the structurally strongest
+ * check here: it is what stops a real record being copied from one rendition
+ * onto another.
+ *
+ * What `recordIntact === true` does **not** mean: that the named person exists,
+ * that they saw this rendition, that they consented, or that the record was
+ * written by `promoteProvenance` rather than typed. `promotionSignature` and
+ * `formatPromotionRecord` are exported from `src/recipe/index.js`; anyone with
+ * a copy of this repository can call them and mint a record that passes every
+ * check above. `test/recipe/provenance.test.mjs` proves this deliberately — see
+ * the tests named `LIMIT:` — because a comment claiming a limit is weaker than
+ * a test demonstrating one.
+ *
+ * **Why it cannot be better here.** §1.1.5 forbids an account system, cloud
+ * sync and any backend, and §1.1.1 forbids the artifact touching the network at
+ * all. A signature is only worth more than a checksum when a verifier holds a
+ * key the forger does not. In a wholly local, single-user, offline product
+ * there is no such party: any key this code could sign with would have to ship
+ * inside the same artifact the forger already has, which makes it a checksum
+ * with extra steps. An unkeyed digest is therefore the strongest honest
+ * construction available, and the honest thing to do with it is to name it
+ * accurately rather than to dress it up.
+ *
+ * **What actually defends §22.6**, in descending order of strength:
+ *
+ * 1. `'verified-by-user'` is unreachable from `buildRendition` at any provenance
+ *    the caller asks for — `promoteProvenance` is the only writer.
+ * 2. `buildRendition` strips any promotion record found in caller-supplied
+ *    notes, so a record cannot ride in on an import.
+ * 3. `of` binds a record to one rendition id, so records cannot be shared.
+ * 4. `renditionsRequiringLabel` defaults to labelling: anything that is not
+ *    `'client-supplied'`, and not a `'verified-by-user'` with a record, is
+ *    labelled — the failure mode of every check above is a *visible* label.
+ * 5. The digest, which catches truncation and hand-editing.
+ *
+ * Note the shape of that list: an adversary editing the model by hand does not
+ * need to forge a digest at all, because setting `provenance: 'client-supplied'`
+ * suppresses the label with no record of any kind. The digest is not the
+ * weakest link in this model and strengthening it would not move the floor.
+ * Against a user editing their own local files, in a product with no server,
+ * there is no floor to move; the guarantee this module actually offers is that
+ * **nothing the tool itself does can produce an unearned `'verified-by-user'`**.
  *
  * @module recipe/provenance
  */

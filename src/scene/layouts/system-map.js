@@ -349,7 +349,7 @@ export function wrap(text, role, maxUnits, maxLines, brand) {
  */
 function mapStyle(role, brand) {
   const spec = styleForRole(role, 'md', brand, { scale: 1 });
-  return { ...spec.style };
+  return { ...spec.style, family: renderedFamily(brand, spec.face, spec.style.weight) };
 }
 
 /**

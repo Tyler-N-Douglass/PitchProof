@@ -7,7 +7,7 @@
  *
  * | Input | Decoded | Downscaled to 2400px | Recompressed | Reported |
  * |---|---|---|---|---|
- * | PNG   | yes, in-repo decoder | yes, area-average box filter | yes, in-repo encoder; palette-reduced below quality 0.85 | `resized`, `recompressed`, exact `intrinsic`, exact `bytes` |
+ * | PNG   | yes, in-repo decoder | yes, area-average box filter | yes, in-repo encoder; palette-reduced below quality 0.85 | `resized`, `recompressed`, exact `intrinsic`, exact `bytes` (see below) |
  * | JPEG  | no    | **no** | no — passed through byte-for-byte | `resized:false`, `needsDownscale`, `resizeSkipped:'jpeg-no-encoder'` |
  * | GIF / WebP / BMP / ICO | no | no | no — passed through | same as JPEG |
  * | SVG   | n/a   | n/a (vector) | no | `intrinsic` from width/height or viewBox; `hasScript` / `hasExternalRef` flagged for the emitter |
@@ -19,9 +19,23 @@
  * that the asset was **not** resized is the honest option, and it is the one
  * §13's "report exactly what was degraded and by how much — never silently"
  * asks for.
+ *
+ * The three sizes a captured asset has, and which field holds which (D-L6-19):
+ *
+ * | Field | Measures | Who wants it |
+ * |---|---|---|
+ * | `sourceBytes` | the file the seller handed us, before anything was done to it | the degradation report: "2.1 MB in, 240 kB out" |
+ * | `decodedBytes` | the binary payload after downscale/recompress — what `parseDataUri().bytes` returns | anyone comparing two encodings of the same picture |
+ * | `bytes` (§4) | what the asset costs the **artifact**: `utf8Length(dataUri)`, base64 expansion and `data:` preamble included | §13's budget, and every size a seller is shown |
+ *
+ * `bytes` is the inlined cost because a `MediaRef` describes an inlined asset —
+ * it has no field for the source at all — and because §13 spends one budget, in
+ * the bytes of one file. Measuring it in decoded bytes understated every asset
+ * by a uniform 34% (F19). It is deliberately the same measure `budgetAssets`
+ * takes with `utf8Length(dataUri)`, so the two cannot drift.
  */
 
-import { base64Encode, toHex, utf8Decode } from '../core/bytes.js';
+import { base64Encode, toHex, utf8Decode, utf8Length } from '../core/bytes.js';
 import { sha256Bytes } from '../core/hash.js';
 import { contentId } from '../core/ids.js';
 import { imageInfo } from './imageinfo.js';
@@ -59,6 +73,8 @@ export class MediaLedger {
     const hit = this.byDigest.get(digest);
     if (!hit) return null;
     this.hits += 1;
+    // Inlined bytes, matching `MediaRef.bytes`: what the artifact does not pay
+    // twice, rather than what the decoder would have produced twice.
     this.bytesSaved += hit.bytes;
     return hit;
   }
@@ -214,13 +230,18 @@ function captureOne(asset, { maxEdge, quality, minter, digest }) {
   if (needsDownscale && !resizeSkipped) resizeSkipped = `${info.format}-no-encoder`;
 
   const id = minter ? minter.next('media') : contentId('media', { digest, quality, maxEdge });
+  const dataUri = toDataUri(bytes, mime);
   return {
     id,
-    dataUri: toDataUri(bytes, mime),
+    dataUri,
     alt: asset.alt === undefined || asset.alt === null ? null : String(asset.alt),
     intrinsic: { w: width, h: height },
-    bytes: bytes.length,
+    // §4's `bytes` is what this asset costs the artifact, which is the inlined
+    // data URI and not the payload inside it — base64 is 4/3 of the bytes it
+    // carries, plus the `data:…;base64,` preamble (D-L6-19).
+    bytes: utf8Length(dataUri),
     // --- lane extensions (optional fields only; §4 permits them) ---
+    decodedBytes: bytes.length,
     mime,
     format: info.format,
     name: asset.name || null,
