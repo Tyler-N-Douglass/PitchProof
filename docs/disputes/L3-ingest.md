@@ -30,11 +30,19 @@ steps later — it simply cannot travel in the shape between here and there. L6'
 bytes it was handed, and alt text is lost unless it is smuggled through a
 `media` block's `caption`.
 
-**What the lane built.** The declared shape exactly. Alt text travels as the
-`caption` of the corresponding `media` block; intrinsic size travels in `meta`
-for the single-image strategy and is otherwise re-derivable with the exported
-`imageSize(bytes, mime)` helper, which L6 may call. An optional `aliases` field
-is added (a legal extension, per D-L3-7) but nothing declared is changed.
+**What the lane built.** The declared shape exactly, plus optional fields, which
+the lane rules permit. Alt text travels as the `caption` of the corresponding
+`media` block and, for sub-resources fetched from a URL, as an optional `alt`
+on the asset itself (D-L3-27) — L6 already reads `asset.alt` and falls back to
+its own `imageHints` when it is absent. Intrinsic size travels in `meta` for the
+single-image strategy and is otherwise re-derivable with the exported
+`imageSize(bytes, mime)` helper, which L6 may call. Nothing declared is changed.
+
+**Update (CRITIQUE-1 F1/F3).** Sub-resource collection made this dispute
+sharper rather than moot: a URL capture now returns assets that carry `alt`,
+`url`, `src`, `role` and `aliases`, all as optional extensions, because the
+declared triple could not express any of them. The shape is stable and is
+described in full in D-L3-27; `API.md` should pin it.
 
 **A v2 should say.**
 `assets: {name, bytes, mime, alt?: string|null, intrinsic?: {w, h}|null, aliases?: string[]}[]`

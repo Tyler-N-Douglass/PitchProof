@@ -46,14 +46,15 @@ function renderCapture(app) {
     title: 'Capture',
     subtitle: 'Fetch, saved page, HAR, MHTML, deck, PDF, image, or paste. None of them dead-ends (§6).',
     actions: toolbar(
-      button({ act: 'specimen.capture', variant: 'primary', disabled: app.isBusy('specimen.capture') },
+      button({ act: 'specimen.capture', variant: 'primary', title: 'Capture the page (Enter, from the address field)', disabled: app.isBusy('specimen.capture') },
         app.isBusy('specimen.capture') ? 'Capturing…' : 'Capture'),
       button({ act: 'specimen.sitemap', variant: 'ghost', title: 'Rank the site’s pages by structural richness' }, 'Suggest pages'),
     ),
   },
   field({
     label: 'Page address', act: 'specimen.urlDraft', value: app.draft('specimen.url', ''),
-    placeholder: 'https://www.example.com/products/x', key: 'spec-url',
+    placeholder: 'https://www.example.com/products/x', key: 'spec-url', enter: 'specimen.capture',
+    hint: 'Press Enter to capture.',
   }),
   suggestions.length
     ? h('div', { class: 'st-suggestions' },

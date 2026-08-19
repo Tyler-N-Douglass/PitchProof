@@ -614,6 +614,23 @@ html, body {
 .st-jump-text { flex: 1; min-width: 0; font-size: 12px; }
 .st-jump-matched { font-size: 10.5px; color: var(--st-text-faint); }
 
+/* ------------------------------------------------ strategies, rules, fit */
+
+.st-strategies { list-style: decimal; margin: 8px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.st-strategy { font-size: 11.5px; }
+.st-strategy--manual { color: var(--st-text-dim); }
+.st-strategy-label { font-weight: 550; margin-right: 4px; }
+.st-strategy-describe { display: block; color: var(--st-text-faint); margin-top: 2px; }
+
+.st-rules { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.st-rule { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; }
+.st-rule .st-badge { margin-left: 0; flex-shrink: 0; }
+.st-rule-describe { color: var(--st-text-dim); }
+
+.st-fit { display: flex; flex-direction: column; gap: 10px; }
+.st-fit-group { display: flex; flex-direction: column; gap: 5px; }
+.st-fit-head { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--st-text-faint); font-weight: 500; }
+
 /* --------------------------------------------------------------- rehearse */
 
 .st-findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }

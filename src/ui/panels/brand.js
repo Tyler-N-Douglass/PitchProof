@@ -63,15 +63,16 @@ function renderExtract(app, brand) {
     subtitle: 'A URL, or the files they sent you. Both degrade rather than dead-ending (§6).',
     actions: toolbar(button({
       act: 'brand.extract', variant: 'primary',
+      title: 'Extract the brand system (Enter, from the address field)',
       disabled: app.isBusy('brand.extract'),
     }, app.isBusy('brand.extract') ? 'Extracting…' : 'Extract')),
   },
   field({
     label: 'Site address', act: 'brand.urlDraft', value: app.draft('brand.url', brand.sourceUrl || ''),
-    placeholder: 'https://www.example.com', key: 'brand-url',
+    placeholder: 'https://www.example.com', key: 'brand-url', enter: 'brand.extract',
     hint: proxy
-      ? `A direct fetch is tried first, then your proxy at ${proxy}.`
-      : 'A direct fetch is tried first. Most enterprise sites refuse it — that is normal, not an error. Set a CORS proxy in Settings, or drop the saved page below.',
+      ? `Press Enter to extract. A direct fetch is tried first, then your proxy at ${proxy}.`
+      : 'Press Enter to extract. A direct fetch is tried first; most enterprise sites refuse it, which is normal rather than an error. Set a CORS proxy in Settings, or drop the saved page below.',
   }),
   h('label', { class: 'st-field' },
     h('span', { class: 'st-field-label' }, 'Or drop the saved page, a .har, a .mhtml, a deck or a PDF'),
@@ -131,7 +132,7 @@ function renderReviewGate(app, brand, pending) {
     subtitle: '§7 holds low-confidence fields out of an emit until you have looked at them.',
     actions: reviewable.length
       ? toolbar(button({ act: 'brand.reviewAll', variant: 'primary' },
-        reviewable.length === 1 ? 'I have checked this one' : `I have checked all ${reviewable.length}`))
+        reviewable.length === 1 ? 'I have checked this one' : 'I have checked all of these'))
       : null,
   },
   empty.length

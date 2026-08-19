@@ -15,6 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { emit } from '../../src/emit/index.js';
 import { assertProvenance } from '../../src/emit/provenance.js';
+import { parseStylesheet } from '../../src/emit/css.js';
 import { registerTestLayouts } from '../fixtures/emit/layouts.mjs';
 import { runtimeBundle, FIXED_CLOCK } from '../fixtures/emit/runtime-bundle.mjs';
 import { emitProof } from '../fixtures/emit/proofs.mjs';
@@ -37,6 +38,30 @@ async function attempt(options = {}) {
     clock: FIXED_CLOCK,
     userCss: options.userCss || '',
   });
+}
+
+/**
+ * The custom properties the `.pp-provenance` rule reads for its foreground and
+ * background, read out of the emitted stylesheet.
+ *
+ * Discovered rather than hardcoded, so that moving the label onto a different
+ * colour pair cannot leave this file attacking variables nothing uses.
+ * @returns {{color: string|null, background: string|null}}
+ */
+function labelColourVars() {
+  const { rules } = parseStylesheet(runtimeCss);
+  /** @type {{color: string|null, background: string|null}} */
+  const out = { color: null, background: null };
+  for (const rule of rules) {
+    if (!rule.selector.some((part) => part.classes.includes('pp-provenance'))) continue;
+    for (const decl of rule.declarations) {
+      const m = /var\(\s*(--[\w-]+)/.exec(decl.value);
+      if (!m) continue;
+      if (decl.prop === 'color') out.color = m[1];
+      if (decl.prop === 'background' || decl.prop === 'background-color') out.background = m[1];
+    }
+  }
+  return out;
 }
 
 /**
@@ -121,8 +146,15 @@ test('attack 7: zero-contrast colours', async () => {
   const justOver = await attempt({ userCss: '.pp-provenance{color:#767676;background:#ffffff}' });
   assert.equal(justOver.ok, true, 'a 4.54:1 pair clears the floor and must not be refused');
 
-  const viaVars = await attempt({ userCss: ':root{--pp-warning:#fefefe;--pp-on-primary:#ffffff}' });
-  assertBlocked(viaVars, /computed contrast/, 'an attack through the theme variables the label reads');
+  // Attack the variables the label *actually* reads, discovered from the
+  // stylesheet rather than hardcoded. The first version of this test named
+  // `--pp-warning`/`--pp-on-primary`; the runtime later moved the label onto
+  // the `surfaceAlt` pair, and a hardcoded attack would have gone on passing
+  // while testing nothing.
+  const vars = labelColourVars();
+  assert.ok(vars.color && vars.background, `could not find the label's colour variables in the stylesheet: ${JSON.stringify(vars)}`);
+  const viaVars = await attempt({ userCss: `:root{${vars.background}:#fefefe;${vars.color}:#ffffff}` });
+  assertBlocked(viaVars, /computed contrast/, `an attack through ${vars.background}/${vars.color}, the theme variables the label reads`);
 });
 
 test('attack 8: position the label off screen', async () => {

@@ -54,6 +54,46 @@ export const URL_ATTRS = new Set([
 /** Attributes carrying a comma-separated candidate list of URLs. */
 export const SRCSET_ATTRS = new Set(['srcset', 'imagesrcset']);
 
+/**
+ * Attributes whose value is **prose**, not a reference.
+ *
+ * E8 already settled that a URL in visible text is not a network reference: a
+ * browser never fetches a text node, the artifact presents the prospect's own
+ * content, and that content says their domain all over it. An accessible name
+ * is the same information delivered to a different sense — a screen reader
+ * reads `aria-label` aloud exactly as a sighted viewer reads the paragraph
+ * beside it — so classifying one as text and the other as a reference was an
+ * inconsistency in this scanner, not a policy.
+ *
+ * It had a cost. L8 writes the accessible name for a `systemMap` as "…flowing
+ * through https://… to 1 outputs", and the corpus proof could not be emitted:
+ * the same URL passed in a `<p>` and refused the emit as the alt text for the
+ * same diagram, with no override. A rule that makes the accessible version of
+ * a scene less emittable than the inaccessible one is a rule that will get
+ * layouts stripped of their alt text.
+ *
+ * Nothing here is relaxed for anything that fetches. Every attribute in
+ * `URL_ATTRS` and `SRCSET_ATTRS`, every `data-*`, `style`, `on*`, `<meta>`
+ * `content`, and every URL inside CSS or JavaScript stays exactly as strict as
+ * D10 makes it — a `data-endpoint` holding a beacon URL is precisely the shape
+ * §1.1 forbids. This set is closed, and every member of it is a string the HTML
+ * specification defines as human-readable text that no user agent resolves.
+ */
+export const TEXT_ATTRS = new Set([
+  'alt',
+  'title',
+  'label',
+  'placeholder',
+  'download',
+  'abbr',
+  'aria-label',
+  'aria-description',
+  'aria-placeholder',
+  'aria-roledescription',
+  'aria-valuetext',
+  'aria-keyshortcuts',
+]);
+
 /** `<script type>` values a browser executes. */
 const EXECUTABLE_SCRIPT_TYPES = new Set([
   '', 'text/javascript', 'application/javascript', 'text/ecmascript',
@@ -321,6 +361,9 @@ function scanTag(tag, src, hit) {
       continue;
     }
 
+    // Prose is prose, wherever it is delivered. See `TEXT_ATTRS`.
+    if (TEXT_ATTRS.has(name)) continue;
+
     // The catch-all: any other attribute that carries an absolute URL. A
     // `data-*` attribute holding a beacon endpoint is exactly the shape §1.1
     // forbids, even though no attribute of that name fetches on its own.
@@ -566,10 +609,21 @@ function describe(s) {
  *     part of the artifact; if it is opted in and rendered, the per-scene
  *     document scan sees it.
  *
+ * **`nestedOnly`.** L11's `NETWORK_REFERENCE` rule now owns the "this asset was
+ * never inlined" case for media and logos, and `emit()` runs that rule (see
+ * `emit/gate.js`). Reporting the same asset from both would be one defect
+ * described twice, so the emit path asks for `nestedOnly` and keeps only the
+ * question the rule does not ask: whether an asset that *is* inlined carries a
+ * network reference inside it — a base64 SVG with an `<image href="https://…">`
+ * in it, which no check of the URI's scheme can see.
+ *
  * @param {import('../core/contracts.d.ts').Proof} proof
+ * @param {object} [options]
+ * @param {boolean} [options.nestedOnly]  only look inside inlined assets
  * @returns {import('../core/contracts.d.ts').Finding[]}
  */
-export function scanModelAssets(proof) {
+export function scanModelAssets(proof, options = {}) {
+  const nestedOnly = options.nestedOnly === true;
   /** @type {import('../core/contracts.d.ts').Finding[]} */
   const out = [];
   if (!proof || typeof proof !== 'object') return out;
@@ -582,6 +636,7 @@ export function scanModelAssets(proof) {
   const checkInlined = (value, what, locus) => {
     const uri = String(value == null ? '' : value).trim();
     if (uri === '') {
+      if (nestedOnly) return;
       out.push(networkFinding({
         message: `${what} carries no inlined data. §4 requires every asset to be inlined by emit time; an empty reference renders as nothing and the presenter finds out in the room.`,
         locus,
@@ -594,6 +649,7 @@ export function scanModelAssets(proof) {
       }
       return;
     }
+    if (nestedOnly) return;
     const verdict = classifyUrl(uri);
     out.push(networkFinding({
       message: `${what} is ${describe(uri)} rather than an inlined data: URI (${verdict.ok ? 'not a data: URI' : verdict.reason}). `
@@ -609,8 +665,11 @@ export function scanModelAssets(proof) {
     if (data.startsWith('<')) {
       // §4: a logo is "inline SVG markup or data URI". Markup gets the full
       // document scan, so a sanitised-away <image href="https://…"> is reported
-      // rather than quietly removed.
-      for (const finding of scanForNetworkReferences(data, { where: `logo ${logo.id}`, locus })) out.push(finding);
+      // rather than quietly removed. L11's rule reads inline SVG logos too, so
+      // in `nestedOnly` mode this is left to it.
+      if (!nestedOnly) {
+        for (const finding of scanForNetworkReferences(data, { where: `logo ${logo.id}`, locus })) out.push(finding);
+      }
       continue;
     }
     checkInlined(data, `Logo "${logo.variant}" (${logo.id})`, locus);

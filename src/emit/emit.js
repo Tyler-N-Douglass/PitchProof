@@ -42,8 +42,9 @@ import { ppRehydrateMedia } from './artifact-runtime.js';
 import { inlineRuntime } from './document.js';
 import { compileFallbackTheme, compileFontFaces } from './theme.js';
 import { scanForNetworkReferences, scanModelAssets } from './scan.js';
-import { assertProvenance, allScenesOf } from './provenance.js';
+import { allScenesOf, labelOptionFinding } from './provenance.js';
 import { budgetAssets, collectAssets, sizeBudgetFinding } from './budget.js';
+import { runEmitGate } from './gate.js';
 
 /** §6: a specimen older than this at emit time is stale. */
 export const STALE_CAPTURE_DAYS = 30;
@@ -148,15 +149,36 @@ export async function emit(proof, options, deps) {
   /** @type {import('../core/contracts.d.ts').Finding[]} */
   const findings = [];
 
-  findings.push(...scanForNetworkReferences(html, { where: 'artifact document' }));
-
-  // An asset the model names but never inlines would vanish from the artifact
-  // without ever reaching the document, so the document scan cannot see it.
-  findings.push(...scanModelAssets(reconstructed));
+  // §14, in one call: every rule in the §4 set, run against the artifact that
+  // is about to ship. These are L11's rule objects, not a second copy of them,
+  // so the emitter and the rehearsal sweep cannot disagree — see `emit/gate.js`
+  // for why this is not simply a call to `runPreflight`.
+  let nowIso = null;
+  try { nowIso = clock(); } catch { nowIso = null; }
+  try {
+    findings.push(...runEmitGate({
+      proof: reconstructed,
+      deck: built.runtime.deck,
+      runtime: built.runtime,
+      renderScene,
+      html,
+      css: finalCss,
+      runtimeJs,
+      runtimeCss,
+      nowIso: typeof nowIso === 'string' ? nowIso : null,
+    }));
+  } catch (error) {
+    return err(
+      `emit: the §14 gate could not run, so this artifact cannot be shown to be clean: ${error && error.message ? error.message : error}. `
+      + 'The emit is refused rather than shipped unchecked.',
+      error,
+    );
+  }
 
   // Scenes past the first are not in the document — they are rendered at
-  // presentation time from the model payload. Scanning only the file would
-  // leave every one of them unchecked, which is most of the proof.
+  // presentation time from the model payload. The gate scans the document, so
+  // scanning only that would leave every later scene unchecked, which is most
+  // of the proof.
   for (const { scene, branchId } of allScenesOf(reconstructed)) {
     const sceneHtml = toHtml(renderScene(scene));
     findings.push(...scanForNetworkReferences(sceneHtml, {
@@ -165,13 +187,16 @@ export async function emit(proof, options, deps) {
     }));
   }
 
-  findings.push(...assertProvenance(reconstructed, html, finalCss, {
-    renderScene,
-    labelDisableRequested,
-    mode: emitOptions.mode,
-  }));
+  // A network reference *inside* an asset that is properly inlined. The gate's
+  // rule checks that every asset is a data: URI; this checks what is in one.
+  findings.push(...scanModelAssets(reconstructed, { nestedOnly: true }));
 
-  findings.push(...staleCaptureFindings(reconstructed, clock));
+  // §9's label-option check. `normalizeEmitOptions` has already forced the flag
+  // back to true, so the model the gate reads no longer records that the caller
+  // asked for it to be off — only the emitter still knows, and L11's rule skips
+  // L10's copy of this finding precisely so that there is one of it.
+  const optionFinding = labelOptionFinding(reconstructed, { labelDisableRequested, mode: emitOptions.mode });
+  if (optionFinding) findings.push(optionFinding);
 
   if (bytes > emitOptions.maxBytes) {
     const over = bytes - emitOptions.maxBytes;

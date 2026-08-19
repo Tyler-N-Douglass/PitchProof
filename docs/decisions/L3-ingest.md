@@ -404,3 +404,173 @@ watched two of them fail, and dispatch a file drop to the right one. Making the
 table both descriptive and executable means the studio's ordering and the
 lane's ordering cannot drift apart, and `specOrder` keeps the §6 numbering
 visible in the code rather than only in the spec.
+
+---
+
+## D-L3-21 — A URL capture fetches the document's sub-resources, through the same injected transport
+
+**Unsettled by:** §6 describes strategies for getting *a document*. §7 needs the
+stylesheet, §8 needs the media bytes, and §1.2 promises that pasting a URL
+yields "an extracted brand system and a specimen library". Nothing said whose
+job it was to close that gap, and the first build left it open: `assets` came
+back empty for every URL capture, so `extractPalette` had nothing to cluster,
+`detectFaces` saw no `@font-face`, and every media block raised a blocking
+`ASSET_MISSING` whose only offered remedy deleted the prospect's own hero image
+(CRITIQUE-1 F1/F3).
+
+**Decision.** After a document capture succeeds, `src/ingest/subresources.js`
+resolves what the document references and fetches it: `<link rel=stylesheet>`
+and the `@import` chain below it, `<link rel=icon>` and its variants,
+`og:image`/`twitter:image`, `<img src>` and `srcset`, `<picture>`, `<video
+poster>`, external `<use href>` sprites, `<link rel=preload>` for styles, fonts
+and images, and every `url()` inside a stylesheet that was fetched. It runs
+through the **same injected `http`**, and through the same route the document
+took — a capture that needed the user's proxy does not then try to reach its
+stylesheet directly.
+
+**Why.** The alternative placements are all worse. L6 cannot do it: it receives
+a `RawCapture`, not a transport, and giving it one would put a second network
+path in the product. L12 could, but then the studio and the test suite would
+have different ingest behaviour, and the §17 golden tests would be asserting
+against a capture no user ever gets. Ingest is the only lane that already holds
+both the parsed document and the transport, so it is the only place where the
+question "what else does this page need?" can be asked once and answered the
+same way everywhere.
+
+---
+
+## D-L3-22 — Collection is bounded, and every bound reports what it refused
+
+**Unsettled by:** nothing in the spec limits what a fetch may pull. A prospect's
+home page can reference a hundred images and forty megabytes.
+
+**Decision.** Five bounds, all injectable per call: `maxCount` (40),
+`maxTotalBytes` (8 MB), `maxBytesPerResource` (4 MB), `timeoutMs` (10 s) and
+`maxCssDepth` (3). Every refusal is recorded with a reason — `count-cap`,
+`byte-cap`, `oversize`, `timeout`, `not-found`, `http-error`, `unreachable`,
+`cross-origin`, `robots`, `wrong-type`, `empty` — in `capture.meta` under
+`subresources.*` for anything that reads strings, and in
+`capture.subresources` as a structured report for anything that wants the
+detail.
+
+**Why.** An unbounded fetch is a way for a prospect's site to hang the studio
+twenty minutes before a pitch, and §13's size budget cannot recover bytes that
+were never worth downloading. But a bound that silently drops content is worse
+than no bound: it produces a proof with holes nobody mentioned, which is the
+§18 failure in miniature. So every bound is paired with a report, and the studio
+can say *what it could not get* rather than shipping the gap quietly.
+
+The `wrong-type` case is worth naming separately: many sites answer a missing
+asset with `200 OK` and an HTML error page. Keeping that would put an HTML
+document behind an `<img src>` and call it a capture, so a response that sniffs
+as HTML in an asset slot is refused and reported.
+
+---
+
+## D-L3-23 — Sub-resource collection is deterministic regardless of network timing
+
+**Unsettled by:** §5's determinism law and §17.6's byte-identical re-emit apply
+to the whole pipeline, and ids downstream are content-derived. Nothing said how
+that survives a network, where responses arrive in whatever order they arrive.
+
+**Decision.** Candidates are ordered by role — stylesheets, then `@import`s,
+icons, `og:image`, images, sprites, fonts, other `url()`s — and within a role by
+**document position**, computed from a single walk of the tree rather than from
+the order the collectors happen to run in. Requests are issued in waves of
+`concurrency` (default 4), but each wave's results are folded back **in
+candidate order**, and the count and byte budgets are applied in that same
+order. So `assets[]` comes out identical whether every response is instant, or
+the stylesheet takes four seconds and the logo takes one.
+
+**Why.** Fetching in parallel and appending on arrival would make the asset
+order — and therefore which asset the byte cap refuses, and therefore the
+emitted bytes — a function of network weather. Two emits of one project would
+differ, and §17.6's assertion would be true only on a fast day. A test drives
+the collection through a transport that answers in reverse order of request and
+asserts the result is unchanged.
+
+---
+
+## D-L3-24 — `robots.txt` gates the sub-resources, never the document the user asked for
+
+**Unsettled by:** §6 mentions `robots.txt` only as a source of sitemap URLs.
+
+**Decision.** `src/ingest/robots.js` parses the full grammar — groups, `Allow`,
+`Disallow`, `*` wildcards, `$` anchors, longest-match precedence — and
+sub-resource collection consults it. The document the user pasted is **never**
+gated on it. `robots.txt` is fetched once per ingest, best-effort; an absent or
+unreadable file allows everything; a caller that already has it passes
+`robotsText` so it is not fetched twice; `respectRobots: false` turns it off.
+
+**Why.** The two acts are genuinely different. Fetching one page a person is
+already looking at, at their request, is not crawling — it is what their browser
+would do, and a `robots.txt` that blocked it would also block the user reading
+the page. Automatically walking that page's references *is* crawling, however
+short the walk, and a tool that ignores `robots.txt` while doing it is a tool a
+prospect's security team is right to object to. That is the same line a reader
+mode draws.
+
+---
+
+## D-L3-25 — Same-site by default, with the page's own head declarations allowed off-origin
+
+**Unsettled by:** nothing in the spec constrains which hosts ingest may reach.
+
+**Decision.** A sub-resource is fetched when its host is the same site as the
+page — equal, or the `www.`-stripped form, or a subdomain of it, so a prospect's
+own `cdn.` and `assets.` hosts count and `evil-northwind.example` does not — or
+when the caller widened `allowHosts`. Two roles are exempt and may be fetched
+off-origin: `<link rel=icon>` and `og:image`/`twitter:image`. Everything else
+off-origin is skipped and reported as `cross-origin`.
+
+**Why.** The default has to be tight: a page references ad pixels, analytics
+beacons and third-party widgets, and a proof built from a prospect's brand has
+no use for any of them — fetching them would spend the byte budget on other
+people's tracking images. But a prospect that serves its logo and its social
+card from a CDN is extremely common, and those two are exactly what §7's logo
+extraction needs. Naming a resource in `<head>` as *this page's icon* or *this
+page's image* is the page being explicit about it, which is the narrowest
+defensible exception and the one the integrator's brief asked for.
+
+---
+
+## D-L3-26 — One `srcset` candidate, chosen to cover the largest breakpoint
+
+**Unsettled by:** a `srcset` offers several files for one image. The brief
+required a deterministic choice, and that the choice be stated.
+
+**Decision.** The narrowest candidate whose `w` descriptor still covers 1600px —
+the largest §4 breakpoint — falling back to the widest available when none
+does, then to the highest `x` density, then to the first listed. The reason is
+recorded on the asset as `note` ("chose 1600w of 4 srcset candidates (narrowest
+covering 1600px)"). A `<picture>` contributes one candidate in total, resolved
+the way a browser resolves it, rather than every variant.
+
+**Why.** Taking the widest pulls a 4000px hero the emitter then spends its whole
+size budget degrading (§13, §22.5); taking the narrowest starves the `lg`
+breakpoint and makes the proof look soft on a boardroom screen. Aiming at the
+largest breakpoint and stopping is the choice that serves both. Saying which was
+chosen matters because the seller may disagree — and a choice they cannot see is
+one they cannot override.
+
+---
+
+## D-L3-27 — A sub-resource asset is named by the document's own reference
+
+**Unsettled by:** `API.md` declares `assets: {name, bytes, mime}[]` without
+saying what `name` is for a resource fetched from a URL.
+
+**Decision.** `name` is the reference **exactly as the document wrote it**
+(`/assets/logo.svg`), never the absolute URL, and when several references
+resolve to the same file the relative one wins. `aliases` carries the absolute
+URL, the path, and the bare filename. `url`, `src`, `role` and — where the
+referencing element had one — `alt` are added as optional fields.
+
+**Why.** Both consumers key on the written form: L5's `indexAssets`/`lookupAsset`
+resolves `<img src="/assets/logo.svg">` through `assetKeys(name)`, and L6's
+`imageHints` map is keyed by the raw `src` attribute and its basename. Naming
+the asset by its absolute URL would make every lookup fall through to the
+basename, which is the ambiguous key — two `logo.svg` files under different
+paths would collide. The aliases mean a consumer holding any other form still
+finds the bytes, and `src` is there because L6's `captureMedia` records it as a
+source when two assets share a digest.

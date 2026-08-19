@@ -140,7 +140,9 @@ function renderBranch(app, branch, coverage) {
         'aria-label': 'New alias',
         value: app.draft('branch.alias', ''),
         [ACT_ATTR]: 'branch.aliasDraft',
+        [ARG_ATTR]: branch.id,
         [KEY_ATTR]: `alias-draft-${branch.id}`,
+        'data-st-enter': 'branch.addAlias',
       }),
       button({ act: 'branch.addAlias', arg: branch.id, variant: 'ghost' }, 'Add alias'))),
 

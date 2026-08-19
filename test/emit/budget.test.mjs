@@ -227,3 +227,120 @@ test('an identical asset used twice is carried once and degraded once', () => {
   const uris = new Set(collectAssets(result.proof).map((a) => a.dataUri));
   assert.ok(uris.size <= collectAssets(result.proof).length);
 });
+
+// ---------------------------------------------------------------------------
+// Critic F13 — one line per asset, and a prediction worth reading
+// ---------------------------------------------------------------------------
+
+import { dedupeAssets, predictEmittedBytes, dataUriPrefixBytes, PNG_CONTAINER_BYTES } from '../../src/emit/budget.js';
+
+/**
+ * A proof whose media is inlined more than once — the shape the critic hit,
+ * where one image is referenced by several `MediaRef`s.
+ * @param {number} edge
+ */
+function proofWithSharedMedia(edge = 160) {
+  const base = emitProof({ imageEdge: edge });
+  const shared = base.specimens[0].media[0].dataUri;
+  return {
+    ...base,
+    specimens: base.specimens.map((s) => ({
+      ...s,
+      media: (s.media || []).map((m) => ({ ...m, dataUri: shared, intrinsic: { w: edge, h: edge } })),
+    })),
+    renditions: base.renditions.map((r) => ({
+      ...r,
+      media: (r.media || []).map((m) => ({ ...m, dataUri: shared, intrinsic: { w: edge, h: edge } })),
+    })),
+  };
+}
+
+test('one payload is one budgeting unit, however many references point at it', () => {
+  registerTestLayouts();
+  const proof = proofWithSharedMedia();
+  const raw = collectAssets(proof);
+  const deduped = dedupeAssets(raw);
+  assert.ok(raw.length > deduped.length, 'the fixture must actually share a payload');
+  const shared = deduped.find((a) => a.assetIds.length > 1);
+  assert.ok(shared, 'the shared payload must collapse to one entry');
+  assert.equal(new Set(deduped.map((a) => a.dataUri)).size, deduped.length, 'one entry per distinct payload');
+});
+
+test('the report carries one line per asset, never one per reference (F13)', () => {
+  registerTestLayouts();
+  const proof = proofWithSharedMedia();
+  const total = dedupeAssets(collectAssets(proof)).reduce((n, a) => n + a.bytes, 0);
+  const result = budgetAssets(proof, Math.round(total * 0.4), { renderScene: sceneRenderer(proof) });
+  assert.ok(result.plan.length > 0);
+  const ids = result.plan.map((l) => l.assetId);
+  assert.equal(new Set(ids).size, ids.length, `the report repeats an asset: ${ids.join(', ')}`);
+  const payloads = result.plan.map((l) => l.beforeBytes + ':' + l.from.w + 'x' + l.from.h);
+  assert.equal(new Set(payloads).size, payloads.length, 'two lines describe the same degradation');
+  for (const line of result.plan) {
+    assert.ok(Array.isArray(line.assetIds) && line.assetIds.length >= 1);
+    assert.ok(line.assetIds.includes(line.assetId));
+  }
+});
+
+test('degrading a shared payload updates every reference to it', () => {
+  registerTestLayouts();
+  const proof = proofWithSharedMedia();
+  const total = dedupeAssets(collectAssets(proof)).reduce((n, a) => n + a.bytes, 0);
+  const result = budgetAssets(proof, Math.round(total * 0.4), { renderScene: sceneRenderer(proof) });
+  const line = result.plan.find((l) => l.assetIds.length > 1);
+  assert.ok(line, 'the shared payload must be among the degraded');
+  const after = collectAssets(result.proof).filter((a) => line.assetIds.includes(a.assetId));
+  assert.ok(after.length > 1);
+  assert.equal(new Set(after.map((a) => a.dataUri)).size, 1, 'every reference must carry the same degraded payload');
+  for (const a of after) {
+    assert.equal(a.bytes, line.afterBytes);
+    assert.equal(a.intrinsic.w, line.to.w);
+  }
+});
+
+test('the reported saving is still exactly the byte delta when payloads are shared', () => {
+  registerTestLayouts();
+  const proof = proofWithSharedMedia();
+  const before = dedupeAssets(collectAssets(proof)).reduce((n, a) => n + a.bytes, 0);
+  const result = budgetAssets(proof, Math.round(before * 0.4), { renderScene: sceneRenderer(proof) });
+  const after = dedupeAssets(collectAssets(result.proof)).reduce((n, a) => n + a.bytes, 0);
+  const reported = result.plan.reduce((n, l) => n + l.savedBytes, 0);
+  assert.equal(reported, before - after, 'double counting a shared payload would break this');
+});
+
+test('the prediction accounts for the container floor and for base64 (F13)', () => {
+  const prefix = dataUriPrefixBytes('data:image/png;base64,AAAA');
+  assert.equal(prefix, 22);
+
+  // Halving the linear size quarters the pixel payload, not the whole file.
+  const big = predictEmittedBytes(960_690, 1, 0.5, prefix);
+  assert.ok(big > 240_000 && big < 242_000, `expected about a quarter of the payload, got ${big}`);
+
+  // At the bottom of the ladder the container dominates, and the prediction
+  // must never fall below what an empty PNG costs.
+  const tiny = predictEmittedBytes(300, 0.25, 0.15, prefix);
+  assert.ok(tiny >= prefix + 4 * Math.ceil(PNG_CONTAINER_BYTES / 3), `a prediction below the container floor: ${tiny}`);
+  assert.ok(tiny < 300);
+
+  // The naive model this replaced predicted `bytes × scale²`, which for the
+  // same input says 108 — under the container floor, and out by an order of
+  // magnitude against a real 30×18 PNG.
+  assert.ok(tiny > 300 * (0.15 / 0.25) ** 2, 'the corrected model must exceed the naive one at small sizes');
+});
+
+test('predictions land within a quarter of the measurement on real images', () => {
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 240 });
+  const total = collectAssets(proof).reduce((n, a) => n + a.bytes, 0);
+  for (const fraction of [0.5, 0.3, 0.15]) {
+    const result = budgetAssets(proof, Math.round(total * fraction), { renderScene: sceneRenderer(proof) });
+    const errors = result.plan
+      .filter((l) => l.steps > 0)
+      .map((l) => Math.abs(l.actualBytes - l.predictedBytes) / l.predictedBytes);
+    assert.ok(errors.length > 0, `no degradation at ${fraction}`);
+    const sorted = errors.slice().sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    assert.ok(median <= 0.25, `median prediction error ${(median * 100).toFixed(1)}% at budget fraction ${fraction}`);
+    assert.ok(Math.max(...errors) <= 1.0, `worst prediction error ${(Math.max(...errors) * 100).toFixed(1)}% at ${fraction}`);
+  }
+});

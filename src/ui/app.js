@@ -25,7 +25,7 @@
 
 import { Emitter } from '../core/events.js';
 import { CommandStack, replaceCommand } from '../core/command.js';
-import { Patcher, delegate } from './render.js';
+import { Patcher, delegate, ARG_ATTR, ENTER_ATTR } from './render.js';
 import { Preview } from './preview.js';
 import { newDoc } from './model.js';
 import { makeServices } from './services.js';
@@ -70,7 +70,12 @@ export class StudioApp extends Emitter {
     });
     this.actions = actionIndex(ACTIONS);
 
-    const initial = env.doc || newDoc({ seed: 'pitchproof-v1', at: env.clock() });
+    const initial = env.doc || newDoc({
+      seed: 'pitchproof-v1',
+      at: env.clock(),
+      // §9's library ships with the project. See `model.newDoc`.
+      recipes: this.services.seedRecipes(),
+    });
     /** The only writer in the studio. @type {CommandStack<Doc>} */
     this.stack = new CommandStack(initial, { limit: 400 });
 
@@ -430,6 +435,21 @@ export class StudioApp extends Emitter {
       const handled = this.handlePaletteKey(combo, event);
       if (handled) return handled;
     }
+    // Enter, in a field that says what Enter means. Typing a URL and pressing
+    // Enter is the gesture everybody reaches for, and §20.10 counts a field
+    // that makes you go and find the button as a place the flow stalls.
+    if (combo === 'Enter' && typing) {
+      const target = event.target;
+      const action = target && target.getAttribute ? target.getAttribute(ENTER_ATTR) : null;
+      if (action) {
+        if (event.preventDefault) event.preventDefault();
+        // The field's own argument travels with it, so an Enter inside a row's
+        // input acts on that row rather than on nothing.
+        this.dispatch(action, target.getAttribute(ARG_ATTR), { value: target.value, element: target, event });
+        return action;
+      }
+    }
+
     if (combo === 'Escape') {
       if (this.ui.paletteOpen) { this.setUi({ paletteOpen: false, paletteQuery: '' }); this.render(); return 'app.palette.close'; }
       if (this.ui.keysOpen) { this.setUi({ keysOpen: false }); this.render(); return 'app.keys.close'; }

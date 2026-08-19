@@ -123,14 +123,22 @@ export function emptyBrand(seed, at) {
 
 /**
  * A brand-new project.
+ *
+ * `recipes` arrives from the caller rather than being imported here, because
+ * this module is deliberately lane-free — but a new project starts *with* the
+ * §9 seed library rather than with an empty panel and a button. The eight are
+ * a fixed, spec-mandated set, not user content, and a library nobody knows to
+ * load is a library nobody uses (CRITIQUE-1 F14).
+ *
  * @param {object} args
  * @param {string} args.seed
  * @param {string} args.at            ISO, from the injected clock
  * @param {string} [args.name]
  * @param {string} [args.prospectName]
+ * @param {import('../core/contracts.d.ts').Recipe[]} [args.recipes]
  * @returns {Doc}
  */
-export function newDoc({ seed, at, name = 'Untitled proof', prospectName = '' }) {
+export function newDoc({ seed, at, name = 'Untitled proof', prospectName = '', recipes = [] }) {
   const proof = {
     schemaVersion: /** @type {1} */ (1),
     id: contentId('proof', { seed, at }),
@@ -139,7 +147,7 @@ export function newDoc({ seed, at, name = 'Untitled proof', prospectName = '' })
     brand: emptyBrand(seed, at),
     specimens: [],
     renditions: [],
-    recipes: [],
+    recipes: recipes.slice(),
     spine: [],
     branches: [],
     emitOptions: defaultEmitOptions(),

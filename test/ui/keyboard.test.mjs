@@ -310,3 +310,38 @@ test('a field-level action that the palette cannot run is still reachable by its
   const top = app.paletteMatches()[0];
   assert.ok(top && top.id === 'app.section.settings');
 });
+
+test('Enter in a field that says what Enter means runs it, with the field’s own argument', async () => {
+  const app = await makeFullApp();
+  app.ui.paletteOpen = false;
+  app.ui.section = 'branches';
+  const branch = app.proof.branches[0];
+  app.select({ branchId: branch.id });
+  app.setDraft('branch.alias', 'procurement gate');
+
+  const target = {
+    tagName: 'INPUT',
+    value: 'procurement gate',
+    getAttribute: (name) => ({
+      type: 'text',
+      'data-st-enter': 'branch.addAlias',
+      'data-st-arg': branch.id,
+    }[name] ?? null),
+  };
+  const ran = app.handleKey({ key: 'Enter', target, preventDefault() {} });
+  assert.equal(ran, 'branch.addAlias');
+  assert.ok(
+    app.proof.branches.find((b) => b.id === branch.id).aliases.includes('procurement gate'),
+    'the alias landed on the branch whose field it was typed into',
+  );
+});
+
+test('every field that expects Enter names an action the registry knows', async () => {
+  const app = await makeFullApp();
+  const html = toHtml(renderAllPanels(app));
+  const named = [...html.matchAll(/data-st-enter="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(named.length >= 3, 'the URL and alias fields at least');
+  for (const id of new Set(named)) {
+    assert.ok(index.byId.has(id), `${id} is wired to Enter but is not an action`);
+  }
+});

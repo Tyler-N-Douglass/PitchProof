@@ -23,15 +23,17 @@
 
 export { emit, buildDocument, layoutsMissingFor, staleCaptureFindings, stripPresenterNotes, STALE_CAPTURE_DAYS } from './emit.js';
 
+export { runEmitGate, gateDeps, gatedCodes, measureDeck, renderedElementIds, layoutContextFor, MEASURED_BY_EMIT } from './gate.js';
+
 export {
   scanForNetworkReferences, scanModelAssets, scanCss, scanJs, scanAbsoluteUrls, scanNestedDataUri,
   classifyUrl, isW3cNamespace, parseSrcset, networkFinding,
-  W3C_NAMESPACES, URL_ALLOWLIST, URL_ATTRS, SRCSET_ATTRS, JS_NETWORK_TOKENS,
+  W3C_NAMESPACES, URL_ALLOWLIST, URL_ATTRS, SRCSET_ATTRS, TEXT_ATTRS, JS_NETWORK_TOKENS,
 } from './scan.js';
 
 export {
   assertProvenance, judgeLabelStyle, resolveBackground, describeElement, walkWithChain, renditionAppearsIn,
-  documentChainPrefix, allScenesOf, nodeText, provenanceFinding,
+  documentChainPrefix, allScenesOf, nodeText, provenanceFinding, labelOptionFinding,
   PROVENANCE_LABEL_CLASS, MIN_LABEL_FONT_PX, RENDITION_ATTR,
 } from './provenance.js';
 

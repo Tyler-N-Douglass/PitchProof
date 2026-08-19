@@ -271,7 +271,8 @@ const FIXERS = {
         for (const f of next.brand.faces || []) {
           if (f.family !== d.family || f.role !== d.role) continue;
           f.fallbackStack = stack.slice();
-          f.metricDelta = { ...resolution.metricDelta };
+          // §4: `metricDelta` is the object or null, never a half-filled object.
+          f.metricDelta = resolution.metricDelta ? { ...resolution.metricDelta } : null;
         }
         const path = `brand.faces.${d.family}.${d.role}.fallbackStack`;
         if (!next.brand.manualOverrides.includes(path)) next.brand.manualOverrides.push(path);

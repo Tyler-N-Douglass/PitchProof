@@ -246,10 +246,55 @@ test('a layout that renders a cta as a live link is caught by the document scan'
   for (const hit of hits) assert.equal(hit.severity, 1);
   assert.ok(
     hits.some((f) => f.locus.sceneId),
-    'at least one finding must name the scene the link is in — the document scan sees the first paint, the per-scene scan sees the rest',
+    'at least one finding must name the scene the link is in — the gate scans the document, the per-scene pass scans the rest',
   );
   assert.ok(
-    hits.some((f) => f.locus.where === 'artifact document'),
-    'the link is in the pre-rendered first paint, so the document scan must see it too',
+    hits.some((f) => /rendered document/.test(f.message)),
+    "the link is in the pre-rendered first paint, so the gate's document scan must see it too",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Human-readable attributes are prose, not references (decision E23)
+// ---------------------------------------------------------------------------
+
+import { TEXT_ATTRS } from '../../src/emit/scan.js';
+
+test('a URL in an accessible name is text, exactly as it is in a paragraph', () => {
+  const url = 'https://www.northwind-industrial.example/insights/fouling-margins/';
+  for (const attr of TEXT_ATTRS) {
+    const html = `<svg ${attr}="3 inputs flowing through ${url} to 1 output"></svg>`;
+    assert.deepEqual(
+      scanForNetworkReferences(html).map((f) => f.message),
+      [],
+      `${attr} was flagged; it is a string a screen reader reads aloud, and nothing resolves it`,
+    );
+  }
+  // The identical string in body text, for the comparison the rule exists to
+  // make consistent.
+  assert.deepEqual(scanForNetworkReferences(`<p>Source: ${url}</p>`), []);
+});
+
+test('the exemption is a closed set and does not leak to fetching attributes', () => {
+  const url = 'https://cdn.example/x.png';
+  for (const attr of ['src', 'href', 'srcset', 'action', 'formaction', 'poster', 'data', 'ping', 'background', 'xlink:href']) {
+    const findings = scanForNetworkReferences(`<img ${attr}="${url}">`);
+    assert.ok(findings.length > 0, `${attr} must still be refused`);
+    for (const f of findings) assert.equal(f.severity, 1);
+  }
+  for (const attr of ['data-endpoint', 'data-beacon', 'data-src', 'formtarget']) {
+    const findings = scanForNetworkReferences(`<div ${attr}="${url}"></div>`);
+    assert.ok(findings.length > 0, `${attr} must still be refused — a data-* holding an endpoint is the shape §1.1 forbids`);
+  }
+  assert.ok(scanForNetworkReferences(`<div style="background:url(${url})"></div>`).length > 0, 'style must still be refused');
+  assert.ok(scanForNetworkReferences(`<div onclick="go('${url}')"></div>`).length > 0, 'an event handler must still be refused');
+  assert.ok(scanForNetworkReferences(`<style>.a{background:url(${url})}</style>`).length > 0, 'CSS must still be refused');
+  assert.ok(scanForNetworkReferences(`<script>var e = "${url}";</script>`).length > 0, 'a JS literal must still be refused');
+  assert.ok(scanForNetworkReferences(`<meta name="og:image" content="${url}">`).length > 0, 'meta content must still be refused');
+});
+
+test('an alt attribute is text but an img src is not, on the same element', () => {
+  const findings = scanForNetworkReferences('<img src="https://cdn.example/x.png" alt="taken from https://acme.example/page">');
+  assert.equal(findings.length, 1, `expected exactly the src to be flagged, got: ${findings.map((f) => f.message).join(' | ')}`);
+  assert.match(findings[0].message, /img\[src\]/);
 });

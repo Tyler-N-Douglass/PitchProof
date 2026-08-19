@@ -80,7 +80,11 @@ test('the artifact round-trips its own model payload', async () => {
   assert.equal(rebuilt.spine.length, proof.spine.length);
   assert.equal(rebuilt.branches.length, proof.branches.length);
   assert.equal(rebuilt.specimens[0].media[0].dataUri, proof.specimens[0].media[0].dataUri, 'media must come back byte-identical');
-  assert.ok(rebuilt.brand.logos[0].data.startsWith('data:'));
+  // §4: a logo is "inline SVG markup or data URI". The fixture's is markup, and
+  // markup is text, so D6 keeps it inside the compressed model rather than in
+  // the media table.
+  assert.equal(rebuilt.brand.logos[0].data, proof.brand.logos[0].data, 'the logo must come back byte-identical');
+  assert.match(rebuilt.brand.logos[0].data, /^<svg\b/);
 });
 
 test('the platform decode path and the fallback agree', async () => {
@@ -159,7 +163,14 @@ test('a non-base64 data URI stays inside the model, where it compresses', () => 
   assert.equal(isExtractableMedia('data:image/png;base64,AAAA'), false, 'a short URI is not worth a placeholder');
   const proof = emitProof();
   const split = splitMedia(proof);
-  assert.ok(stableStringify(split.model).includes('data:image/svg%2Bxml') || stableStringify(split.model).includes('image/svg'), 'the SVG logo stays in the model');
+  const json = stableStringify(split.model);
+  assert.ok(json.includes('<svg'), 'inline SVG markup stays in the model, where it compresses');
+  // Checked on the mime, not on a substring: base64 is an alphabet in which
+  // the letters "svg" occur by chance.
+  assert.ok(
+    !split.table.some((uri) => /^data:image\/svg\+xml/i.test(uri)),
+    'and never reaches the media table',
+  );
 });
 
 test('the media table can never contain a sequence that ends its script element', () => {

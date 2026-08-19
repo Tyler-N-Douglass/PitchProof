@@ -71,17 +71,23 @@ test('the clock cannot change a single byte of the artifact', async () => {
   assert.equal(early.value.html, late.value.html, 'no wall-clock value may reach the artifact (§5, §17.6)');
 });
 
-test('a later clock changes only the findings, and only STALE_CAPTURE (§6)', async () => {
+test('a later clock changes the findings only by adding STALE_CAPTURE (§6)', async () => {
   registerTestLayouts();
   const proof = emitProof();
   const fresh = await emit(proof, {}, { runtimeJs, runtimeCss, clock: () => '2026-02-10T00:00:00.000Z' });
   const stale = await emit(proof, {}, { runtimeJs, runtimeCss, clock: () => '2026-06-10T00:00:00.000Z' });
-  assert.deepEqual(fresh.value.findings, []);
-  assert.ok(stale.value.findings.length > 0);
-  for (const f of stale.value.findings) {
-    assert.equal(f.code, 'STALE_CAPTURE');
+  assert.equal(fresh.ok, true, fresh.ok ? '' : fresh.error);
+  assert.equal(stale.ok, true, stale.ok ? '' : stale.error);
+
+  const codesOf = (r) => r.value.findings.map((f) => f.code);
+  assert.ok(!codesOf(fresh).includes('STALE_CAPTURE'));
+  const added = codesOf(stale).filter((c) => !codesOf(fresh).includes(c));
+  assert.deepEqual([...new Set(added)], ['STALE_CAPTURE'], 'the clock may add staleness and nothing else');
+  for (const f of stale.value.findings.filter((x) => x.code === 'STALE_CAPTURE')) {
     assert.equal(f.severity, 3, 'a stale capture warns; it does not block');
   }
+  // And the bytes are still identical, which is the point of §17.6.
+  assert.equal(fresh.value.html, stale.value.html);
 });
 
 test('a different project seed changes ids without changing what renders (§17.6)', async () => {

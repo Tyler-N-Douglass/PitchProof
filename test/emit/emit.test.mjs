@@ -256,7 +256,7 @@ test('inlineRuntime refuses content that would end its own element', () => {
 
 test('a proof with no specimens, renditions or branches still emits', async () => {
   const { html, value } = await emitOk(tinyProof());
-  assert.deepEqual(value.findings, []);
+  assert.deepEqual(value.findings.filter((f) => f.severity === 1), [], 'nothing may block a minimal proof');
   assert.match(html, /data-pp-scene="sc_only"/);
   assert.equal(value.compression.mode, 'raw');
 });

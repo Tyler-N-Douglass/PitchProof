@@ -421,13 +421,11 @@ export function assertProvenance(proof, html, css, options = {}) {
   const needingLabel = (proof.renditions || []).filter(requiresProvenanceLabel);
 
   // 2. An option the law does not allow.
-  if (options.labelDisableRequested && reviewReachable && needingLabel.length > 0) {
-    findings.push(provenanceFinding(
-      `This build is reachable in Review mode (mode: "${mode}") and carries ${needingLabel.length} rendition(s) that are not client-supplied, `
-      + 'so `labelIllustrativeContent` cannot be disabled (§9). The emit is refused rather than quietly overridden.',
-      { check: 'label-option' },
-    ));
-  }
+  const optionFinding = labelOptionFinding(proof, {
+    labelDisableRequested: options.labelDisableRequested,
+    mode,
+  });
+  if (optionFinding) findings.push(optionFinding);
 
   if (needingLabel.length === 0) return findings;
 
@@ -548,6 +546,34 @@ export function assertProvenance(proof, html, css, options = {}) {
   }
 
   return findings;
+}
+
+/**
+ * The §9 check that `labelIllustrativeContent` may not be disabled for a build
+ * a recipient can open in Review mode.
+ *
+ * Extracted because it has two call sites and must have one implementation.
+ * `normalizeEmitOptions` forces the flag back to true before the model is
+ * serialized, so by the time L11's `provenanceUnlabeled` rule reads
+ * `proof.emitOptions` the evidence of the request is gone — which is why the
+ * rule skips L10's copy of this finding and why `emit()` has to raise it from
+ * the options it was actually handed. See decision E10.
+ *
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @param {{labelDisableRequested?: boolean, mode?: string}} options
+ * @returns {import('../core/contracts.d.ts').Finding|null}
+ */
+export function labelOptionFinding(proof, options = {}) {
+  if (!options.labelDisableRequested) return null;
+  const mode = options.mode || (proof.emitOptions && proof.emitOptions.mode) || 'both';
+  if (mode !== 'review' && mode !== 'both') return null;
+  const needingLabel = (proof.renditions || []).filter(requiresProvenanceLabel);
+  if (needingLabel.length === 0) return null;
+  return provenanceFinding(
+    `This build is reachable in Review mode (mode: "${mode}") and carries ${needingLabel.length} rendition(s) that are not client-supplied, `
+    + 'so `labelIllustrativeContent` cannot be disabled (§9). The emit is refused rather than quietly overridden.',
+    { check: 'label-option' },
+  );
 }
 
 /**

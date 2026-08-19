@@ -132,6 +132,23 @@ when it measures:
 With those, one more rule — "the boxes of a region sum past the region" — becomes
 possible without changing anything else.
 
+**Update, after the §20 critic.** A third field from the same family has since
+landed and is load-bearing: L8 now reports `textOverflow: 'clip' | 'ellipsis'` on
+every box, and L11 grades severity on it (L11-D15). Without it the detector could
+not tell "clipped, data lost" from "ellipsised by design", and graded the
+prospect's own source URL as a blocking defect in four of the eight layouts. The
+field exists in the code and is asserted by both lanes' tests; it is **not** in
+`API.md`'s `SceneMeasurement` declaration, and it should be:
+
+```ts
+boxes: { …, whiteSpace?: string; overflowWrap?: string; maxLines?: number;
+         textOverflow?: 'clip'|'ellipsis' }[]
+```
+
+It is the field the §22.2 grading turns on, so leaving it undeclared leaves the
+most important check in the tool depending on an undocumented agreement between
+two lanes.
+
 ---
 
 ## 5. `runPreflight(proof, {breakpoints?, clock, runtimeJs?, runtimeCss?})` has no place for the rendered document
@@ -198,6 +215,10 @@ and have L10 and L11 import it rather than each carrying a parser.
   shape the beat engine renders whole, and `BEAT_EMPTY` fires only for a beat
   that reveals nothing inside a scene where others do. That reading needs no
   contract change and is asserted in both directions.
+- **`FaceResolution.metricDelta` is nullable, and that is right.** L11 reads it
+  through one accessor that returns `number | null` and says "unmeasured" in
+  every message rather than quoting a percentage it does not have (L11-D17).
+  §22.2's case is the unknown family, so `null` is the answer that matters most.
 - **`BREAKPOINTS` is a closed list of three.** §14 says "all three breakpoints",
   so this is the spec's decision, not a gap. `runPreflight` still accepts
   explicit geometry so a studio preview at an arbitrary size can be checked, and

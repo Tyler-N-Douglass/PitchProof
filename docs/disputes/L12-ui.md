@@ -6,9 +6,13 @@ was worked around in `src/ui/**`.
 
 ---
 
-## D-L12-1 — `scripts/build.mjs` corrupts the studio bundle (blocking, one-line fix)
+## D-L12-1 — `scripts/build.mjs` corrupts the studio bundle — RESOLVED
 
-**Severity: blocking. `dist/pitchproof-studio.html` does not run today.**
+**Status: fixed by the integrator.** `buildStudio` now passes function
+replacements, `dist/pitchproof-studio.html` parses and runs, and
+`test/ui/shell.test.mjs` pins both halves: the assembled document compiles, and
+the bundle still contains the `$`-sequences that made a string replacement
+unsafe. Kept here for the record.
 
 **Where.** `scripts/build.mjs`, `buildStudio()`:
 
@@ -94,9 +98,13 @@ confidence, and is held by §7's review gate for a person to set by hand. That i
 correct behaviour rather than a failure — see `docs/decisions/L12-ui.md` L12-7 —
 but it is less than §7 asks for.
 
-**Suggested resolution for the integrator:** declare one of
-`specimen.sampleImages(assets)` or `brand.samplesFromAssets(assets)` in `API.md`
-Part 3 and add one line to `brandParts` in `src/ui/services.js`.
+**Status:** the seam is built and waiting. `services.imagerySamples(assets)`
+already looks for `sampleFromPng` on L5's declared surface and maps every PNG
+asset through it; it returns `[]` only because the export is not there yet. The
+integrator has asked L5 to re-export `sampleFromPng` from `brand/theme.js`; when
+it lands, imagery starts being classified with **no further change to
+`src/ui/**`**, and `test/ui/lane-conformance.test.mjs` will require it to be
+consumed.
 
 ---
 
@@ -113,7 +121,9 @@ second router in the studio would be a worse copy of L3's.
 
 If the integrator prefers the studio to stay strictly on the declared set, the
 fallback is to promote `ingestFiles` into `API.md` Part 3 — which is what it
-already is in practice.
+already is in practice. Meanwhile the six importers it routes to are declined
+individually in `LANE_SURFACE_NOTES` with that reason, so the consuming-side
+conformance test records the decision rather than hiding it.
 
 ---
 
@@ -133,3 +143,23 @@ inventing a nested object felt like more drift than the problem warrants. If the
 critic wants review parity with promotion, the smallest honest change is
 `reviewedBy?: {group, by, at}[]`, and the studio would fill it from the operator
 name it already collects for §8 and §9.
+
+
+---
+
+## D-L12-6 — `API.md` Part 3 is enforced from one side only
+
+**Severity: process; fixed on this lane's side.**
+
+`test/core/api-conformance.test.mjs` checks that each lane exports what it
+declared. Nothing checked that anything consumed it, and that asymmetry is
+exactly how §9's seed recipe library came to be built, tested, published and
+unreachable from the studio for a whole pass (CRITIQUE-1 F14).
+
+`test/ui/lane-conformance.test.mjs` now closes it for L12: every surface Part 3
+declares for a lane the studio imports must be called in `services.js` or
+explained in `LANE_SURFACE_NOTES`. **The same asymmetry exists for every other
+consuming lane** — L6 consumes L3, L7 consumes L6, L8 consumes L4/L5, L10 and
+L11 consume L8/L9 — and each of them could carry the same twenty-line test. That
+is the integrator's call, not this lane's, but F14 is unlikely to be the only
+instance of it.

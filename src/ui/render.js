@@ -47,6 +47,8 @@ export const PRESERVE_ATTR = 'data-st-preserve';
 export const KEY_ATTR = 'data-st-key';
 /** Attribute marking an element whose innerHTML is raw markup keyed by a digest. */
 export const RAW_ATTR = 'data-st-raw';
+/** Attribute naming the action Enter runs while focus is inside a text field. */
+export const ENTER_ATTR = 'data-st-enter';
 
 /** Events the root listens for. `input` covers typing; `change` covers commit. */
 export const DELEGATED_EVENTS = ['click', 'input', 'change', 'keydown', 'submit', 'dblclick', 'focusin'];

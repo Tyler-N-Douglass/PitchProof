@@ -7,6 +7,11 @@ Every judgment call the spec did not settle, per §23. Format follows
 
 ## L11-D1 — The overflow severity threshold is 2% of the container, and the number is measured
 
+> **Amended after the §20 critic (CRITIQUE-1 F6).** The magnitude bands below
+> decide whether there is anything to report. They no longer decide, on their
+> own, whether it blocks — see **L11-D15**, which added the truncation mode as a
+> second dimension.
+
 **Unsettled by:** §14 requires `TEXT_OVERFLOW` and §22.2 makes it the most
 important check in the tool, but neither says how much overflow blocks an emit.
 The lane brief asks for "body text that overflows its container enough to be
@@ -58,6 +63,65 @@ tolerance rather than folding it into the Latin number and hiding it.
 
 ---
 
+## L11-D15 — Truncation blocks an emit when the viewer cannot see it happened
+
+**Unsettled by:** §14 and §22.2 name text overflow without distinguishing text
+that is *cut* from text that is *cut with a visible ellipsis*. Superseded my
+earlier rule, which graded the clamp axis by how many lines were lost.
+
+**What was wrong.** The §20 critic (F6) measured the previous grading against the
+real corpus. `src/scene/parts.js` renders a panel title and a panel meta row
+under every column with `data-pp-clamp="1"`, which `scenes.css` turns into
+`white-space: nowrap; text-overflow: ellipsis` — a designed truncation with a
+visible ellipsis. The detector graded it **severity 1**, so `splitBeforeAfter`,
+`sideNote` and `stack` produced 14 to 60 blocking findings per specimen with no
+seller-authored text in them at all. The text was the prospect's own page title
+and source URL, which §18.3 forbids the tool from shortening, and severity 1
+blocks emit with no override and no auto-fix. The layout the entire before/after
+thesis rests on was un-emittable past a 54-character URL.
+
+The critic also caught the inconsistency underneath it: losing **two lines of the
+client's own copy** to a multi-line clamp graded 2, while losing the tail of a
+URL to a one-line clamp graded 1.
+
+**Decision.** Grade on the **signal**, not the quantity. L8 now reports
+`textOverflow: 'clip' | 'ellipsis'` on every box in `SceneMeasurement`, derived
+from the same design tokens that produce the artifact's CSS:
+
+| truncation | severity | why |
+|---|---|---|
+| `clip` | **1** | The sentence stops and nothing says so. Nobody in the room knows there was more. This is §22.2's defect exactly — invisible until it isn't. |
+| `ellipsis` | **2** | The trailing `…` is a signal the viewer reads. Truncating a long URL into a one-line meta row is a layout decision, and the client can ask what the rest of it was. |
+
+It applies to the **width** and **clamp** axes, and not to **height**:
+`text-overflow` is a horizontal property, and text running past the bottom of its
+box carries no ellipsis anywhere.
+
+`CLAMP_BLOCKING_LOST_LINES` is gone. There is no line-count rule left anywhere in
+the detector, which removes the inconsistency rather than papering over it: a
+multi-line clamp and a one-line clamp are now graded by the same question.
+
+**An undeclared mode grades as `clip`**, because that is CSS's own initial value
+and because defaulting the other way would silently downgrade real data loss on
+every box whose measurement predates the field — the one direction §14 does not
+allow. The finding says so in its message and carries
+`detail.textOverflowDeclared: false`, so the gap is legible rather than silent.
+
+**Measured effect.** On the critic's own reproduction
+(`.tmp/critic/15-layout-corpus.mjs`), across four real corpus specimens × eight
+layouts × three breakpoints, severity-1 overflow went from 51/30/60/14/38/49 on
+the affected layouts to **0 everywhere**, while the overflows themselves are
+still reported — as warnings, with the same measurements and the same remedies.
+`test/validate/preflight.test.mjs` pins both halves: the prospect's URL and title
+no longer refuse an emit, and the identical box with the mode taken away still
+does.
+
+**Provenance.** The two grades were set centrally by the integrator after the
+critic's finding, so L8 and L11 were not negotiating the boundary between them.
+L11 agrees with them and implemented them.
+
+---
+
 ## L11-D2 — Severity for each of the fourteen codes
 
 **Unsettled by:** §4 fixes three severities (`FIXED_SEVERITY`) and §14 fixes
@@ -83,6 +147,69 @@ a documented band (`NARROWABLE`), and `resolveSeverity` throws on any other
 combination — including any attempt to change a `FIXED_SEVERITY` code in either
 direction. A rule cannot quietly soften a finding, because the function that
 would have to allow it refuses.
+
+---
+
+## L11-D16 — `BEAT_EMPTY` covers a beat whose reveals name nothing the layout renders
+
+**Unsettled by:** §14 lists `BEAT_EMPTY` without saying what "empty" means, and
+§4's `Beat.reveals` is a list of element ids with no referential integrity rule.
+
+**What was wrong.** The §20 critic (F16) set
+`beats[0].reveals = ['el_deadbeef00']` and the sweep said nothing at any
+severity. `BEAT_EMPTY` covered a beat with *no* reveals; a beat whose reveals all
+name elements nothing renders is functionally identical — the presenter presses
+`→` and the screen does not change — and it was invisible.
+
+**Decision.** Same code, same severity, same auto-fix. Preflight renders each
+scene once through L2's layout registry, collects the ids carrying L2's
+`data-pp-el`, and reports a beat whose reveals are **entirely** absent from that
+set. Two guards keep it honest:
+
+- **A beat that reveals some real ids and some dangling ones is not reported.**
+  Partial drift still moves the screen, so it is not this defect, and firing on
+  it would flag any layout that renders a subset.
+- **A scene whose tree carries no revealable element at all is skipped**, because
+  comparing against an empty set would make every beat in a still-frame layout a
+  finding.
+
+`detail.kind` distinguishes `'no-reveals'` from `'dangling-reveals'`, and the
+auto-fix checks the corresponding condition before trimming, so a fix computed
+against one shape cannot remove a beat of the other.
+
+**The finding this exposed in my own fixtures.** `cleanProof()` wrote its beats
+by hand as `elementId(sceneId, 'block/0')` — ids no layout mints. Every beat in
+the control was a dead keypress, and the control was therefore not a proof the
+studio could have produced. The fixture now renders each scene and takes its
+reveals from the tree (`withRenderedReveals`), and `defectProof` re-derives them
+after mutating, so changing which blocks a scene shows cannot plant a second,
+unintended defect. A test asserts that swapping a scene's layout without
+re-pointing its beats is caught, which is the studio path that produces this in
+real use.
+
+---
+
+## L11-D17 — `metricDelta: null` is an answer, and every message says so
+
+**Unsettled by:** §4 types `TypeFace.metricDelta` as nullable without saying when
+it is null or what a consumer should do about it.
+
+**Decision.** `core/text-metrics.js` returns `metricDelta: null` from
+`resolveFace` for a family this build holds no published metrics for — the
+honest answer, since comparing an unknown family to the category model it already
+fell back to would report the substitution as metrically perfect. Every place
+L11 reads a delta goes through `advanceDeltaOf(face)`, which returns
+`number | null`, and every message that would have quoted a percentage says
+instead that the movement is unmeasured and why. `resolveBoxFace` propagates the
+null rather than recomputing a number, and the `FONT_UNAVAILABLE` auto-fix writes
+`null` rather than a half-filled object, which §4 requires.
+
+**Why it matters here specifically.** §22.2's case *is* the unknown family: a
+prospect's custom webfont is precisely the face nobody has published metrics for.
+Reporting "+0.0% average advance" for it would be the detector telling the seller
+the substitution is free at the exact moment it is most likely not to be. The
+critic's `15-layout-corpus.mjs` crashed L11 on a null delta, which is how this
+was found; a test now measures an unknown family end to end.
 
 ---
 
@@ -304,11 +431,82 @@ The oracle states the thresholds itself and a test asserts they equal the
 detector's exported constants, so a threshold change fails loudly instead of
 silently skewing the measurement.
 
-**Measured, 93 cases × 3 axes = 279 judgements:** recall 1.0000 and precision
-1.0000 on severity-1 overflow, with 279/279 exact severity agreement across all
+**Measured, 112 cases × 3 axes = 336 judgements:** recall 1.0000 and precision
+1.0000 on severity-1 overflow, with 336/336 exact severity agreement across all
 three bands. `§17.4` requires recall ≥ 0.98; the suite asserts that and a stated
 precision floor of 0.98, and prints the confusion matrix on every run so a
 regression is legible rather than a number moving.
+
+### What the oracle proves, and what it does not
+
+**Amended after the §20 critic (CRITIQUE-1 F7).** The oracle is written
+independently of `src/validate/`, but it necessarily encodes the *same policy* —
+that a 27.7% excess past an ellipsised container warns rather than blocks. It
+recomputes the 27.7% by itself; it does not independently decide what 27.7%
+should mean.
+
+So agreement between the two says the detector **measures what it claims to
+measure**. It does not say the severity policy is right. Those are separate
+claims and they now have separate evidence:
+
+| claim | evidence |
+|---|---|
+| the arithmetic is right | the oracle, written independently, agrees on 336/336 |
+| the published metrics are right | the browser cross-check against real Chromium |
+| the policy is right | argued in L11-D1 and L11-D15; pinned by a table-driven test that calls `detectBoxOverflow` with **no oracle in the path**, so a policy change fails even if the oracle were changed to match |
+| the corpus covers what the product emits | a distribution test that asserts the shapes, roles, breakpoints and truncation modes the layouts actually produce |
+
+The last row is the one the critic's F7 was about, and it is the one that was
+missing. A recall figure measured over a distribution that excludes the failure
+mode is not a measurement of the detector, so the distribution is now asserted
+rather than assumed.
+
+### The distribution, asserted
+
+`test/validate/overflow-corpus.test.mjs` runs the inspection the critic ran by
+hand and fails on it: at least ten `maxLines: 1` cases, both truncation modes in
+quantity at that clamp, the `panelMeta` and `panelTitle` roles by name, a
+one-line clamp at each of `sm`/`md`/`lg`, and planted positives *and* negatives
+on both sides of the discriminator. The corpus grew from 93 cases to 112 to
+satisfy it.
+
+---
+
+## L11-D18 — The sweep is graded against a corpus-built proof as well as a planted one
+
+**Unsettled by:** §17.4 asks for a planted-defect corpus and says nothing about
+grading the sweep against real content.
+
+**Decision.** Both, because they answer different questions.
+
+- **The planted corpus** (`test/fixtures/overflow/`) proves the detector finds
+  what was put there. Ground truth is knowable because the defects were placed
+  at stated magnitudes.
+- **The corpus proof** (`test/fixtures/corpus/proof.mjs` — four hostile pages and
+  two binary documents through the published surfaces of L3–L9) proves the sweep
+  does not invent things that were not. Ground truth is not knowable there, so
+  what is asserted is the property that matters: **a proof assembled entirely
+  through the declared lane surfaces must be presentable and emittable.** Zero
+  severity-1 findings, every measured box declaring how it truncates, every
+  finding's locus resolving to a real scene, every clamp finding quoting what it
+  lost, every auto-fix pure, and the whole sweep deterministic across two
+  independent builds of the pipeline.
+
+**Why properties and not counts.** The §20 critic's leverage sentence was that
+every severity-1 finding in the critique was reachable from a corpus-built proof
+and none from `makeProof()`; a hand-written fixture agrees with whatever the lane
+that wrote it believed, so it cannot disagree and cannot find anything. But a
+corpus fixture is *tuned*: between writing this test and running it, the fixture
+went from 6 spine scenes to 31 as scene chunking moved to heading boundaries, and
+the warning count moved with it. A test that pinned the numbers would have broken
+on an improvement while telling nobody anything. The distribution is printed on
+every run so a regression is legible; only the invariants are asserted.
+
+**What it found immediately.** On real client copy the layouts clamp long body
+blocks, so the sweep reports every truncation as a severity-2 warning with the
+truncated text quoted — which is the signal a seller wants before a pitch, and
+correctly not a blocker. Two `FONT_UNAVAILABLE` warnings for a brand face that is
+not embeddable. Nothing blocking.
 
 ---
 

@@ -79,7 +79,9 @@ export function brand(overrides = {}) {
     logos: [{
       id: contentId('logo', 'emit-fixture'),
       kind: 'svg',
-      data: 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%2032%22%3E%3Crect%20width%3D%22120%22%20height%3D%2232%22%20fill%3D%22%23123A8C%22%2F%3E%3C%2Fsvg%3E',
+      // Inline markup, not a data URI: §7 prefers inline SVG, and L11's
+      // ASSET_MISSING rule reads a `kind: 'svg'` logo as markup.
+      data: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 32" role="img" aria-label="Northwind Industrial"><rect width="120" height="32" fill="#123A8C"/><text x="10" y="21" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="13">Northwind</text></svg>',
       variant: 'primary',
       intrinsic: { w: 120, h: 32 },
       hasTransparency: false,
@@ -102,7 +104,11 @@ export function specimen(id, mediaRefs = []) {
     id,
     kind: 'page',
     title: `Northwind — ${id}`,
-    sourceUrl: 'https://northwind.example/products/valve-assembly',
+    // Deliberately short. A long source URL clips in `systemMap`'s node meta —
+    // a real severity-1 TEXT_OVERFLOW, reported to L8 — and this fixture's job
+    // is to be a clean baseline for the emitter, not to carry someone else's
+    // defect. `test/emit/gate.test.mjs` plants overflow explicitly instead.
+    sourceUrl: 'https://northwind.example/valves',
     capturedAt: CAPTURED_AT,
     blocks: [
       { type: 'heading', level: 1, text: 'Precision valve assemblies for continuous process plant' },

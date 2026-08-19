@@ -21,7 +21,7 @@
  */
 
 import { h, cx } from '../core/vdom.js';
-import { ACT_ATTR, ARG_ATTR, EVENT_ATTR, KEY_ATTR, RAW_ATTR } from './render.js';
+import { ACT_ATTR, ARG_ATTR, ENTER_ATTR, EVENT_ATTR, KEY_ATTR, RAW_ATTR } from './render.js';
 import { fnv1a32 } from '../core/hash.js';
 
 /**
@@ -84,6 +84,7 @@ export function button(props, label) {
  * @param {boolean} [props.mono]
  * @param {boolean} [props.disabled]
  * @param {string} [props.key]
+ * @param {string} [props.enter]   action id Enter runs from inside this field
  * @returns {import('../core/vdom.js').VNode}
  */
 export function field(props) {
@@ -96,6 +97,7 @@ export function field(props) {
       placeholder: props.placeholder || null,
       disabled: props.disabled ? true : null,
       [KEY_ATTR]: props.key || null,
+      [ENTER_ATTR]: props.enter || null,
       ...actAttrs(props),
     }),
     props.hint ? h('span', { class: 'st-field-hint' }, props.hint) : null);

@@ -29,7 +29,7 @@ import { utf8Length, parseDataUri } from '../core/bytes.js';
 import { sceneRevealsNothing } from '../runtime/beats.js';
 import { makeFinding, sortFindings } from './finding.js';
 import { severityOf } from './severity.js';
-import { detectOverflow, faceResolutions, resolveBoxFace } from './overflow.js';
+import { detectOverflow, faceResolutions, resolveBoxFace, advanceDeltaOf } from './overflow.js';
 import { checkContrast } from './contrast.js';
 import {
   hasPromotionRecord, reviewReachable, renderedRenditionIds, scenesShowing,
@@ -295,16 +295,20 @@ const fontUnavailable = {
     const out = [];
     for (const { face, resolution } of faceResolutions(proof.brand || { faces: [] })) {
       if (resolution.available) continue;
-      // A fix is only offered when the recommended stack differs from the one
-      // the brand already declares. A face that is simply absent, with a
-      // fallback stack that is already the best available, has nothing to fix —
-      // and offering a no-op fix is how an auto-fix panel loses its meaning.
+      // A fix is offered only when it changes what actually renders: when the
+      // declared stack names no concrete available family before its generic, so
+      // the artifact lands on whatever the platform defaults to. A stack that
+      // already resolves to a real family is doing its job, and offering to
+      // append two more fallbacks after it is a no-op — which is how an auto-fix
+      // panel loses its meaning.
       const recommended = resolution.stack;
-      const declared = face.fallbackStack || [];
-      const improvable = recommended.length !== declared.length
-        || recommended.some((name, i) => name !== declared[i]);
-      const delta = resolution.metricDelta.avgAdvance;
-      const drift = `${delta > 1 ? '+' : ''}${((delta - 1) * 100).toFixed(1)}%`;
+      const improvable = resolution.landsOnDefault === true;
+      // A face this build has no published metrics for reports `metricDelta:
+      // null` rather than pretending the substitution is free (§4 permits it).
+      const delta = advanceDeltaOf(resolution);
+      const drift = delta === null
+        ? 'no published metrics, so the movement is unmeasured'
+        : `${delta > 1 ? '+' : ''}${((delta - 1) * 100).toFixed(1)}% average advance`;
       const confidence = `${Math.round(resolution.confidence * 100)}%`;
       out.push(makeFinding({
         code: 'FONT_UNAVAILABLE',

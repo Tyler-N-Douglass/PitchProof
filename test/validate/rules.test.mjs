@@ -180,6 +180,41 @@ test('FONT_UNAVAILABLE names the face that will actually render and the advance 
   assert.ok(finding.detail.recommendedStack.length > 1, 'the fix must have a better stack to offer');
 });
 
+test('a face with no published metrics reports an unmeasured delta, never a free one §20-F9', async () => {
+  const proof = copy(cleanProof());
+  // A prospect's custom webfont: exactly the family §22.2 is about, and exactly
+  // the family this build cannot hold metrics for.
+  proof.brand.faces[1].family = 'Northwind Sans Condensed';
+  proof.brand.faces[1].fallbackStack = ['Northwind Sans Condensed', 'Arial', 'sans-serif'];
+  proof.spine[0].headline = 'Every single market launch, entirely on brand, assembled and reviewed in one afternoon, without a rebuild';
+
+  const findings = await preflight(proof);
+  const font = findings.find((f) => f.code === 'FONT_UNAVAILABLE');
+  assert.ok(font);
+  assert.equal(font.detail.known, false);
+  assert.equal(font.detail.metricDelta, null, '§4 permits null, and null is the honest answer');
+  assert.match(font.message, /no published metrics/);
+  assert.doesNotMatch(font.message, /\+0\.0%/, 'a face we know nothing about must never be reported as a free substitution');
+
+  const overflow = findings.filter((f) => f.code === 'TEXT_OVERFLOW');
+  assert.ok(overflow.length > 0, 'the sweep must survive a null delta and still measure');
+  for (const f of overflow) {
+    assert.equal(f.detail.advanceDelta, null);
+    assert.match(f.message, /how much that moves the advance is unknown/);
+  }
+});
+
+test('the auto-fix writes a null metricDelta rather than a half-filled object', async () => {
+  const proof = copy(cleanProof());
+  proof.brand.faces[1].family = 'Northwind Sans Condensed';
+  proof.brand.faces[1].fallbackStack = ['Northwind Sans Condensed'];
+  const findings = await preflight(proof);
+  const [fix] = autoFixes(proof, findings).filter((f) => f.finding.code === 'FONT_UNAVAILABLE');
+  assert.ok(fix);
+  const face = fix.apply(proof).brand.faces.find((f) => f.role === 'display');
+  assert.equal(face.metricDelta, null);
+});
+
 test('FONT_UNAVAILABLE is silent when the user supplied a licensed font file', async () => {
   const proof = copy(cleanProof());
   proof.brand.faces[1].family = 'Inter';

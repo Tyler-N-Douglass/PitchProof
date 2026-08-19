@@ -581,6 +581,21 @@ html, body {
 .st-jump-text { flex: 1; min-width: 0; font-size: 12px; }
 .st-jump-matched { font-size: 10.5px; color: var(--st-text-faint); }
 
+.st-strategies { list-style: decimal; margin: 8px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.st-strategy { font-size: 11.5px; }
+.st-strategy--manual { color: var(--st-text-dim); }
+.st-strategy-label { font-weight: 550; margin-right: 4px; }
+.st-strategy-describe { display: block; color: var(--st-text-faint); margin-top: 2px; }
+
+.st-rules { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.st-rule { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; }
+.st-rule .st-badge { margin-left: 0; flex-shrink: 0; }
+.st-rule-describe { color: var(--st-text-dim); }
+
+.st-fit { display: flex; flex-direction: column; gap: 10px; }
+.st-fit-group { display: flex; flex-direction: column; gap: 5px; }
+.st-fit-head { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--st-text-faint); font-weight: 500; }
+
 .st-findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .st-finding { padding: 8px 10px; border: 1px solid var(--st-border); border-left: 2px solid var(--st-text-faint); border-radius: var(--st-radius-sm); background: var(--st-ground); }
 .st-finding--s1 { border-left-color: var(--st-bad); }
@@ -1132,6 +1147,8 @@ const KEY_ATTR = 'data-st-key';
 
 const RAW_ATTR = 'data-st-raw';
 
+const ENTER_ATTR = 'data-st-enter';
+
 const DELEGATED_EVENTS = ['click', 'input', 'change', 'keydown', 'submit', 'dblclick', 'focusin'];
 
 const PROPERTY_ATTRS = new Set(['value', 'checked', 'selected', 'indeterminate']);
@@ -1318,6 +1335,7 @@ __exports["EVENT_ATTR"] = EVENT_ATTR;
 __exports["PRESERVE_ATTR"] = PRESERVE_ATTR;
 __exports["KEY_ATTR"] = KEY_ATTR;
 __exports["RAW_ATTR"] = RAW_ATTR;
+__exports["ENTER_ATTR"] = ENTER_ATTR;
 __exports["DELEGATED_EVENTS"] = DELEGATED_EVENTS;
 __exports["flatten"] = flatten;
 __exports["create"] = create;
@@ -3771,7 +3789,7 @@ function emptyBrand(seed, at) {
   };
 }
 
-function newDoc({ seed, at, name = 'Untitled proof', prospectName = '' }) {
+function newDoc({ seed, at, name = 'Untitled proof', prospectName = '', recipes = [] }) {
   const proof = {
     schemaVersion:  (1),
     id: contentId('proof', { seed, at }),
@@ -3780,7 +3798,7 @@ function newDoc({ seed, at, name = 'Untitled proof', prospectName = '' }) {
     brand: emptyBrand(seed, at),
     specimens: [],
     renditions: [],
-    recipes: [],
+    recipes: recipes.slice(),
     spine: [],
     branches: [],
     emitOptions: defaultEmitOptions(),
@@ -30772,6 +30790,21 @@ const URL_ATTRS = new Set([
 
 const SRCSET_ATTRS = new Set(['srcset', 'imagesrcset']);
 
+const TEXT_ATTRS = new Set([
+  'alt',
+  'title',
+  'label',
+  'placeholder',
+  'download',
+  'abbr',
+  'aria-label',
+  'aria-description',
+  'aria-placeholder',
+  'aria-roledescription',
+  'aria-valuetext',
+  'aria-keyshortcuts',
+]);
+
 const EXECUTABLE_SCRIPT_TYPES = new Set([
   '', 'text/javascript', 'application/javascript', 'text/ecmascript',
   'application/ecmascript', 'text/jscript', 'module', 'text/babel',
@@ -30982,6 +31015,8 @@ function scanTag(tag, src, hit) {
       continue;
     }
 
+    if (TEXT_ATTRS.has(name)) continue;
+
     for (const f of scanAbsoluteUrls(attr.value, attr.valueIndex)) {
       hit(`${f.message} (in ${el}[${name}])`, f.index, { element: el, attribute: name });
     }
@@ -31144,7 +31179,8 @@ function describe(s) {
   return `"${truncate(s)}"`;
 }
 
-function scanModelAssets(proof) {
+function scanModelAssets(proof, options = {}) {
+  const nestedOnly = options.nestedOnly === true;
 
   const out = [];
   if (!proof || typeof proof !== 'object') return out;
@@ -31152,6 +31188,7 @@ function scanModelAssets(proof) {
   const checkInlined = (value, what, locus) => {
     const uri = String(value == null ? '' : value).trim();
     if (uri === '') {
+      if (nestedOnly) return;
       out.push(networkFinding({
         message: `${what} carries no inlined data. §4 requires every asset to be inlined by emit time; an empty reference renders as nothing and the presenter finds out in the room.`,
         locus,
@@ -31164,6 +31201,7 @@ function scanModelAssets(proof) {
       }
       return;
     }
+    if (nestedOnly) return;
     const verdict = classifyUrl(uri);
     out.push(networkFinding({
       message: `${what} is ${describe(uri)} rather than an inlined data: URI (${verdict.ok ? 'not a data: URI' : verdict.reason}). `
@@ -31178,7 +31216,9 @@ function scanModelAssets(proof) {
     const locus = { assetId: logo.id };
     if (data.startsWith('<')) {
 
-      for (const finding of scanForNetworkReferences(data, { where: `logo ${logo.id}`, locus })) out.push(finding);
+      if (!nestedOnly) {
+        for (const finding of scanForNetworkReferences(data, { where: `logo ${logo.id}`, locus })) out.push(finding);
+      }
       continue;
     }
     checkInlined(data, `Logo "${logo.variant}" (${logo.id})`, locus);
@@ -31201,6 +31241,7 @@ __exports["W3C_NAMESPACES"] = W3C_NAMESPACES;
 __exports["URL_ALLOWLIST"] = URL_ALLOWLIST;
 __exports["URL_ATTRS"] = URL_ATTRS;
 __exports["SRCSET_ATTRS"] = SRCSET_ATTRS;
+__exports["TEXT_ATTRS"] = TEXT_ATTRS;
 __exports["JS_NETWORK_TOKENS"] = JS_NETWORK_TOKENS;
 __exports["isW3cNamespace"] = isW3cNamespace;
 __exports["classifyUrl"] = classifyUrl;
@@ -32363,13 +32404,11 @@ function assertProvenance(proof, html, css, options = {}) {
 
   const needingLabel = (proof.renditions || []).filter(requiresProvenanceLabel);
 
-  if (options.labelDisableRequested && reviewReachable && needingLabel.length > 0) {
-    findings.push(provenanceFinding(
-      `This build is reachable in Review mode (mode: "${mode}") and carries ${needingLabel.length} rendition(s) that are not client-supplied, `
-      + 'so `labelIllustrativeContent` cannot be disabled (§9). The emit is refused rather than quietly overridden.',
-      { check: 'label-option' },
-    ));
-  }
+  const optionFinding = labelOptionFinding(proof, {
+    labelDisableRequested: options.labelDisableRequested,
+    mode,
+  });
+  if (optionFinding) findings.push(optionFinding);
 
   if (needingLabel.length === 0) return findings;
 
@@ -32481,6 +32520,19 @@ function assertProvenance(proof, html, css, options = {}) {
   return findings;
 }
 
+function labelOptionFinding(proof, options = {}) {
+  if (!options.labelDisableRequested) return null;
+  const mode = options.mode || (proof.emitOptions && proof.emitOptions.mode) || 'both';
+  if (mode !== 'review' && mode !== 'both') return null;
+  const needingLabel = (proof.renditions || []).filter(requiresProvenanceLabel);
+  if (needingLabel.length === 0) return null;
+  return provenanceFinding(
+    `This build is reachable in Review mode (mode: "${mode}") and carries ${needingLabel.length} rendition(s) that are not client-supplied, `
+    + 'so `labelIllustrativeContent` cannot be disabled (§9). The emit is refused rather than quietly overridden.',
+    { check: 'label-option' },
+  );
+}
+
 function chainStartsWith(chain, prefixChain) {
   if (chain.length < prefixChain.length) return false;
   for (let i = 0; i < prefixChain.length; i++) {
@@ -32510,6 +32562,7 @@ __exports["renditionAppearsIn"] = renditionAppearsIn;
 __exports["judgeLabelStyle"] = judgeLabelStyle;
 __exports["resolveBackground"] = resolveBackground;
 __exports["assertProvenance"] = assertProvenance;
+__exports["labelOptionFinding"] = labelOptionFinding;
 __exports["requiresProvenanceLabel"] = __require("emit/promotion.js").requiresProvenanceLabel;
 __exports["hasPromotionRecord"] = __require("emit/promotion.js").hasPromotionRecord;
 __exports["promotionRecord"] = __require("emit/promotion.js").promotionRecord;
@@ -33209,363 +33262,6 @@ __exports["applyReplacements"] = applyReplacements;
 __exports["budgetAssets"] = budgetAssets;
 __exports["sizeBudgetFinding"] = sizeBudgetFinding;
 };
-__modules["emit/emit.js"] = function (__exports, __require) {
-
-const { ok, err } = __require("core/result.js");
-const { normalizeEmitOptions, validateProofShape } = __require("core/contracts.js");
-const { utf8Length } = __require("core/bytes.js");
-const { contentId } = __require("core/ids.js");
-const { stableStringify } = __require("core/hash.js");
-const { toHtml } = __require("core/vdom.js");
-const { Runtime } = __require("runtime/runtime.js");
-const { getLayout } = __require("runtime/layouts.js");
-const { encodePayload, splitMedia } = __require("emit/model.js");
-const { ppRehydrateMedia } = __require("emit/artifact-runtime.js");
-const { inlineRuntime } = __require("emit/document.js");
-const { compileFallbackTheme, compileFontFaces } = __require("emit/theme.js");
-const { scanForNetworkReferences, scanModelAssets } = __require("emit/scan.js");
-const { assertProvenance, allScenesOf } = __require("emit/provenance.js");
-const { budgetAssets, collectAssets, sizeBudgetFinding } = __require("emit/budget.js");
-
-const STALE_CAPTURE_DAYS = 30;
-
-const BUDGET_PASSES = 4;
-
-async function emit(proof, options, deps) {
-  if (!deps || typeof deps !== 'object') {
-    return err('emit: deps is required — the emitter never reads the filesystem, so {runtimeJs, runtimeCss, clock} must be supplied');
-  }
-  const { runtimeJs, runtimeCss, clock } = deps;
-  if (typeof runtimeJs !== 'string' || runtimeJs.trim() === '') {
-    return err('emit: deps.runtimeJs must be the bundled presentation runtime; an artifact without it cannot be navigated');
-  }
-  if (typeof runtimeCss !== 'string') {
-    return err('emit: deps.runtimeCss must be a string (it may be empty, but it must be supplied deliberately)');
-  }
-  if (typeof clock !== 'function') {
-    return err('emit: deps.clock must be an injected clock returning an ISO string (§5 — no lane reads the wall clock directly)');
-  }
-
-  const shapeErrors = validateProofShape(proof);
-  if (shapeErrors.length) {
-    return err(`emit: the proof does not satisfy the §4 contract:\n  ${shapeErrors.join('\n  ')}`, shapeErrors);
-  }
-
-  const requestedOptions = { ...(proof.emitOptions || {}), ...(options || {}) };
-  const emitOptions = normalizeEmitOptions(requestedOptions);
-  const labelDisableRequested = requestedOptions.labelIllustrativeContent === false;
-
-  const missingLayouts = layoutsMissingFor(proof);
-  if (missingLayouts.length) {
-    return err(
-      `emit: no layout is registered for ${missingLayouts.map((l) => `"${l}"`).join(', ')}. `
-      + 'Register L8\'s layouts (registerAllLayouts()) before emitting — otherwise the artifact would ship placeholder cards where the proof should be.',
-      missingLayouts,
-    );
-  }
-
-  const themeCss = typeof deps.themeCss === 'string' && deps.themeCss.trim()
-    ? deps.themeCss
-    : compileFallbackTheme(proof.brand).css;
-  const fontCss = compileFontFaces(deps.fonts || []);
-  const userCss = typeof deps.userCss === 'string' ? deps.userCss : '';
-  const finalCss = [runtimeCss, fontCss, themeCss, userCss].filter((s) => s && s.trim()).join('\n\n');
-
-  const original = stripPresenterNotes({ ...proof, emitOptions }, emitOptions.includePresenterNotes);
-  let working = original;
-
-  let degradations = [];
-
-  let undegradable = [];
-  let built = buildDocument(working, { runtimeJs, runtimeCss, themeCss, userCss, fontCss });
-
-  for (let pass = 0; pass < BUDGET_PASSES && built.bytes > emitOptions.maxBytes; pass++) {
-    const assetBytes = collectAssets(working).reduce((sum, a) => sum + a.bytes, 0);
-    const reserveBytes = Math.max(0, built.bytes - assetBytes);
-
-    const budgeted = budgetAssets(original, emitOptions.maxBytes, {
-      reserveBytes,
-      renderScene: built.renderScene,
-      quality: emitOptions.imageQuality,
-      resample: deps.resample,
-    });
-    if (budgeted.plan.length === 0) { undegradable = budgeted.undegradable; break; }
-    degradations = budgeted.plan;
-    undegradable = budgeted.undegradable;
-    working = budgeted.proof;
-    built = buildDocument(working, { runtimeJs, runtimeCss, themeCss, userCss, fontCss });
-  }
-
-  const { html, bytes, renderScene, reconstructed, encoded } = built;
-
-  const findings = [];
-
-  findings.push(...scanForNetworkReferences(html, { where: 'artifact document' }));
-
-  findings.push(...scanModelAssets(reconstructed));
-
-  for (const { scene, branchId } of allScenesOf(reconstructed)) {
-    const sceneHtml = toHtml(renderScene(scene));
-    findings.push(...scanForNetworkReferences(sceneHtml, {
-      where: `scene ${scene.id}`,
-      locus: branchId ? { sceneId: scene.id, branchId } : { sceneId: scene.id },
-    }));
-  }
-
-  findings.push(...assertProvenance(reconstructed, html, finalCss, {
-    renderScene,
-    labelDisableRequested,
-    mode: emitOptions.mode,
-  }));
-
-  findings.push(...staleCaptureFindings(reconstructed, clock));
-
-  if (bytes > emitOptions.maxBytes) {
-    const over = bytes - emitOptions.maxBytes;
-    const blocked = undegradable.length
-      ? ` ${undegradable.length} asset(s) could not be degraded: ${undegradable.slice(0, 5).map((u) => `${u.assetId} (${u.bytes} bytes — ${u.reason})`).join('; ')}.`
-      : '';
-    findings.push(sizeBudgetFinding(
-      `The artifact is ${bytes} bytes, ${over} over the ${emitOptions.maxBytes}-byte budget, after ${degradations.length} degradation(s).${blocked}`,
-      { assetId: undegradable.length ? undegradable[0].assetId : undefined, bytes, maxBytes: emitOptions.maxBytes, over },
-    ));
-  }
-
-  const blocking = findings.filter((f) => f.severity === 1);
-  const result = {
-    html: blocking.length ? '' : html,
-    bytes: blocking.length ? 0 : bytes,
-    findings,
-    degradations,
-    compression: { mode: encoded.mode, modelBytes: encoded.modelBytes, mediaBytes: encoded.mediaBytes },
-    measured: encoded.measured,
-    undegradable,
-  };
-
-  if (blocking.length) {
-    const lines = blocking.map((f, i) => `  ${i + 1}. [${f.code}] ${f.message}${locusSuffix(f.locus)}`);
-    return err(
-      `emit refused: ${blocking.length} severity-1 finding(s) block this artifact. `
-      + 'There is no override flag (§14).\n' + lines.join('\n'),
-      result,
-    );
-  }
-
-  return ok(result);
-}
-
-function stripPresenterNotes(proof, keep) {
-  if (keep) return proof;
-  const scrub = (scene) => ({
-    ...scene,
-    beats: (scene.beats || []).map((b) => (b.presenterNote === null ? b : { ...b, presenterNote: null })),
-  });
-  return {
-    ...proof,
-    spine: (proof.spine || []).map(scrub),
-    branches: (proof.branches || []).map((b) => ({ ...b, scenes: (b.scenes || []).map(scrub) })),
-  };
-}
-
-function layoutsMissingFor(proof) {
-
-  const used = new Set();
-  for (const scene of proof.spine || []) used.add(scene.layout);
-  for (const branch of proof.branches || []) for (const scene of branch.scenes || []) used.add(scene.layout);
-  return [...used].filter((name) => !getLayout(name)).sort();
-}
-
-function buildDocument(proof, parts) {
-  const encoded = encodePayload(proof);
-  const split = splitMedia(proof);
-  const reconstructed = ppRehydrateMedia(JSON.parse(stableStringify(split.model)), split.table);
-
-  const runtime = new Runtime(reconstructed, {});
-  const renderScene = (scene) => runtime.renderScene(scene);
-  const firstPaintHtml = toHtml(runtime.render());
-
-  const html = inlineRuntime({
-    runtimeJs: parts.runtimeJs,
-    runtimeCss: parts.runtimeCss,
-    themeCss: parts.themeCss,
-    userCss: parts.userCss,
-    fontCss: parts.fontCss,
-    proof: reconstructed,
-    firstPaintHtml,
-    payload: encoded.payload,
-    mediaText: encoded.mediaText,
-    mode: encoded.mode,
-    bootSource: encoded.bootSource,
-  });
-
-  return { html, bytes: utf8Length(html), renderScene, reconstructed, runtime, encoded, firstPaintHtml };
-}
-
-function staleCaptureFindings(proof, clock) {
-
-  const out = [];
-  let nowMs;
-  try { nowMs = Date.parse(clock()); } catch { return out; }
-  if (!Number.isFinite(nowMs)) return out;
-
-  for (const specimen of proof.specimens || []) {
-    const capturedMs = Date.parse(specimen.capturedAt);
-    if (!Number.isFinite(capturedMs)) continue;
-    const ageDays = Math.floor((nowMs - capturedMs) / 86_400_000);
-    if (ageDays <= STALE_CAPTURE_DAYS) continue;
-    const message = `Specimen "${specimen.title}" was captured ${ageDays} days ago. §6 flags anything older than ${STALE_CAPTURE_DAYS} days at emit time — the prospect's page may have moved on.`;
-    out.push({
-      id: contentId('finding', { code: 'STALE_CAPTURE', specimenId: specimen.id, ageDays }),
-      severity: 3,
-      code: 'STALE_CAPTURE',
-      message,
-      locus: { specimenId: specimen.id },
-      autoFixAvailable: false,
-    });
-  }
-  return out;
-}
-
-function locusSuffix(locus) {
-  const parts = [];
-  if (locus.sceneId) parts.push(`scene ${locus.sceneId}`);
-  if (locus.branchId) parts.push(`branch ${locus.branchId}`);
-  if (locus.renditionId) parts.push(`rendition ${locus.renditionId}`);
-  if (locus.assetId) parts.push(`asset ${locus.assetId}`);
-  if (locus.where) parts.push(String(locus.where));
-  if (locus.line) parts.push(`line ${locus.line}:${locus.column}`);
-  return parts.length ? `  [${parts.join(', ')}]` : '';
-}
-
-__exports["STALE_CAPTURE_DAYS"] = STALE_CAPTURE_DAYS;
-__exports["emit"] = emit;
-__exports["stripPresenterNotes"] = stripPresenterNotes;
-__exports["layoutsMissingFor"] = layoutsMissingFor;
-__exports["buildDocument"] = buildDocument;
-__exports["staleCaptureFindings"] = staleCaptureFindings;
-};
-__modules["emit/index.js"] = function (__exports, __require) {
-
-__exports["emit"] = __require("emit/emit.js").emit;
-__exports["buildDocument"] = __require("emit/emit.js").buildDocument;
-__exports["layoutsMissingFor"] = __require("emit/emit.js").layoutsMissingFor;
-__exports["staleCaptureFindings"] = __require("emit/emit.js").staleCaptureFindings;
-__exports["stripPresenterNotes"] = __require("emit/emit.js").stripPresenterNotes;
-__exports["STALE_CAPTURE_DAYS"] = __require("emit/emit.js").STALE_CAPTURE_DAYS;
-__exports["scanForNetworkReferences"] = __require("emit/scan.js").scanForNetworkReferences;
-__exports["scanModelAssets"] = __require("emit/scan.js").scanModelAssets;
-__exports["scanCss"] = __require("emit/scan.js").scanCss;
-__exports["scanJs"] = __require("emit/scan.js").scanJs;
-__exports["scanAbsoluteUrls"] = __require("emit/scan.js").scanAbsoluteUrls;
-__exports["scanNestedDataUri"] = __require("emit/scan.js").scanNestedDataUri;
-__exports["classifyUrl"] = __require("emit/scan.js").classifyUrl;
-__exports["isW3cNamespace"] = __require("emit/scan.js").isW3cNamespace;
-__exports["parseSrcset"] = __require("emit/scan.js").parseSrcset;
-__exports["networkFinding"] = __require("emit/scan.js").networkFinding;
-__exports["W3C_NAMESPACES"] = __require("emit/scan.js").W3C_NAMESPACES;
-__exports["URL_ALLOWLIST"] = __require("emit/scan.js").URL_ALLOWLIST;
-__exports["URL_ATTRS"] = __require("emit/scan.js").URL_ATTRS;
-__exports["SRCSET_ATTRS"] = __require("emit/scan.js").SRCSET_ATTRS;
-__exports["JS_NETWORK_TOKENS"] = __require("emit/scan.js").JS_NETWORK_TOKENS;
-__exports["assertProvenance"] = __require("emit/provenance.js").assertProvenance;
-__exports["judgeLabelStyle"] = __require("emit/provenance.js").judgeLabelStyle;
-__exports["resolveBackground"] = __require("emit/provenance.js").resolveBackground;
-__exports["describeElement"] = __require("emit/provenance.js").describeElement;
-__exports["walkWithChain"] = __require("emit/provenance.js").walkWithChain;
-__exports["renditionAppearsIn"] = __require("emit/provenance.js").renditionAppearsIn;
-__exports["documentChainPrefix"] = __require("emit/provenance.js").documentChainPrefix;
-__exports["allScenesOf"] = __require("emit/provenance.js").allScenesOf;
-__exports["nodeText"] = __require("emit/provenance.js").nodeText;
-__exports["provenanceFinding"] = __require("emit/provenance.js").provenanceFinding;
-__exports["PROVENANCE_LABEL_CLASS"] = __require("emit/provenance.js").PROVENANCE_LABEL_CLASS;
-__exports["MIN_LABEL_FONT_PX"] = __require("emit/provenance.js").MIN_LABEL_FONT_PX;
-__exports["RENDITION_ATTR"] = __require("emit/provenance.js").RENDITION_ATTR;
-__exports["promotionRecord"] = __require("emit/promotion.js").promotionRecord;
-__exports["hasPromotionRecord"] = __require("emit/promotion.js").hasPromotionRecord;
-__exports["requiresProvenanceLabel"] = __require("emit/promotion.js").requiresProvenanceLabel;
-__exports["isUnearnedVerification"] = __require("emit/promotion.js").isUnearnedVerification;
-__exports["budgetAssets"] = __require("emit/budget.js").budgetAssets;
-__exports["collectAssets"] = __require("emit/budget.js").collectAssets;
-__exports["dedupeAssets"] = __require("emit/budget.js").dedupeAssets;
-__exports["rankAssets"] = __require("emit/budget.js").rankAssets;
-__exports["locateAssets"] = __require("emit/budget.js").locateAssets;
-__exports["degradeAsset"] = __require("emit/budget.js").degradeAsset;
-__exports["minifySvg"] = __require("emit/budget.js").minifySvg;
-__exports["applyReplacements"] = __require("emit/budget.js").applyReplacements;
-__exports["beatIndexResolver"] = __require("emit/budget.js").beatIndexResolver;
-__exports["sizeBudgetFinding"] = __require("emit/budget.js").sizeBudgetFinding;
-__exports["predictEmittedBytes"] = __require("emit/budget.js").predictEmittedBytes;
-__exports["dataUriPrefixBytes"] = __require("emit/budget.js").dataUriPrefixBytes;
-__exports["SCALE_LADDER"] = __require("emit/budget.js").SCALE_LADDER;
-__exports["PNG_CONTAINER_BYTES"] = __require("emit/budget.js").PNG_CONTAINER_BYTES;
-__exports["inlineRuntime"] = __require("emit/document.js").inlineRuntime;
-__exports["documentLanguage"] = __require("emit/document.js").documentLanguage;
-__exports["jsonForScript"] = __require("emit/document.js").jsonForScript;
-__exports["STAGE_ROOT_ID"] = __require("emit/document.js").STAGE_ROOT_ID;
-__exports["PRERENDERED_ATTR"] = __require("emit/document.js").PRERENDERED_ATTR;
-__exports["MODEL_ELEMENT_ID"] = __require("emit/document.js").MODEL_ELEMENT_ID;
-__exports["MEDIA_ELEMENT_ID"] = __require("emit/document.js").MEDIA_ELEMENT_ID;
-__exports["INERT_SCRIPT_TYPE"] = __require("emit/document.js").INERT_SCRIPT_TYPE;
-__exports["encodePayload"] = __require("emit/model.js").encodePayload;
-__exports["splitMedia"] = __require("emit/model.js").splitMedia;
-__exports["isExtractableMedia"] = __require("emit/model.js").isExtractableMedia;
-__exports["MEDIA_PLACEHOLDER_FLOOR"] = __require("emit/model.js").MEDIA_PLACEHOLDER_FLOOR;
-__exports["ppBase64ToBytes"] = __require("emit/artifact-runtime.js").ppBase64ToBytes;
-__exports["ppInflateRaw"] = __require("emit/artifact-runtime.js").ppInflateRaw;
-__exports["ppUtf8Decode"] = __require("emit/artifact-runtime.js").ppUtf8Decode;
-__exports["ppRehydrateMedia"] = __require("emit/artifact-runtime.js").ppRehydrateMedia;
-__exports["ppDecodePayload"] = __require("emit/artifact-runtime.js").ppDecodePayload;
-__exports["ppDecodePayloadRaw"] = __require("emit/artifact-runtime.js").ppDecodePayloadRaw;
-__exports["ppBootArtifact"] = __require("emit/artifact-runtime.js").ppBootArtifact;
-__exports["artifactRuntimeSource"] = __require("emit/artifact-runtime.js").artifactRuntimeSource;
-__exports["compileFallbackTheme"] = __require("emit/theme.js").compileFallbackTheme;
-__exports["compileFontFaces"] = __require("emit/theme.js").compileFontFaces;
-__exports["quoteFamily"] = __require("emit/theme.js").quoteFamily;
-__exports["stackFor"] = __require("emit/theme.js").stackFor;
-__exports["ROLE_VARS"] = __require("emit/theme.js").ROLE_VARS;
-__exports["parseStylesheet"] = __require("emit/css.js").parseStylesheet;
-__exports["parseSelector"] = __require("emit/css.js").parseSelector;
-__exports["parseDeclarations"] = __require("emit/css.js").parseDeclarations;
-__exports["computeCascade"] = __require("emit/css.js").computeCascade;
-__exports["matchesSelector"] = __require("emit/css.js").matchesSelector;
-__exports["specificityOf"] = __require("emit/css.js").specificityOf;
-__exports["resolveVars"] = __require("emit/css.js").resolveVars;
-__exports["resolveFontSize"] = __require("emit/css.js").resolveFontSize;
-__exports["parseOpacity"] = __require("emit/css.js").parseOpacity;
-__exports["backgroundColorOf"] = __require("emit/css.js").backgroundColorOf;
-__exports["conditionsApply"] = __require("emit/css.js").conditionsApply;
-__exports["splitSelectorList"] = __require("emit/css.js").splitSelectorList;
-__exports["TRACKED_PROPS"] = __require("emit/css.js").TRACKED_PROPS;
-__exports["INHERITED_PROPS"] = __require("emit/css.js").INHERITED_PROPS;
-__exports["parseColor"] = __require("emit/color-value.js").parseColor;
-__exports["contrastRatio"] = __require("emit/color-value.js").contrastRatio;
-__exports["relativeLuminance"] = __require("emit/color-value.js").relativeLuminance;
-__exports["compositeOver"] = __require("emit/color-value.js").compositeOver;
-__exports["oklabToSrgb"] = __require("emit/color-value.js").oklabToSrgb;
-__exports["oklchToSrgb"] = __require("emit/color-value.js").oklchToSrgb;
-__exports["hslToRgb"] = __require("emit/color-value.js").hslToRgb;
-__exports["hwbToRgb"] = __require("emit/color-value.js").hwbToRgb;
-__exports["splitArgs"] = __require("emit/color-value.js").splitArgs;
-__exports["splitComponents"] = __require("emit/color-value.js").splitComponents;
-__exports["parseColorMix"] = __require("emit/color-value.js").parseColorMix;
-__exports["NAMED_COLORS"] = __require("emit/color-value.js").NAMED_COLORS;
-__exports["tokenizeHtml"] = __require("emit/scan-parse.js").tokenizeHtml;
-__exports["maskJs"] = __require("emit/scan-parse.js").maskJs;
-__exports["maskCss"] = __require("emit/scan-parse.js").maskCss;
-__exports["lineColOf"] = __require("emit/scan-parse.js").lineColOf;
-__exports["excerptAt"] = __require("emit/scan-parse.js").excerptAt;
-__exports["decodeEntities"] = __require("emit/scan-parse.js").decodeEntities;
-__exports["RAW_TEXT_TAGS"] = __require("emit/scan-parse.js").RAW_TEXT_TAGS;
-__exports["VOID_TAGS"] = __require("emit/scan-parse.js").VOID_TAGS;
-__exports["decodePng"] = __require("emit/png.js").decodePng;
-__exports["encodePng"] = __require("emit/png.js").encodePng;
-__exports["rescalePng"] = __require("emit/png.js").rescalePng;
-__exports["resample"] = __require("emit/png.js").resample;
-__exports["pngSize"] = __require("emit/png.js").pngSize;
-__exports["isPng"] = __require("emit/png.js").isPng;
-__exports["readChunks"] = __require("emit/png.js").readChunks;
-__exports["adler32"] = __require("emit/png.js").adler32;
-};
 __modules["validate/severity.js"] = function (__exports, __require) {
 
 const { FINDING_CODES, FIXED_SEVERITY } = __require("core/contracts.js");
@@ -33849,12 +33545,19 @@ function resolveBoxFace(family, brand, weight = 400) {
   if (face) for (const name of face.fallbackStack || []) push(name);
 
   let chosen = null;
+  let chosenIsGeneric = false;
   for (const name of stack) {
     const key = normalizeFamily(name);
-    if (GENERIC_FAMILIES.has(key) || availKeys.has(key)) { chosen = name; break; }
+    if (GENERIC_FAMILIES.has(key) || availKeys.has(key)) {
+      chosen = name;
+      chosenIsGeneric = GENERIC_FAMILIES.has(key) && !availKeys.has(key);
+      break;
+    }
   }
 
   const base = resolveFace(requested, { available, weight });
+
+  const landsOnDefault = chosen === null || chosenIsGeneric;
 
   const merged = () => {
     const out = stack.slice();
@@ -33863,16 +33566,18 @@ function resolveBoxFace(family, brand, weight = 400) {
     }
     return out;
   };
-  if (chosen === null) return { ...base, stack: stack.length ? merged() : base.stack };
+  if (chosen === null) return { ...base, stack: stack.length ? merged() : base.stack, landsOnDefault };
   if (normalizeFamily(chosen) === normalizeFamily(base.resolved)) {
-    return { ...base, stack: merged() };
+    return { ...base, stack: merged(), landsOnDefault };
   }
   return {
     ...base,
     resolved: chosen,
     stack,
-    metricDelta: metricDelta(requested, chosen, weight),
+
+    metricDelta: base.known ? metricDelta(requested, chosen, weight) : null,
     available: normalizeFamily(chosen) === normalizeFamily(requested),
+    landsOnDefault,
   };
 }
 
@@ -33988,11 +33693,18 @@ function substitutionClause(face) {
   if (face.available && normalizeFamily(face.requested) === normalizeFamily(face.resolved)) {
     return `Set in ${face.requested}, which is the face that renders.`;
   }
-  const delta = face.metricDelta.avgAdvance;
-  const drift = delta === 1
-    ? 'identical advance widths'
-    : `${delta > 1 ? '+' : ''}${((delta - 1) * 100).toFixed(1)}% average advance`;
+  const delta = advanceDeltaOf(face);
+  const drift = delta === null
+    ? 'how much that moves the advance is unknown — this build holds no published metrics for the requested face, so the measurement above is the fallback\'s own'
+    : delta === 1
+      ? 'identical advance widths'
+      : `${delta > 1 ? '+' : ''}${((delta - 1) * 100).toFixed(1)}% average advance`;
   return `"${face.requested}" is not available to the artifact and substitutes to ${face.resolved} (${drift}), which is what this was measured against.`;
+}
+
+function advanceDeltaOf(face) {
+  const delta = face && face.metricDelta;
+  return delta && typeof delta.avgAdvance === 'number' ? delta.avgAdvance : null;
 }
 
 function detectBoxOverflow(box, where, brand) {
@@ -34019,7 +33731,7 @@ function detectBoxOverflow(box, where, brand) {
     textOverflow: truncation.mode,
     textOverflowDeclared: truncation.known,
     faceAvailable: face.available,
-    advanceDelta: face.metricDelta.avgAdvance,
+    advanceDelta: advanceDeltaOf(face),
     fontSizePx: style.fontSizePx,
     lineCount: full.lineCount,
   };
@@ -34154,6 +33866,7 @@ __exports["layOutBox"] = layOutBox;
 __exports["classifyExcess"] = classifyExcess;
 __exports["fittingFontSizePx"] = fittingFontSizePx;
 __exports["fittingCharCount"] = fittingCharCount;
+__exports["advanceDeltaOf"] = advanceDeltaOf;
 __exports["detectBoxOverflow"] = detectBoxOverflow;
 __exports["detectOverflow"] = detectOverflow;
 __exports["faceResolutions"] = faceResolutions;
@@ -34418,7 +34131,7 @@ const { utf8Length, parseDataUri } = __require("core/bytes.js");
 const { sceneRevealsNothing } = __require("runtime/beats.js");
 const { makeFinding, sortFindings } = __require("validate/finding.js");
 const { severityOf } = __require("validate/severity.js");
-const { detectOverflow, faceResolutions, resolveBoxFace } = __require("validate/overflow.js");
+const { detectOverflow, faceResolutions, resolveBoxFace, advanceDeltaOf } = __require("validate/overflow.js");
 const { checkContrast } = __require("validate/contrast.js");
 const { hasPromotionRecord, reviewReachable, renderedRenditionIds, scenesShowing } = __require("validate/provenance.js");
 
@@ -34635,11 +34348,12 @@ const fontUnavailable = {
       if (resolution.available) continue;
 
       const recommended = resolution.stack;
-      const declared = face.fallbackStack || [];
-      const improvable = recommended.length !== declared.length
-        || recommended.some((name, i) => name !== declared[i]);
-      const delta = resolution.metricDelta.avgAdvance;
-      const drift = `${delta > 1 ? '+' : ''}${((delta - 1) * 100).toFixed(1)}%`;
+      const improvable = resolution.landsOnDefault === true;
+
+      const delta = advanceDeltaOf(resolution);
+      const drift = delta === null
+        ? 'no published metrics, so the movement is unmeasured'
+        : `${delta > 1 ? '+' : ''}${((delta - 1) * 100).toFixed(1)}% average advance`;
       const confidence = `${Math.round(resolution.confidence * 100)}%`;
       out.push(makeFinding({
         code: 'FONT_UNAVAILABLE',
@@ -35181,6 +34895,501 @@ __exports["externalRefsIn"] = externalRefsIn;
 __exports["RULES"] = RULES;
 __exports["ruleFor"] = ruleFor;
 };
+__modules["emit/gate.js"] = function (__exports, __require) {
+
+const { BREAKPOINTS } = __require("core/contracts.js");
+const { elementId } = __require("core/ids.js");
+const { collectByAttr } = __require("core/vdom.js");
+const { REVEAL_ATTR } = __require("runtime/beats.js");
+const { RULES } = __require("validate/rules.js");
+const { sortFindings } = __require("validate/finding.js");
+const { measureScene } = __require("scene/index.js");
+const { branchCoverage } = __require("branch/index.js");
+const { contrastRatio } = __require("brand/color.js");
+const { scanForNetworkReferences } = __require("emit/scan.js");
+const { assertProvenance } = __require("emit/provenance.js");
+const { hasPromotionRecord } = __require("emit/promotion.js");
+
+const MEASURED_BY_EMIT = new Set(['SIZE_BUDGET_EXCEEDED']);
+
+function layoutContextFor(runtime, scene) {
+  const ctx = runtime.layoutContext(scene);
+  return { ...ctx, el: (path) => elementId(scene.id, path) };
+}
+
+function measureDeck(deck, runtime, breakpoints) {
+
+  const out = [];
+
+  const seen = new Set();
+  const sequences = [deck.spine, ...[...deck.sequences.values()].filter((s) => s.kind === 'branch')];
+  for (const sequence of sequences) {
+    for (const scene of sequence.scenes) {
+      if (seen.has(scene.id)) continue;
+      seen.add(scene.id);
+      const ctx = layoutContextFor(runtime, scene);
+      for (const breakpoint of breakpoints) {
+        const measurement = measureScene(scene, ctx, breakpoint.id);
+        if (!measurement) continue;
+        out.push({
+          sceneId: measurement.sceneId || scene.id,
+          breakpoint: measurement.breakpoint || breakpoint.id,
+          boxes: measurement.boxes || [],
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function renderedElementIds(deck, render) {
+
+  const out = new Map();
+  if (typeof render !== 'function') return out;
+  for (const scene of deck.sceneById.values()) {
+    let ids;
+    try {
+      ids = collectByAttr(render(scene), REVEAL_ATTR).map((el) => el.a[REVEAL_ATTR]).filter(Boolean);
+    } catch {
+
+      continue;
+    }
+    if (ids.length === 0) continue;
+    out.set(scene.id, new Set(ids));
+  }
+  return out;
+}
+
+function gateDeps() {
+  return {
+    contrastRatio,
+    measureScene,
+    branchCoverage,
+    scanForNetworkReferences,
+    assertProvenance,
+    hasPromotionRecord,
+  };
+}
+
+function runEmitGate(args) {
+  const breakpoints = args.breakpoints && args.breakpoints.length ? args.breakpoints : BREAKPOINTS.slice();
+  const ctx = {
+    renderScene: args.renderScene,
+    proof: args.proof,
+    deck: args.deck,
+    breakpoints,
+    measurements: measureDeck(args.deck, args.runtime, breakpoints),
+    renderedElementIds: renderedElementIds(args.deck, args.renderScene),
+    nowIso: args.nowIso,
+    runtimeJs: args.runtimeJs,
+    runtimeCss: args.runtimeCss,
+    html: args.html,
+    css: args.css,
+    deps: gateDeps(),
+  };
+
+  const findings = [];
+  for (const rule of RULES) {
+    if (MEASURED_BY_EMIT.has(rule.code)) continue;
+    findings.push(...rule.run(ctx));
+  }
+  return sortFindings(findings);
+}
+
+function gatedCodes() {
+  return RULES.map((r) => r.code).filter((c) => !MEASURED_BY_EMIT.has(c));
+}
+
+__exports["MEASURED_BY_EMIT"] = MEASURED_BY_EMIT;
+__exports["layoutContextFor"] = layoutContextFor;
+__exports["measureDeck"] = measureDeck;
+__exports["renderedElementIds"] = renderedElementIds;
+__exports["gateDeps"] = gateDeps;
+__exports["runEmitGate"] = runEmitGate;
+__exports["gatedCodes"] = gatedCodes;
+};
+__modules["emit/emit.js"] = function (__exports, __require) {
+
+const { ok, err } = __require("core/result.js");
+const { normalizeEmitOptions, validateProofShape } = __require("core/contracts.js");
+const { utf8Length } = __require("core/bytes.js");
+const { contentId } = __require("core/ids.js");
+const { stableStringify } = __require("core/hash.js");
+const { toHtml } = __require("core/vdom.js");
+const { Runtime } = __require("runtime/runtime.js");
+const { getLayout } = __require("runtime/layouts.js");
+const { encodePayload, splitMedia } = __require("emit/model.js");
+const { ppRehydrateMedia } = __require("emit/artifact-runtime.js");
+const { inlineRuntime } = __require("emit/document.js");
+const { compileFallbackTheme, compileFontFaces } = __require("emit/theme.js");
+const { scanForNetworkReferences, scanModelAssets } = __require("emit/scan.js");
+const { allScenesOf, labelOptionFinding } = __require("emit/provenance.js");
+const { budgetAssets, collectAssets, sizeBudgetFinding } = __require("emit/budget.js");
+const { runEmitGate } = __require("emit/gate.js");
+
+const STALE_CAPTURE_DAYS = 30;
+
+const BUDGET_PASSES = 4;
+
+async function emit(proof, options, deps) {
+  if (!deps || typeof deps !== 'object') {
+    return err('emit: deps is required — the emitter never reads the filesystem, so {runtimeJs, runtimeCss, clock} must be supplied');
+  }
+  const { runtimeJs, runtimeCss, clock } = deps;
+  if (typeof runtimeJs !== 'string' || runtimeJs.trim() === '') {
+    return err('emit: deps.runtimeJs must be the bundled presentation runtime; an artifact without it cannot be navigated');
+  }
+  if (typeof runtimeCss !== 'string') {
+    return err('emit: deps.runtimeCss must be a string (it may be empty, but it must be supplied deliberately)');
+  }
+  if (typeof clock !== 'function') {
+    return err('emit: deps.clock must be an injected clock returning an ISO string (§5 — no lane reads the wall clock directly)');
+  }
+
+  const shapeErrors = validateProofShape(proof);
+  if (shapeErrors.length) {
+    return err(`emit: the proof does not satisfy the §4 contract:\n  ${shapeErrors.join('\n  ')}`, shapeErrors);
+  }
+
+  const requestedOptions = { ...(proof.emitOptions || {}), ...(options || {}) };
+  const emitOptions = normalizeEmitOptions(requestedOptions);
+  const labelDisableRequested = requestedOptions.labelIllustrativeContent === false;
+
+  const missingLayouts = layoutsMissingFor(proof);
+  if (missingLayouts.length) {
+    return err(
+      `emit: no layout is registered for ${missingLayouts.map((l) => `"${l}"`).join(', ')}. `
+      + 'Register L8\'s layouts (registerAllLayouts()) before emitting — otherwise the artifact would ship placeholder cards where the proof should be.',
+      missingLayouts,
+    );
+  }
+
+  const themeCss = typeof deps.themeCss === 'string' && deps.themeCss.trim()
+    ? deps.themeCss
+    : compileFallbackTheme(proof.brand).css;
+  const fontCss = compileFontFaces(deps.fonts || []);
+  const userCss = typeof deps.userCss === 'string' ? deps.userCss : '';
+  const finalCss = [runtimeCss, fontCss, themeCss, userCss].filter((s) => s && s.trim()).join('\n\n');
+
+  const original = stripPresenterNotes({ ...proof, emitOptions }, emitOptions.includePresenterNotes);
+  let working = original;
+
+  let degradations = [];
+
+  let undegradable = [];
+  let built = buildDocument(working, { runtimeJs, runtimeCss, themeCss, userCss, fontCss });
+
+  for (let pass = 0; pass < BUDGET_PASSES && built.bytes > emitOptions.maxBytes; pass++) {
+    const assetBytes = collectAssets(working).reduce((sum, a) => sum + a.bytes, 0);
+    const reserveBytes = Math.max(0, built.bytes - assetBytes);
+
+    const budgeted = budgetAssets(original, emitOptions.maxBytes, {
+      reserveBytes,
+      renderScene: built.renderScene,
+      quality: emitOptions.imageQuality,
+      resample: deps.resample,
+    });
+    if (budgeted.plan.length === 0) { undegradable = budgeted.undegradable; break; }
+    degradations = budgeted.plan;
+    undegradable = budgeted.undegradable;
+    working = budgeted.proof;
+    built = buildDocument(working, { runtimeJs, runtimeCss, themeCss, userCss, fontCss });
+  }
+
+  const { html, bytes, renderScene, reconstructed, encoded } = built;
+
+  const findings = [];
+
+  let nowIso = null;
+  try { nowIso = clock(); } catch { nowIso = null; }
+  try {
+    findings.push(...runEmitGate({
+      proof: reconstructed,
+      deck: built.runtime.deck,
+      runtime: built.runtime,
+      renderScene,
+      html,
+      css: finalCss,
+      runtimeJs,
+      runtimeCss,
+      nowIso: typeof nowIso === 'string' ? nowIso : null,
+    }));
+  } catch (error) {
+    return err(
+      `emit: the §14 gate could not run, so this artifact cannot be shown to be clean: ${error && error.message ? error.message : error}. `
+      + 'The emit is refused rather than shipped unchecked.',
+      error,
+    );
+  }
+
+  for (const { scene, branchId } of allScenesOf(reconstructed)) {
+    const sceneHtml = toHtml(renderScene(scene));
+    findings.push(...scanForNetworkReferences(sceneHtml, {
+      where: `scene ${scene.id}`,
+      locus: branchId ? { sceneId: scene.id, branchId } : { sceneId: scene.id },
+    }));
+  }
+
+  findings.push(...scanModelAssets(reconstructed, { nestedOnly: true }));
+
+  const optionFinding = labelOptionFinding(reconstructed, { labelDisableRequested, mode: emitOptions.mode });
+  if (optionFinding) findings.push(optionFinding);
+
+  if (bytes > emitOptions.maxBytes) {
+    const over = bytes - emitOptions.maxBytes;
+    const blocked = undegradable.length
+      ? ` ${undegradable.length} asset(s) could not be degraded: ${undegradable.slice(0, 5).map((u) => `${u.assetId} (${u.bytes} bytes — ${u.reason})`).join('; ')}.`
+      : '';
+    findings.push(sizeBudgetFinding(
+      `The artifact is ${bytes} bytes, ${over} over the ${emitOptions.maxBytes}-byte budget, after ${degradations.length} degradation(s).${blocked}`,
+      { assetId: undegradable.length ? undegradable[0].assetId : undefined, bytes, maxBytes: emitOptions.maxBytes, over },
+    ));
+  }
+
+  const blocking = findings.filter((f) => f.severity === 1);
+  const result = {
+    html: blocking.length ? '' : html,
+    bytes: blocking.length ? 0 : bytes,
+    findings,
+    degradations,
+    compression: { mode: encoded.mode, modelBytes: encoded.modelBytes, mediaBytes: encoded.mediaBytes },
+    measured: encoded.measured,
+    undegradable,
+  };
+
+  if (blocking.length) {
+    const lines = blocking.map((f, i) => `  ${i + 1}. [${f.code}] ${f.message}${locusSuffix(f.locus)}`);
+    return err(
+      `emit refused: ${blocking.length} severity-1 finding(s) block this artifact. `
+      + 'There is no override flag (§14).\n' + lines.join('\n'),
+      result,
+    );
+  }
+
+  return ok(result);
+}
+
+function stripPresenterNotes(proof, keep) {
+  if (keep) return proof;
+  const scrub = (scene) => ({
+    ...scene,
+    beats: (scene.beats || []).map((b) => (b.presenterNote === null ? b : { ...b, presenterNote: null })),
+  });
+  return {
+    ...proof,
+    spine: (proof.spine || []).map(scrub),
+    branches: (proof.branches || []).map((b) => ({ ...b, scenes: (b.scenes || []).map(scrub) })),
+  };
+}
+
+function layoutsMissingFor(proof) {
+
+  const used = new Set();
+  for (const scene of proof.spine || []) used.add(scene.layout);
+  for (const branch of proof.branches || []) for (const scene of branch.scenes || []) used.add(scene.layout);
+  return [...used].filter((name) => !getLayout(name)).sort();
+}
+
+function buildDocument(proof, parts) {
+  const encoded = encodePayload(proof);
+  const split = splitMedia(proof);
+  const reconstructed = ppRehydrateMedia(JSON.parse(stableStringify(split.model)), split.table);
+
+  const runtime = new Runtime(reconstructed, {});
+  const renderScene = (scene) => runtime.renderScene(scene);
+  const firstPaintHtml = toHtml(runtime.render());
+
+  const html = inlineRuntime({
+    runtimeJs: parts.runtimeJs,
+    runtimeCss: parts.runtimeCss,
+    themeCss: parts.themeCss,
+    userCss: parts.userCss,
+    fontCss: parts.fontCss,
+    proof: reconstructed,
+    firstPaintHtml,
+    payload: encoded.payload,
+    mediaText: encoded.mediaText,
+    mode: encoded.mode,
+    bootSource: encoded.bootSource,
+  });
+
+  return { html, bytes: utf8Length(html), renderScene, reconstructed, runtime, encoded, firstPaintHtml };
+}
+
+function staleCaptureFindings(proof, clock) {
+
+  const out = [];
+  let nowMs;
+  try { nowMs = Date.parse(clock()); } catch { return out; }
+  if (!Number.isFinite(nowMs)) return out;
+
+  for (const specimen of proof.specimens || []) {
+    const capturedMs = Date.parse(specimen.capturedAt);
+    if (!Number.isFinite(capturedMs)) continue;
+    const ageDays = Math.floor((nowMs - capturedMs) / 86_400_000);
+    if (ageDays <= STALE_CAPTURE_DAYS) continue;
+    const message = `Specimen "${specimen.title}" was captured ${ageDays} days ago. §6 flags anything older than ${STALE_CAPTURE_DAYS} days at emit time — the prospect's page may have moved on.`;
+    out.push({
+      id: contentId('finding', { code: 'STALE_CAPTURE', specimenId: specimen.id, ageDays }),
+      severity: 3,
+      code: 'STALE_CAPTURE',
+      message,
+      locus: { specimenId: specimen.id },
+      autoFixAvailable: false,
+    });
+  }
+  return out;
+}
+
+function locusSuffix(locus) {
+  const parts = [];
+  if (locus.sceneId) parts.push(`scene ${locus.sceneId}`);
+  if (locus.branchId) parts.push(`branch ${locus.branchId}`);
+  if (locus.renditionId) parts.push(`rendition ${locus.renditionId}`);
+  if (locus.assetId) parts.push(`asset ${locus.assetId}`);
+  if (locus.where) parts.push(String(locus.where));
+  if (locus.line) parts.push(`line ${locus.line}:${locus.column}`);
+  return parts.length ? `  [${parts.join(', ')}]` : '';
+}
+
+__exports["STALE_CAPTURE_DAYS"] = STALE_CAPTURE_DAYS;
+__exports["emit"] = emit;
+__exports["stripPresenterNotes"] = stripPresenterNotes;
+__exports["layoutsMissingFor"] = layoutsMissingFor;
+__exports["buildDocument"] = buildDocument;
+__exports["staleCaptureFindings"] = staleCaptureFindings;
+};
+__modules["emit/index.js"] = function (__exports, __require) {
+
+__exports["emit"] = __require("emit/emit.js").emit;
+__exports["buildDocument"] = __require("emit/emit.js").buildDocument;
+__exports["layoutsMissingFor"] = __require("emit/emit.js").layoutsMissingFor;
+__exports["staleCaptureFindings"] = __require("emit/emit.js").staleCaptureFindings;
+__exports["stripPresenterNotes"] = __require("emit/emit.js").stripPresenterNotes;
+__exports["STALE_CAPTURE_DAYS"] = __require("emit/emit.js").STALE_CAPTURE_DAYS;
+__exports["runEmitGate"] = __require("emit/gate.js").runEmitGate;
+__exports["gateDeps"] = __require("emit/gate.js").gateDeps;
+__exports["gatedCodes"] = __require("emit/gate.js").gatedCodes;
+__exports["measureDeck"] = __require("emit/gate.js").measureDeck;
+__exports["renderedElementIds"] = __require("emit/gate.js").renderedElementIds;
+__exports["layoutContextFor"] = __require("emit/gate.js").layoutContextFor;
+__exports["MEASURED_BY_EMIT"] = __require("emit/gate.js").MEASURED_BY_EMIT;
+__exports["scanForNetworkReferences"] = __require("emit/scan.js").scanForNetworkReferences;
+__exports["scanModelAssets"] = __require("emit/scan.js").scanModelAssets;
+__exports["scanCss"] = __require("emit/scan.js").scanCss;
+__exports["scanJs"] = __require("emit/scan.js").scanJs;
+__exports["scanAbsoluteUrls"] = __require("emit/scan.js").scanAbsoluteUrls;
+__exports["scanNestedDataUri"] = __require("emit/scan.js").scanNestedDataUri;
+__exports["classifyUrl"] = __require("emit/scan.js").classifyUrl;
+__exports["isW3cNamespace"] = __require("emit/scan.js").isW3cNamespace;
+__exports["parseSrcset"] = __require("emit/scan.js").parseSrcset;
+__exports["networkFinding"] = __require("emit/scan.js").networkFinding;
+__exports["W3C_NAMESPACES"] = __require("emit/scan.js").W3C_NAMESPACES;
+__exports["URL_ALLOWLIST"] = __require("emit/scan.js").URL_ALLOWLIST;
+__exports["URL_ATTRS"] = __require("emit/scan.js").URL_ATTRS;
+__exports["SRCSET_ATTRS"] = __require("emit/scan.js").SRCSET_ATTRS;
+__exports["TEXT_ATTRS"] = __require("emit/scan.js").TEXT_ATTRS;
+__exports["JS_NETWORK_TOKENS"] = __require("emit/scan.js").JS_NETWORK_TOKENS;
+__exports["assertProvenance"] = __require("emit/provenance.js").assertProvenance;
+__exports["judgeLabelStyle"] = __require("emit/provenance.js").judgeLabelStyle;
+__exports["resolveBackground"] = __require("emit/provenance.js").resolveBackground;
+__exports["describeElement"] = __require("emit/provenance.js").describeElement;
+__exports["walkWithChain"] = __require("emit/provenance.js").walkWithChain;
+__exports["renditionAppearsIn"] = __require("emit/provenance.js").renditionAppearsIn;
+__exports["documentChainPrefix"] = __require("emit/provenance.js").documentChainPrefix;
+__exports["allScenesOf"] = __require("emit/provenance.js").allScenesOf;
+__exports["nodeText"] = __require("emit/provenance.js").nodeText;
+__exports["provenanceFinding"] = __require("emit/provenance.js").provenanceFinding;
+__exports["labelOptionFinding"] = __require("emit/provenance.js").labelOptionFinding;
+__exports["PROVENANCE_LABEL_CLASS"] = __require("emit/provenance.js").PROVENANCE_LABEL_CLASS;
+__exports["MIN_LABEL_FONT_PX"] = __require("emit/provenance.js").MIN_LABEL_FONT_PX;
+__exports["RENDITION_ATTR"] = __require("emit/provenance.js").RENDITION_ATTR;
+__exports["promotionRecord"] = __require("emit/promotion.js").promotionRecord;
+__exports["hasPromotionRecord"] = __require("emit/promotion.js").hasPromotionRecord;
+__exports["requiresProvenanceLabel"] = __require("emit/promotion.js").requiresProvenanceLabel;
+__exports["isUnearnedVerification"] = __require("emit/promotion.js").isUnearnedVerification;
+__exports["budgetAssets"] = __require("emit/budget.js").budgetAssets;
+__exports["collectAssets"] = __require("emit/budget.js").collectAssets;
+__exports["dedupeAssets"] = __require("emit/budget.js").dedupeAssets;
+__exports["rankAssets"] = __require("emit/budget.js").rankAssets;
+__exports["locateAssets"] = __require("emit/budget.js").locateAssets;
+__exports["degradeAsset"] = __require("emit/budget.js").degradeAsset;
+__exports["minifySvg"] = __require("emit/budget.js").minifySvg;
+__exports["applyReplacements"] = __require("emit/budget.js").applyReplacements;
+__exports["beatIndexResolver"] = __require("emit/budget.js").beatIndexResolver;
+__exports["sizeBudgetFinding"] = __require("emit/budget.js").sizeBudgetFinding;
+__exports["predictEmittedBytes"] = __require("emit/budget.js").predictEmittedBytes;
+__exports["dataUriPrefixBytes"] = __require("emit/budget.js").dataUriPrefixBytes;
+__exports["SCALE_LADDER"] = __require("emit/budget.js").SCALE_LADDER;
+__exports["PNG_CONTAINER_BYTES"] = __require("emit/budget.js").PNG_CONTAINER_BYTES;
+__exports["inlineRuntime"] = __require("emit/document.js").inlineRuntime;
+__exports["documentLanguage"] = __require("emit/document.js").documentLanguage;
+__exports["jsonForScript"] = __require("emit/document.js").jsonForScript;
+__exports["STAGE_ROOT_ID"] = __require("emit/document.js").STAGE_ROOT_ID;
+__exports["PRERENDERED_ATTR"] = __require("emit/document.js").PRERENDERED_ATTR;
+__exports["MODEL_ELEMENT_ID"] = __require("emit/document.js").MODEL_ELEMENT_ID;
+__exports["MEDIA_ELEMENT_ID"] = __require("emit/document.js").MEDIA_ELEMENT_ID;
+__exports["INERT_SCRIPT_TYPE"] = __require("emit/document.js").INERT_SCRIPT_TYPE;
+__exports["encodePayload"] = __require("emit/model.js").encodePayload;
+__exports["splitMedia"] = __require("emit/model.js").splitMedia;
+__exports["isExtractableMedia"] = __require("emit/model.js").isExtractableMedia;
+__exports["MEDIA_PLACEHOLDER_FLOOR"] = __require("emit/model.js").MEDIA_PLACEHOLDER_FLOOR;
+__exports["ppBase64ToBytes"] = __require("emit/artifact-runtime.js").ppBase64ToBytes;
+__exports["ppInflateRaw"] = __require("emit/artifact-runtime.js").ppInflateRaw;
+__exports["ppUtf8Decode"] = __require("emit/artifact-runtime.js").ppUtf8Decode;
+__exports["ppRehydrateMedia"] = __require("emit/artifact-runtime.js").ppRehydrateMedia;
+__exports["ppDecodePayload"] = __require("emit/artifact-runtime.js").ppDecodePayload;
+__exports["ppDecodePayloadRaw"] = __require("emit/artifact-runtime.js").ppDecodePayloadRaw;
+__exports["ppBootArtifact"] = __require("emit/artifact-runtime.js").ppBootArtifact;
+__exports["artifactRuntimeSource"] = __require("emit/artifact-runtime.js").artifactRuntimeSource;
+__exports["compileFallbackTheme"] = __require("emit/theme.js").compileFallbackTheme;
+__exports["compileFontFaces"] = __require("emit/theme.js").compileFontFaces;
+__exports["quoteFamily"] = __require("emit/theme.js").quoteFamily;
+__exports["stackFor"] = __require("emit/theme.js").stackFor;
+__exports["ROLE_VARS"] = __require("emit/theme.js").ROLE_VARS;
+__exports["parseStylesheet"] = __require("emit/css.js").parseStylesheet;
+__exports["parseSelector"] = __require("emit/css.js").parseSelector;
+__exports["parseDeclarations"] = __require("emit/css.js").parseDeclarations;
+__exports["computeCascade"] = __require("emit/css.js").computeCascade;
+__exports["matchesSelector"] = __require("emit/css.js").matchesSelector;
+__exports["specificityOf"] = __require("emit/css.js").specificityOf;
+__exports["resolveVars"] = __require("emit/css.js").resolveVars;
+__exports["resolveFontSize"] = __require("emit/css.js").resolveFontSize;
+__exports["parseOpacity"] = __require("emit/css.js").parseOpacity;
+__exports["backgroundColorOf"] = __require("emit/css.js").backgroundColorOf;
+__exports["conditionsApply"] = __require("emit/css.js").conditionsApply;
+__exports["splitSelectorList"] = __require("emit/css.js").splitSelectorList;
+__exports["TRACKED_PROPS"] = __require("emit/css.js").TRACKED_PROPS;
+__exports["INHERITED_PROPS"] = __require("emit/css.js").INHERITED_PROPS;
+__exports["parseColor"] = __require("emit/color-value.js").parseColor;
+__exports["contrastRatio"] = __require("emit/color-value.js").contrastRatio;
+__exports["relativeLuminance"] = __require("emit/color-value.js").relativeLuminance;
+__exports["compositeOver"] = __require("emit/color-value.js").compositeOver;
+__exports["oklabToSrgb"] = __require("emit/color-value.js").oklabToSrgb;
+__exports["oklchToSrgb"] = __require("emit/color-value.js").oklchToSrgb;
+__exports["hslToRgb"] = __require("emit/color-value.js").hslToRgb;
+__exports["hwbToRgb"] = __require("emit/color-value.js").hwbToRgb;
+__exports["splitArgs"] = __require("emit/color-value.js").splitArgs;
+__exports["splitComponents"] = __require("emit/color-value.js").splitComponents;
+__exports["parseColorMix"] = __require("emit/color-value.js").parseColorMix;
+__exports["NAMED_COLORS"] = __require("emit/color-value.js").NAMED_COLORS;
+__exports["tokenizeHtml"] = __require("emit/scan-parse.js").tokenizeHtml;
+__exports["maskJs"] = __require("emit/scan-parse.js").maskJs;
+__exports["maskCss"] = __require("emit/scan-parse.js").maskCss;
+__exports["lineColOf"] = __require("emit/scan-parse.js").lineColOf;
+__exports["excerptAt"] = __require("emit/scan-parse.js").excerptAt;
+__exports["decodeEntities"] = __require("emit/scan-parse.js").decodeEntities;
+__exports["RAW_TEXT_TAGS"] = __require("emit/scan-parse.js").RAW_TEXT_TAGS;
+__exports["VOID_TAGS"] = __require("emit/scan-parse.js").VOID_TAGS;
+__exports["decodePng"] = __require("emit/png.js").decodePng;
+__exports["encodePng"] = __require("emit/png.js").encodePng;
+__exports["rescalePng"] = __require("emit/png.js").rescalePng;
+__exports["resample"] = __require("emit/png.js").resample;
+__exports["pngSize"] = __require("emit/png.js").pngSize;
+__exports["isPng"] = __require("emit/png.js").isPng;
+__exports["readChunks"] = __require("emit/png.js").readChunks;
+__exports["adler32"] = __require("emit/png.js").adler32;
+};
 __modules["validate/lane-scene.js"] = function (__exports, __require) {
 
 __exports["measureScene"] = __require("scene/index.js").measureScene;
@@ -35588,7 +35797,8 @@ const FIXERS = {
         for (const f of next.brand.faces || []) {
           if (f.family !== d.family || f.role !== d.role) continue;
           f.fallbackStack = stack.slice();
-          f.metricDelta = { ...resolution.metricDelta };
+
+          f.metricDelta = resolution.metricDelta ? { ...resolution.metricDelta } : null;
         }
         const path = `brand.faces.${d.family}.${d.role}.fallbackStack`;
         if (!next.brand.manualOverrides.includes(path)) next.brand.manualOverrides.push(path);
@@ -35783,6 +35993,7 @@ __exports["faceResolutions"] = __require("validate/overflow.js").faceResolutions
 __exports["fittingFontSizePx"] = __require("validate/overflow.js").fittingFontSizePx;
 __exports["fittingCharCount"] = __require("validate/overflow.js").fittingCharCount;
 __exports["truncationMode"] = __require("validate/overflow.js").truncationMode;
+__exports["advanceDeltaOf"] = __require("validate/overflow.js").advanceDeltaOf;
 __exports["OVERFLOW_CLIP_RATIO"] = __require("validate/overflow.js").OVERFLOW_CLIP_RATIO;
 __exports["OVERFLOW_CLIP_MIN_PX"] = __require("validate/overflow.js").OVERFLOW_CLIP_MIN_PX;
 __exports["OVERFLOW_NOISE_RATIO"] = __require("validate/overflow.js").OVERFLOW_NOISE_RATIO;
@@ -37408,7 +37619,11 @@ const ACTIONS = [
   {
     id: 'project.new', label: 'New project', group: 'Project',
     run: (app) => {
-      const doc = M.newDoc({ seed: `pitchproof-${app.clock().slice(0, 10)}`, at: app.clock() });
+      const doc = M.newDoc({
+        seed: `pitchproof-${app.clock().slice(0, 10)}`,
+        at: app.clock(),
+        recipes: app.services.seedRecipes(),
+      });
       app.stack.reset(doc);
       app.setUi({ section: 'project' });
       app.select({ specimenId: null, renditionId: null, sceneId: null, branchId: null });
@@ -38626,6 +38841,20 @@ const ACTIONS = [
     },
   },
   {
+    id: 'emit.verify', label: 'Verify the emitted file', group: 'Emit',
+    enabled: (app) => !!(app.ui.emit.result && app.ui.emit.result.html),
+    run: (app) => {
+      const emitted = app.ui.emit.result;
+      if (!emitted) { app.notify('warn', 'Emit a file first.'); return; }
+      const report = app.services.verifyArtifact(app.proof, emitted.html, emitted.css || '');
+      app.setDraft('emit.verify', report);
+      app.notify(report.clean ? 'ok' : 'bad', report.clean
+        ? `Scanned ${(emitted.bytes / 1000).toFixed(0)} kB: zero network references, every illustrative rendition labelled. This is the scan re-run over the exact bytes you are about to hand over, not a claim about them.`
+        : `${plural(report.findings.length, 'violation')} in the emitted file: ${report.findings.slice(0, 2).map((f) => f.code).join(', ')}. Do not send it.`,
+      { sticky: !report.clean });
+    },
+  },
+  {
     id: 'emit.budget', label: 'Recompute the size budget', group: 'Emit',
     run: (app) => {
       const plan = app.services.budgetAssets(app.proof, app.proof.emitOptions.maxBytes);
@@ -38776,7 +39005,7 @@ __exports["err"] = err;
 __modules["ui/components.js"] = function (__exports, __require) {
 
 const { h, cx } = __require("core/vdom.js");
-const { ACT_ATTR, ARG_ATTR, EVENT_ATTR, KEY_ATTR, RAW_ATTR } = __require("ui/render.js");
+const { ACT_ATTR, ARG_ATTR, ENTER_ATTR, EVENT_ATTR, KEY_ATTR, RAW_ATTR } = __require("ui/render.js");
 const { fnv1a32 } = __require("core/hash.js");
 
 function actAttrs(ref) {
@@ -38810,6 +39039,7 @@ function field(props) {
       placeholder: props.placeholder || null,
       disabled: props.disabled ? true : null,
       [KEY_ATTR]: props.key || null,
+      [ENTER_ATTR]: props.enter || null,
       ...actAttrs(props),
     }),
     props.hint ? h('span', { class: 'st-field-hint' }, props.hint) : null);
@@ -39208,15 +39438,16 @@ function renderExtract(app, brand) {
     subtitle: 'A URL, or the files they sent you. Both degrade rather than dead-ending (§6).',
     actions: toolbar(button({
       act: 'brand.extract', variant: 'primary',
+      title: 'Extract the brand system (Enter, from the address field)',
       disabled: app.isBusy('brand.extract'),
     }, app.isBusy('brand.extract') ? 'Extracting…' : 'Extract')),
   },
   field({
     label: 'Site address', act: 'brand.urlDraft', value: app.draft('brand.url', brand.sourceUrl || ''),
-    placeholder: 'https://www.example.com', key: 'brand-url',
+    placeholder: 'https://www.example.com', key: 'brand-url', enter: 'brand.extract',
     hint: proxy
-      ? `A direct fetch is tried first, then your proxy at ${proxy}.`
-      : 'A direct fetch is tried first. Most enterprise sites refuse it — that is normal, not an error. Set a CORS proxy in Settings, or drop the saved page below.',
+      ? `Press Enter to extract. A direct fetch is tried first, then your proxy at ${proxy}.`
+      : 'Press Enter to extract. A direct fetch is tried first; most enterprise sites refuse it, which is normal rather than an error. Set a CORS proxy in Settings, or drop the saved page below.',
   }),
   h('label', { class: 'st-field' },
     h('span', { class: 'st-field-label' }, 'Or drop the saved page, a .har, a .mhtml, a deck or a PDF'),
@@ -39260,7 +39491,7 @@ function renderReviewGate(app, brand, pending) {
     subtitle: '§7 holds low-confidence fields out of an emit until you have looked at them.',
     actions: reviewable.length
       ? toolbar(button({ act: 'brand.reviewAll', variant: 'primary' },
-        reviewable.length === 1 ? 'I have checked this one' : `I have checked all ${reviewable.length}`))
+        reviewable.length === 1 ? 'I have checked this one' : 'I have checked all of these'))
       : null,
   },
   empty.length
@@ -39586,14 +39817,15 @@ function renderCapture(app) {
     title: 'Capture',
     subtitle: 'Fetch, saved page, HAR, MHTML, deck, PDF, image, or paste. None of them dead-ends (§6).',
     actions: toolbar(
-      button({ act: 'specimen.capture', variant: 'primary', disabled: app.isBusy('specimen.capture') },
+      button({ act: 'specimen.capture', variant: 'primary', title: 'Capture the page (Enter, from the address field)', disabled: app.isBusy('specimen.capture') },
         app.isBusy('specimen.capture') ? 'Capturing…' : 'Capture'),
       button({ act: 'specimen.sitemap', variant: 'ghost', title: 'Rank the site’s pages by structural richness' }, 'Suggest pages'),
     ),
   },
   field({
     label: 'Page address', act: 'specimen.urlDraft', value: app.draft('specimen.url', ''),
-    placeholder: 'https://www.example.com/products/x', key: 'spec-url',
+    placeholder: 'https://www.example.com/products/x', key: 'spec-url', enter: 'specimen.capture',
+    hint: 'Press Enter to capture.',
   }),
   suggestions.length
     ? h('div', { class: 'st-suggestions' },
@@ -40051,6 +40283,7 @@ const { danglingReveals, findScene, layoutChoices } = __require("ui/model.js");
 const { revealedAt } = __require("runtime/beats.js");
 const { revealableElements } = __require("ui/reveal.js");
 const { ACT_ATTR, ARG_ATTR, KEY_ATTR } = __require("ui/render.js");
+const { BREAKPOINTS } = __require("core/contracts.js");
 
 function renderScenesPanel(app) {
   const proof = app.proof;
@@ -40412,7 +40645,9 @@ function renderBranch(app, branch, coverage) {
         'aria-label': 'New alias',
         value: app.draft('branch.alias', ''),
         [ACT_ATTR]: 'branch.aliasDraft',
+        [ARG_ATTR]: branch.id,
         [KEY_ATTR]: `alias-draft-${branch.id}`,
+        'data-st-enter': 'branch.addAlias',
       }),
       button({ act: 'branch.addAlias', arg: branch.id, variant: 'ghost' }, 'Add alias'))),
 
@@ -40465,8 +40700,18 @@ function renderBranch(app, branch, coverage) {
   pairs(
     pair('Branch id', h('code', { class: 'st-mono' }, branch.id)),
     pair('Reachable', coverage.unreachable.includes(branch.id) ? badge('no', 'bad') : badge('yes', 'ok')),
-    pair('Returns', coverage.noReturn.includes(branch.id) ? badge('unresolved', 'bad') : badge('resolved', 'ok')),
+    pair('Returns to', renderReturnTarget(app, branch, coverage)),
   ));
+}
+
+function renderReturnTarget(app, branch, coverage) {
+  if (coverage.noReturn.includes(branch.id)) return badge('nowhere — the presenter would be stranded', 'bad');
+  const model = app.preview.model(app.proof);
+  const target = model ? app.services.returnTargetFor(model.deck, branch.id) : null;
+  if (!target) return badge('resolved', 'ok');
+  const where = target.sequenceId === 'spine' ? `spine scene ${target.sceneIndex + 1}` : target.sequenceId;
+  const title = target.scene ? truncate(target.scene.headline || target.scene.id, 30) : null;
+  return h('span', null, title ? `${title} · ` : '', h('span', { class: 'st-mono' }, where));
 }
 
 function renderJumpTest(app, deck) {
@@ -40548,14 +40793,23 @@ function renderSweepHeader(app, sweep, findings) {
           : 'No blocking findings. The emit is open once nothing else is outstanding.'),
         h('p', { class: 'st-dim' }, `Swept ${formatDateTime(sweep.at)} · ${plural(findings.length, 'finding')} total.`)))
       : notice('info', 'No sweep has been run against this proof yet. The emit stays closed until one has been.'),
-  sweep.proofHash && app.ui.sweep.proofHash !== undefined && sweep.at
-    ? null
-    : null,
   pairs(
     pair('Scenes walked', h('span', { class: 'st-mono' }, String(countPositions(app)))),
     pair('Breakpoints', h('span', { class: 'st-mono' }, 'sm 390 · md 1024 · lg 1600')),
   ),
-  app.services.has('validate') ? null : notice('warn', 'The validation lane is not wired into this build. Until it lands, no sweep can run — and a proof that was never validated is not emitted.'));
+  app.services.has('validate') ? null : notice('warn', 'The validation lane is not wired into this build. Until it lands, no sweep can run — and a proof that was never validated is not emitted.'),
+  sweep.at ? null : renderRules(app));
+}
+
+function renderRules(app) {
+  const rules = app.services.preflightRules();
+  if (!rules.length) return null;
+  const bySeverity = [1, 2, 3].map((severity) => rules.filter((r) => r.severity === severity));
+  return h('details', { class: 'st-details' },
+    h('summary', null, `What a sweep checks · ${rules.length} rules, ${bySeverity[0].length} of them blocking`),
+    h('ul', { class: 'st-rules' }, rules.map((rule) => h('li', { class: 'st-rule', [KEY_ATTR]: rule.code },
+      badge(rule.code, rule.severity === 1 ? 'bad' : rule.severity === 2 ? 'warn' : 'dim'),
+      rule.describe ? h('span', { class: 'st-rule-describe' }, rule.describe) : null))));
 }
 
 function countPositions(app) {
@@ -40795,6 +41049,22 @@ function renderBudget(app) {
       : empty('The budget has not been computed yet.', button({ act: 'emit.budget', variant: 'primary' }, 'Compute it')));
 }
 
+function renderVerification(app) {
+  const report = app.draft('emit.verify', null);
+  if (!report) return null;
+  return h('div', { class: 'st-subsection' },
+    h('h4', { class: 'st-subsection-title' }, 'Independent verification'),
+    report.clean
+      ? notice('ok', 'The network scanner found nothing to fetch, and every illustrative rendition carries a label the stylesheet cannot hide. Scanned over the emitted bytes, not over the model they came from.')
+      : notice('bad', h('div', null,
+        h('p', null, 'The emitted file violates a product law. Do not send it — and tell the integrator, because the emitter should have refused it.'),
+        h('ul', { class: 'st-paths' }, report.findings.map((f, i) => h('li', { [KEY_ATTR]: `${f.code}:${i}` }, `${f.code}: ${f.message}`))))),
+    pairs(
+      pair('Network references', report.network.length ? badge(String(report.network.length), 'bad') : badge('none', 'ok')),
+      pair('Provenance', report.provenance.length ? badge(String(report.provenance.length), 'bad') : badge('every label present', 'ok')),
+    ));
+}
+
 function sizeOf(box) {
   if (!box) return '—';
   return `${box.w ?? '?'}×${box.h ?? '?'} q${box.quality ?? '?'}`;
@@ -40824,9 +41094,10 @@ function renderResult(app) {
   return section({
     title: 'The file',
     subtitle: `Emitted ${formatDateTime(state.at)}.`,
-    actions: toolbar(button({
-      act: 'emit.download', variant: 'primary', disabled: blocking.length > 0,
-    }, 'Save the file')),
+    actions: toolbar(
+      button({ act: 'emit.verify', variant: 'ghost', title: 'Re-run the network scan and the provenance assertion over these exact bytes' }, 'Verify'),
+      button({ act: 'emit.download', variant: 'primary', disabled: blocking.length > 0 }, 'Save the file'),
+    ),
   },
   blocking.length
     ? notice('bad', h('div', null,
@@ -40845,6 +41116,7 @@ function renderResult(app) {
       badge(`${(result.findings || []).length} total`, 'dim'),
       blocking.length ? badge(`${blocking.length} blocking`, 'bad') : badge('none blocking', 'ok'))),
   ),
+  renderVerification(app),
   (result.degradations || []).length
     ? h('p', { class: 'st-note' }, `${plural(result.degradations.length, 'asset')} were degraded to fit the budget. Every one is listed above with the bytes it actually saved.`)
     : h('p', { class: 'st-note' }, 'Nothing was degraded: the project fitted its budget as captured.'));
@@ -41568,7 +41840,7 @@ __modules["ui/app.js"] = function (__exports, __require) {
 
 const { Emitter } = __require("core/events.js");
 const { CommandStack, replaceCommand } = __require("core/command.js");
-const { Patcher, delegate } = __require("ui/render.js");
+const { Patcher, delegate, ARG_ATTR, ENTER_ATTR } = __require("ui/render.js");
 const { Preview } = __require("ui/preview.js");
 const { newDoc } = __require("ui/model.js");
 const { makeServices } = __require("ui/services.js");
@@ -41596,7 +41868,12 @@ class StudioApp extends Emitter {
     });
     this.actions = actionIndex(ACTIONS);
 
-    const initial = env.doc || newDoc({ seed: 'pitchproof-v1', at: env.clock() });
+    const initial = env.doc || newDoc({
+      seed: 'pitchproof-v1',
+      at: env.clock(),
+
+      recipes: this.services.seedRecipes(),
+    });
 
     this.stack = new CommandStack(initial, { limit: 400 });
 
@@ -41855,6 +42132,18 @@ class StudioApp extends Emitter {
       const handled = this.handlePaletteKey(combo, event);
       if (handled) return handled;
     }
+
+    if (combo === 'Enter' && typing) {
+      const target = event.target;
+      const action = target && target.getAttribute ? target.getAttribute(ENTER_ATTR) : null;
+      if (action) {
+        if (event.preventDefault) event.preventDefault();
+
+        this.dispatch(action, target.getAttribute(ARG_ATTR), { value: target.value, element: target, event });
+        return action;
+      }
+    }
+
     if (combo === 'Escape') {
       if (this.ui.paletteOpen) { this.setUi({ paletteOpen: false, paletteQuery: '' }); this.render(); return 'app.palette.close'; }
       if (this.ui.keysOpen) { this.setUi({ keysOpen: false }); this.render(); return 'app.keys.close'; }

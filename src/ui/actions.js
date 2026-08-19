@@ -219,7 +219,11 @@ export const ACTIONS = [
   {
     id: 'project.new', label: 'New project', group: 'Project',
     run: (app) => {
-      const doc = M.newDoc({ seed: `pitchproof-${app.clock().slice(0, 10)}`, at: app.clock() });
+      const doc = M.newDoc({
+        seed: `pitchproof-${app.clock().slice(0, 10)}`,
+        at: app.clock(),
+        recipes: app.services.seedRecipes(),
+      });
       app.stack.reset(doc);
       app.setUi({ section: 'project' });
       app.select({ specimenId: null, renditionId: null, sceneId: null, branchId: null });

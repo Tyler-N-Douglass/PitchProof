@@ -39,7 +39,11 @@ test('a proof emits cleanly through the real layouts', async () => {
   registerAllLayouts();
   const result = await emit(emitProof({ imageEdge: 64 }), {}, deps);
   assert.equal(result.ok, true, result.ok ? '' : result.error);
-  assert.deepEqual(result.value.findings, []);
+  assert.deepEqual(
+    result.value.findings.filter((f) => f.severity === 1),
+    [],
+    'nothing may block; the sweep still reports severity-2 craft findings, which is what it is for',
+  );
   assert.deepEqual(scanForNetworkReferences(result.value.html), []);
   assert.ok(result.value.bytes > 100_000, 'the artifact carries the whole runtime');
 });
@@ -157,6 +161,10 @@ test('every layout in the closed set emits without a finding', async () => {
     const proof = { ...base, spine: base.spine.map((s, i) => (i === 1 ? { ...s, layout } : s)) };
     const result = await emit(proof, {}, deps);
     assert.equal(result.ok, true, `layout ${layout}: ${result.ok ? '' : result.error}`);
-    assert.deepEqual(result.value.findings, [], `layout ${layout} produced findings`);
+    assert.deepEqual(
+      result.value.findings.filter((f) => f.severity === 1),
+      [],
+      `layout ${layout} produced a blocking finding`,
+    );
   }
 });

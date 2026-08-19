@@ -46,6 +46,8 @@
 
 import { BREAKPOINTS } from '../core/contracts.js';
 import { elementId } from '../core/ids.js';
+import { collectByAttr } from '../core/vdom.js';
+import { REVEAL_ATTR } from '../runtime/beats.js';
 import { RULES } from '../validate/rules.js';
 import { sortFindings } from '../validate/finding.js';
 import { measureScene } from '../scene/index.js';
@@ -54,6 +56,23 @@ import { contrastRatio } from '../brand/color.js';
 import { scanForNetworkReferences } from './scan.js';
 import { assertProvenance } from './provenance.js';
 import { hasPromotionRecord } from './promotion.js';
+
+/**
+ * The one rule the gate does not run.
+ *
+ * `SIZE_BUDGET_EXCEEDED` in `validate/rules.js` **estimates** the emitted size
+ * from the model — it has to, because preflight runs before anything is
+ * serialized, and it says so in its own message ("the estimated artifact is…").
+ * By the time the gate runs, the emitter has budgeted, serialized and
+ * *measured* the real file. Running the estimate as well would put two findings
+ * for one question in front of the user, with the less accurate one first, and
+ * would raise a false alarm on every proof the budgeter successfully fits.
+ *
+ * `emit()` answers this code from the measured bytes instead, at severity 1
+ * (decision E14). It is the only code the emitter answers itself, and the only
+ * one where it has better information than the rule.
+ */
+export const MEASURED_BY_EMIT = new Set(['SIZE_BUDGET_EXCEEDED']);
 
 /**
  * The `LayoutContext` a scene is measured against.
@@ -110,6 +129,42 @@ export function measureDeck(deck, runtime, breakpoints) {
 }
 
 /**
+ * The element ids each scene's layout actually renders.
+ *
+ * §4's `Beat.reveals` names element ids, and a beat naming one the layout never
+ * renders is a keypress that does nothing in front of the room. `BEAT_EMPTY`
+ * reads this map; without it that half of the rule is silently inert, which is
+ * how it was missed until the equivalence test in `test/emit/gate.test.mjs`
+ * compared the gate against `runPreflight` finding for finding.
+ *
+ * A scene whose tree carries no revealable element is left out: that is a
+ * still-frame layout the beat engine renders whole, and comparing against an
+ * empty set would flag every beat in it.
+ *
+ * @param {any} deck
+ * @param {(scene: any) => any} render
+ * @returns {Map<string, Set<string>>}
+ */
+export function renderedElementIds(deck, render) {
+  /** @type {Map<string, Set<string>>} */
+  const out = new Map();
+  if (typeof render !== 'function') return out;
+  for (const scene of deck.sceneById.values()) {
+    let ids;
+    try {
+      ids = collectByAttr(render(scene), REVEAL_ATTR).map((el) => el.a[REVEAL_ATTR]).filter(Boolean);
+    } catch {
+      // A layout that cannot render is a defect the layout registry reports;
+      // this stays silent rather than blaming every beat in the scene for it.
+      continue;
+    }
+    if (ids.length === 0) continue;
+    out.set(scene.id, new Set(ids));
+  }
+  return out;
+}
+
+/**
  * The cross-lane functions the rules call. Every one is the surface `API.md`
  * declares for its lane, and the two L10 owns are L10's own — which is what
  * makes running the rules here equivalent to running them in preflight.
@@ -150,6 +205,7 @@ export function runEmitGate(args) {
     deck: args.deck,
     breakpoints,
     measurements: measureDeck(args.deck, args.runtime, breakpoints),
+    renderedElementIds: renderedElementIds(args.deck, args.renderScene),
     nowIso: args.nowIso,
     runtimeJs: args.runtimeJs,
     runtimeCss: args.runtimeCss,
@@ -160,16 +216,19 @@ export function runEmitGate(args) {
 
   /** @type {any[]} */
   const findings = [];
-  for (const rule of RULES) findings.push(...rule.run(ctx));
+  for (const rule of RULES) {
+    if (MEASURED_BY_EMIT.has(rule.code)) continue;
+    findings.push(...rule.run(ctx));
+  }
   return sortFindings(findings);
 }
 
 /**
- * The codes the gate covers, for the documentation to stay honest about which
- * laws the emitter enforces. It is every code in the §4 set, because `RULES`
- * carries one rule per code and the gate runs all of them.
+ * The codes the gate runs, so the documentation cannot drift from the code.
+ * `RULES` carries one rule per §4 code; the gate runs all of them except
+ * `MEASURED_BY_EMIT`, which `emit()` answers from the measured artifact.
  * @returns {string[]}
  */
 export function gatedCodes() {
-  return RULES.map((r) => r.code);
+  return RULES.map((r) => r.code).filter((c) => !MEASURED_BY_EMIT.has(c));
 }

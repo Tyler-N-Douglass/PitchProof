@@ -714,10 +714,18 @@ withdraw something another lane depends on.
 | L10 | `emit/index.js` | `scanModelAssets` | A `MediaRef` or logo pointing at the network, reported rather than dropped |
 | L10 | `emit/index.js` | `artifactRuntimeSource` | The composition-root bundle the artifact carries |
 
-### Known gap
+### Closed gap — imagery classification is reachable
 
-`classifyImagery` needs `ImageSample`s and no published surface builds them.
-`sampleFromPng` exists in `src/brand/imagery.js` but is not re-exported from
-`brand/theme.js`, so the studio cannot reach it: imagery comes back `unknown`
-with zero confidence and is held by the §7 review gate rather than guessed.
-Filed as dispute 35 and L12's `D-L12-3`.
+`classifyImagery` needs `ImageSample`s, and for a while no published surface
+built them: `sampleFromPng` lived in `src/brand/imagery.js` and was not
+re-exported, so the studio could not reach it and imagery came back `unknown`
+with zero confidence, held by the §7 review gate rather than guessed. Filed as
+dispute 35 and L12's `D-L12-3`.
+
+Closed by L5 (L5-D25). `brand/theme.js` now re-exports `sampleFromPng`,
+`classifyImage` and `normalizeSample`, **and** `buildBrandSystem` accepts an
+`images` entry in either shape — a decoded `ImageSample`, or L3's raw
+`{name, bytes, mime}` record, which it decodes itself and skips when it cannot
+read the format. The wiring cannot be got half right: a caller passing what L3
+produces gets a real classification, and `brand.imagery.treatment` is
+non-`unknown` with non-zero confidence straight from raw PNG bytes.

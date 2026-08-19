@@ -185,12 +185,22 @@ export function resolveBoxFace(family, brand, weight = 400) {
   if (face) for (const name of face.fallbackStack || []) push(name);
 
   let chosen = null;
+  let chosenIsGeneric = false;
   for (const name of stack) {
     const key = normalizeFamily(name);
-    if (GENERIC_FAMILIES.has(key) || availKeys.has(key)) { chosen = name; break; }
+    if (GENERIC_FAMILIES.has(key) || availKeys.has(key)) {
+      chosen = name;
+      chosenIsGeneric = GENERIC_FAMILIES.has(key) && !availKeys.has(key);
+      break;
+    }
   }
 
   const base = resolveFace(requested, { available, weight });
+  // A stack that names no concrete available family before its generic — or
+  // names none at all — leaves the artifact rendering in whatever the platform
+  // happens to default to. That is the case worth offering to fix; a stack that
+  // already lands on a real family is doing its job.
+  const landsOnDefault = chosen === null || chosenIsGeneric;
   /** Merge the declared stack with the recommended one, keeping declaration order. */
   const merged = () => {
     const out = stack.slice();
@@ -199,16 +209,22 @@ export function resolveBoxFace(family, brand, weight = 400) {
     }
     return out;
   };
-  if (chosen === null) return { ...base, stack: stack.length ? merged() : base.stack };
+  if (chosen === null) return { ...base, stack: stack.length ? merged() : base.stack, landsOnDefault };
   if (normalizeFamily(chosen) === normalizeFamily(base.resolved)) {
-    return { ...base, stack: merged() };
+    return { ...base, stack: merged(), landsOnDefault };
   }
   return {
     ...base,
     resolved: chosen,
     stack,
-    metricDelta: metricDelta(requested, chosen, weight),
+    // §4 permits `metricDelta: null`, and `core/text-metrics.js` returns it for
+    // a family this build has no published metrics for. Comparing an unknown
+    // family to the model it already fell back to would report the substitution
+    // as metrically perfect, which is exactly backwards for §22.2 — the
+    // prospect's custom webfont is precisely the family we do not know.
+    metricDelta: base.known ? metricDelta(requested, chosen, weight) : null,
     available: normalizeFamily(chosen) === normalizeFamily(requested),
+    landsOnDefault,
   };
 }
 
@@ -406,11 +422,25 @@ function substitutionClause(face) {
   if (face.available && normalizeFamily(face.requested) === normalizeFamily(face.resolved)) {
     return `Set in ${face.requested}, which is the face that renders.`;
   }
-  const delta = face.metricDelta.avgAdvance;
-  const drift = delta === 1
-    ? 'identical advance widths'
-    : `${delta > 1 ? '+' : ''}${((delta - 1) * 100).toFixed(1)}% average advance`;
+  const delta = advanceDeltaOf(face);
+  const drift = delta === null
+    ? 'how much that moves the advance is unknown — this build holds no published metrics for the requested face, so the measurement above is the fallback\'s own'
+    : delta === 1
+      ? 'identical advance widths'
+      : `${delta > 1 ? '+' : ''}${((delta - 1) * 100).toFixed(1)}% average advance`;
   return `"${face.requested}" is not available to the artifact and substitutes to ${face.resolved} (${drift}), which is what this was measured against.`;
+}
+
+/**
+ * The advance-width ratio of a substitution, or null when this build has no
+ * published metrics for the requested face. `null` is a real answer, not a
+ * missing one, and §4 permits it.
+ * @param {{metricDelta: {avgAdvance: number}|null}} face
+ * @returns {number|null}
+ */
+export function advanceDeltaOf(face) {
+  const delta = face && face.metricDelta;
+  return delta && typeof delta.avgAdvance === 'number' ? delta.avgAdvance : null;
 }
 
 /**
@@ -450,7 +480,7 @@ export function detectBoxOverflow(box, where, brand) {
     textOverflow: truncation.mode,
     textOverflowDeclared: truncation.known,
     faceAvailable: face.available,
-    advanceDelta: face.metricDelta.avgAdvance,
+    advanceDelta: advanceDeltaOf(face),
     fontSizePx: style.fontSizePx,
     lineCount: full.lineCount,
   };
