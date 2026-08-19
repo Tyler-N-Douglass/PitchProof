@@ -24,6 +24,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSy
 import { resolve, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bundle, BundleError } from './lib/bundler.mjs';
+import { utf8Length } from '../src/core/bytes.js';
 import { stripComments, stripCssComments, collapseBlankLines } from './lib/strip-comments.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -320,7 +321,13 @@ function main() {
   if (!check) write(first.outputs);
 
   for (const [name, contents] of [...first.outputs].sort((a, b) => a[0].localeCompare(b[0]))) {
-    console.log(`  ${check ? 'checked' : 'wrote'} dist/${name}  ${contents.length.toLocaleString('en-US')} bytes`);
+    // `String.length` counts UTF-16 code units, not bytes, and this line called
+    // them bytes: the build log said 2,773,619 for a studio that was 2,777,782
+    // on disk. `emit()` has always used `utf8Length`; the build log was the one
+    // place a number was reported in the wrong unit, which matters because §13's
+    // whole budgeting story is told in bytes and a seller reading this line was
+    // being told a smaller file than they have.
+    console.log(`  ${check ? 'checked' : 'wrote'} dist/${name}  ${utf8Length(contents).toLocaleString('en-US')} bytes`);
   }
   for (const p of first.pending) console.log(`  pending  ${p}`);
   if (first.outputs.size === 0) console.log('build: nothing to emit yet — no lane has landed an entry point.');

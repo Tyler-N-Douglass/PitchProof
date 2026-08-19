@@ -3047,14 +3047,14 @@ function panelHead(spec) {
 
 const URL_LABEL_BUDGET = 48;
 
-function displayUrl(url) {
+function displayUrl(url, budget = URL_LABEL_BUDGET) {
   if (typeof url !== 'string' || !url.trim()) return null;
   const stripped = url.trim()
     .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
     .replace(/^\/\//, '')
     .replace(/\/+$/, '');
   if (!stripped) return null;
-  if (stripped.length <= URL_LABEL_BUDGET) return stripped;
+  if (stripped.length <= budget) return stripped;
 
   const parts = stripped.split('/').filter(Boolean);
   if (parts.length < 3) return stripped;
@@ -3064,10 +3064,10 @@ function displayUrl(url) {
   return elided.length < stripped.length ? elided : stripped;
 }
 
-function specimenMeta(specimen) {
+function specimenMeta(specimen, options = {}) {
   if (!specimen) return null;
   const parts = [];
-  const url = displayUrl(specimen.sourceUrl);
+  const url = displayUrl(specimen.sourceUrl, options.urlBudget ?? URL_LABEL_BUDGET);
   if (url) parts.push(url);
   if (specimen.locale) parts.push(specimen.locale);
   if (!url && specimen.kind) parts.push(specimen.kind);
@@ -4724,6 +4724,8 @@ __exports["SLOTS"] = SLOTS;
 };
 __modules["scene/brand-access.js"] = function (__exports, __require) {
 
+const { FALLBACK_CANDIDATES, normalizeFamily, resolveFace } = __require("core/text-metrics.js");
+
 const DEFAULT_STACKS = {
   display: ['system-ui', 'sans-serif'],
   body: ['system-ui', 'sans-serif'],
@@ -4744,6 +4746,40 @@ function faceFor(brand, role) {
     ? chosen.fallbackStack.slice()
     : [chosen.family, ...DEFAULT_STACKS[role]];
   return { family: chosen.family, fallbackStack: stack, role, embeddable: !!chosen.embeddable };
+}
+
+const GENERIC_FAMILIES = new Set([
+  'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
+  'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded', 'math', 'emoji',
+]);
+
+function availableFamilies(brand) {
+
+  const out = [];
+  const seen = new Set();
+  const add = (name) => {
+    const key = normalizeFamily(name);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(name);
+  };
+  for (const face of (brand && brand.faces) || []) if (face && face.embeddable) add(face.family);
+  for (const name of FALLBACK_CANDIDATES) add(name);
+  return out;
+}
+
+function renderedFamily(brand, role, weight = 400) {
+  const face = faceFor(brand, role);
+  const available = availableFamilies(brand);
+  const availKeys = new Set(available.map(normalizeFamily));
+
+  for (const name of [face.family, ...face.fallbackStack]) {
+    const key = normalizeFamily(name);
+    if (!key) continue;
+    if (availKeys.has(key)) return name;
+    if (GENERIC_FAMILIES.has(key)) break;
+  }
+  return resolveFace(face.family, { available, weight }).resolved;
 }
 
 function colorFor(brand, role) {
@@ -4778,6 +4814,8 @@ function neutralBrand() {
 
 __exports["DEFAULT_STACKS"] = DEFAULT_STACKS;
 __exports["faceFor"] = faceFor;
+__exports["availableFamilies"] = availableFamilies;
+__exports["renderedFamily"] = renderedFamily;
 __exports["colorFor"] = colorFor;
 __exports["logoFor"] = logoFor;
 __exports["neutralBrand"] = neutralBrand;
@@ -4819,9 +4857,10 @@ __exports["textRoles"] = textRoles;
 __modules["scene/layouts/system-map.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
-const { layoutText } = __require("core/text-metrics.js");
+const { layoutText, measureText } = __require("core/text-metrics.js");
 const { MAP_DESIGN } = __require("scene/geometry.js");
 const { styleForRole } = __require("scene/type-scale.js");
+const { renderedFamily } = __require("scene/brand-access.js");
 const { sceneHead, provenanceLabel, emptyState, specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger } = __require("scene/parts.js");
 
 const MAP = {
@@ -4862,7 +4901,12 @@ function systemMap(ctx) {
   const transform = { x: MAP.transformX, y: 210, w: MAP.nodeW, h: 120 };
 
   const sourceLabel = specimenTitle(ctx.specimen);
-  const sourceMeta = specimenMeta(ctx.specimen) || (ctx.specimen ? ctx.specimen.kind : 'no specimen attached');
+
+  const nodeInnerW = MAP.nodeW - MAP.nodePad * 2;
+  const urlBudget = labelBudget('mapNodeMeta', nodeInnerW, MAP.metaLines, ctx.brand)
+    - (ctx.specimen && ctx.specimen.locale ? String(ctx.specimen.locale).length + 5 : 0);
+  const sourceMeta = specimenMeta(ctx.specimen, { urlBudget: Math.max(8, urlBudget) })
+    || (ctx.specimen ? ctx.specimen.kind : 'no specimen attached');
   const transformLabel = ctx.scene.subhead ? String(ctx.scene.subhead) : 'Transformation';
   const recipeCount = new Set(rends.map((r) => r.recipeId).filter(Boolean)).size;
   const transformMeta = recipeCount === 1 ? '1 recipe' : `${recipeCount} recipes`;
@@ -4977,8 +5021,12 @@ function outputBoxes(count) {
 function node(ctx, spec) {
   const { box } = spec;
   const innerW = box.w - MAP.nodePad * 2;
-  const titleLines = wrap(spec.title, 'mapNodeTitle', innerW, MAP.titleLines, ctx.brand);
-  const metaLines = spec.meta ? wrap(spec.meta, 'mapNodeMeta', innerW, MAP.metaLines, ctx.brand) : [];
+  const title = wrap(spec.title, 'mapNodeTitle', innerW, MAP.titleLines, ctx.brand);
+  const meta = spec.meta
+    ? wrap(spec.meta, 'mapNodeMeta', innerW, MAP.metaLines, ctx.brand)
+    : { lines: [], truncated: false };
+  const titleLines = title.lines;
+  const metaLines = meta.lines;
   const blockH = titleLines.length * MAP.lineStep.title + metaLines.length * MAP.lineStep.meta;
   const firstBaseline = box.y + (box.h - blockH) / 2 + MAP.lineStep.title * 0.75;
   const x = box.x + MAP.nodePad;
@@ -5014,6 +5062,8 @@ function node(ctx, spec) {
       'data-pp-unit-w': String(innerW),
       'data-pp-unit-h': String(MAP.lineStep.title),
       'data-pp-ws': 'nowrap',
+
+      'data-pp-to': title.truncated ? 'ellipsis' : null,
     }, line))),
   metaLines.length
     ? h('text', {
@@ -5030,21 +5080,46 @@ function node(ctx, spec) {
       'data-pp-unit-w': String(innerW),
       'data-pp-unit-h': String(MAP.lineStep.meta),
       'data-pp-ws': 'nowrap',
+      'data-pp-to': meta.truncated ? 'ellipsis' : null,
     }, line)))
     : null);
 }
 
 function wrap(text, role, maxUnits, maxLines, brand) {
   const value = String(text ?? '').trim();
-  if (!value) return [];
-  const { style } = styleForRole(role, 'md', brand, { scale: 1 });
+  if (!value) return { lines: [], truncated: false };
+  const style = mapStyle(role, brand);
   const laid = layoutText(value, style, {
     maxWidthPx: maxUnits,
     whiteSpace: 'normal',
     overflowWrap: 'anywhere',
     maxLines,
   });
-  return laid.lines.map((line) => line.text);
+
+  const lines = laid.lines.map((line) => line.text.trim()).filter((line, i, all) => line !== '' || all.length === 1);
+  if (!laid.clamped || lines.length === 0) return { lines, truncated: false };
+
+  const last = lines.length - 1;
+  let text2 = lines[last];
+  while (text2.length > 1 && measureText(`${text2}…`, style) > maxUnits) {
+    text2 = text2.slice(0, -1).replace(/\s+$/, '');
+  }
+  lines[last] = `${text2}…`;
+  return { lines, truncated: true };
+}
+
+function mapStyle(role, brand) {
+  const spec = styleForRole(role, 'md', brand, { scale: 1 });
+  return { ...spec.style, family: renderedFamily(brand, spec.face, spec.style.weight) };
+}
+
+function labelBudget(role, maxUnits, maxLines, brand) {
+  const style = mapStyle(role, brand);
+
+  const sample = 'n.example/equipment-heat-exchangers';
+  const perChar = measureText(sample, style) / sample.length;
+  if (!(perChar > 0)) return 0;
+  return Math.max(8, Math.floor((maxUnits * maxLines) / perChar) - 1);
 }
 
 function fanPath(x1, y1, x2, y2) {
@@ -5060,6 +5135,7 @@ __exports["MAP"] = MAP;
 __exports["systemMap"] = systemMap;
 __exports["outputBoxes"] = outputBoxes;
 __exports["wrap"] = wrap;
+__exports["labelBudget"] = labelBudget;
 };
 __modules["scene/layouts/quote-card.js"] = function (__exports, __require) {
 

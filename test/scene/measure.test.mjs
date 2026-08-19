@@ -18,7 +18,30 @@ import {
   buildScene, renderSceneTree, measureScene, stageBox, boxGeometry, TYPE_ROLES, styleForRole,
   textOverflowOf, displayUrl,
 } from '../../src/scene/index.js';
+import { renderedFamily } from '../../src/scene/brand-access.js';
 import { layoutCases, contextFor, brandFixture, specimen, localeFanout } from '../fixtures/scene/content.mjs';
+import { buildCorpusProof } from '../fixtures/corpus/proof.mjs';
+
+/**
+ * A map label's style as the artifact will draw it: the same numbers
+ * `measureScene` reports, with the family the brand's face substitutes to.
+ *
+ * Written independently of `src/scene/layouts/system-map.js` so the assertion
+ * is not the implementation checking itself.
+ */
+function substituted(box, brand) {
+  const face = TYPE_ROLES[box.role].face;
+  return { ...box.style, family: renderedFamily(brand, face, box.style.weight) };
+}
+
+/** Hostile source URLs — the corpus's own run 39 to 74 characters. */
+const HOSTILE_URLS = [
+  'https://northwind.example/a',
+  'https://northwind.example/valves',
+  'https://www.northwind-industrial.example/equipment/heat-exchangers/hx-400/',
+  'https://www.northwind-industrial.example/insights/fouling-margins/',
+  'https://procurement.services.northwind-industrial.example/en-gb/equipment/shell-and-tube-heat-exchangers/hx-400-series/',
+];
 
 const BPS = ['sm', 'md', 'lg'];
 
@@ -278,6 +301,16 @@ test('every box says whether an overflow would be visible or silent', () => {
         assert.ok(box.textOverflow === 'clip' || box.textOverflow === 'ellipsis', `${where}: textOverflow`);
         if (box.maxLines !== undefined) {
           assert.equal(box.textOverflow, 'ellipsis', `${where}: a clamped run truncates visibly`);
+        } else if (box.textOverflow === 'ellipsis') {
+          // The one run allowed to claim a visible truncation with no CSS clamp
+          // behind it is one carrying the mark in its own text. SVG has neither
+          // a clamp nor an ellipsis, so `systemMap` breaks and ellipsises its
+          // own lines; anything else claiming 'ellipsis' would be grading a
+          // silent cut as a visible one, which is CRITIQUE-1 F6 backwards.
+          assert.ok(box.text.includes('…'),
+            `${where}: claims a visible truncation with nothing on screen to show it`);
+          assert.equal(box.slot, 'mapText',
+            `${where}: only the SVG map may mark its own truncation`);
         } else {
           assert.equal(box.textOverflow, 'clip', `${where}: an unclamped run has nothing to mark a cut`);
         }
@@ -356,5 +389,127 @@ test('a source URL label elides its middle, keeping the host and the slug', () =
     const label = displayUrl(url);
     assert.ok(label.length <= url.replace(/^https:\/\//, '').length);
     assert.ok(!label.includes('//'));
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// systemMap: the layout that breaks its own lines
+// ---------------------------------------------------------------------------
+
+test('a map label line carries no whitespace of its own', () => {
+  // `layoutText` measures a wrapped line without the space that ended it but
+  // returns the string with that space still on it. SVG puts the string in a
+  // tspan, `measureScene` reads it back, and the trailing space is measured as
+  // part of the run — a silent severity-1 TEXT_OVERFLOW that is not on the
+  // screen at all. The layout trims; this is the assertion that it does.
+  const brand = brandFixture();
+  for (const url of HOSTILE_URLS) {
+    const spec = specimen({ sourceUrl: url });
+    const rends = localeFanout(5);
+    const scene = buildScene({ layout: 'systemMap', specimen: spec, renditions: rends, headline: 'Flow', subhead: 'Localise to nine markets' });
+    const ctx = { ...contextFor(scene, { specimen: spec, renditions: rends }), brand };
+    for (const bp of BPS) {
+      for (const box of measureScene(scene, ctx, bp).boxes.filter((b) => /^map/.test(b.role))) {
+        assert.equal(box.text, box.text.trim(), `${bp}: a map label line is padded with whitespace: ${JSON.stringify(box.text)}`);
+      }
+    }
+  }
+});
+
+test('a map label line fits its node in the face the artifact will actually draw it in', async () => {
+  // The line breaking happens in the layout, once, at author time — so it has
+  // to be computed against the substituted family, not the requested one. A
+  // brand whose faces are not available to the artifact is the case: "Sohne"
+  // resolves to Arial and "Sohne Mono" to Courier New, and a break computed
+  // from Sohne's metrics is a line that runs out of its node on a real screen.
+  const corpus = (await buildCorpusProof()).brand;
+  for (const brand of [brandFixture(), corpus]) {
+    for (const url of HOSTILE_URLS) {
+      for (const n of [1, 3, 5, 9]) {
+        const spec = specimen({ sourceUrl: url });
+        const rends = localeFanout(n);
+        const scene = buildScene({ layout: 'systemMap', specimen: spec, renditions: rends, headline: 'Flow', subhead: 'Localise to nine markets' });
+        const ctx = { ...contextFor(scene, { specimen: spec, renditions: rends }), brand };
+        for (const bp of BPS) {
+          for (const box of measureScene(scene, ctx, bp).boxes.filter((b) => /^map/.test(b.role))) {
+            const width = measureText(box.text, substituted(box, brand));
+            // The severity-1 line is 2% of the container (src/validate/overflow.js).
+            assert.ok(width <= box.containerWidthPx * 1.02,
+              `${bp} / ${n} renditions / ${url}: ${box.role} runs ${(width - box.containerWidthPx).toFixed(2)}px `
+              + `(${((width / box.containerWidthPx - 1) * 100).toFixed(1)}%) past its ${box.containerWidthPx.toFixed(2)}px node: ${JSON.stringify(box.text)}`);
+          }
+        }
+      }
+    }
+  }
+});
+
+test('a map label the node could not hold says so, rather than stopping', () => {
+  // SVG has no ellipsis and no clamp: a label past `MAP.metaLines` was simply
+  // dropped, and `textOverflow` graded the run 'clip' — content lost with
+  // nothing on screen to show for it, which is the case §22.2 exists to block.
+  const brand = brandFixture();
+  const spec = specimen({
+    sourceUrl: 'https://procurement.services.northwind-industrial.example/en-gb/equipment/shell-and-tube-heat-exchangers/hx-400-series/',
+    title: 'A specimen title long enough that no map node can hold it in three lines of sixteen-unit display type, which is the case this asserts',
+  });
+  const rends = localeFanout(3);
+  const scene = buildScene({ layout: 'systemMap', specimen: spec, renditions: rends, headline: 'Flow' });
+  const ctx = { ...contextFor(scene, { specimen: spec, renditions: rends }), brand };
+
+  const boxes = measureScene(scene, ctx, 'md').boxes.filter((b) => /^map/.test(b.role));
+  const truncated = boxes.filter((b) => b.textOverflow === 'ellipsis');
+  assert.ok(truncated.length > 0, 'nothing was truncated, so this fixture no longer tests anything');
+  for (const box of truncated.filter((b) => b.text.includes('…'))) {
+    assert.ok(measureText(box.text, substituted(box, brand)) <= box.containerWidthPx * 1.02,
+      `the ellipsis pushed the line past its node: ${JSON.stringify(box.text)}`);
+  }
+  assert.ok(truncated.some((b) => b.text.endsWith('…')),
+    'a truncated map label ends with nothing to say it was cut');
+});
+
+test('the map elides a URL against its own node, not against a panel column', () => {
+  // `URL_LABEL_BUDGET` is sized for a 320px panel meta line. A map node is a
+  // fifth of that with two lines to spend, and eliding against the column's
+  // number is what left the map meta running past its node.
+  const brand = brandFixture();
+  const url = 'https://www.northwind-industrial.example/equipment/heat-exchangers/hx-400/';
+  const spec = specimen({ sourceUrl: url });
+  const rends = localeFanout(5);
+
+  const map = buildScene({ layout: 'systemMap', specimen: spec, renditions: rends, headline: 'Flow' });
+  const mapMeta = measureScene(map, { ...contextFor(map, { specimen: spec, renditions: rends }), brand }, 'sm')
+    .boxes.filter((b) => b.role === 'mapNodeMeta').map((b) => b.text).join('');
+  const columnLabel = displayUrl(url);
+
+  assert.ok(columnLabel && columnLabel.length > 0);
+  assert.ok(!mapMeta.includes(columnLabel),
+    `the map used the panel column's label verbatim (${columnLabel}); it has a fifth of that width`);
+});
+
+test('every systemMap scene of a corpus proof measures inside its own nodes', async () => {
+  const proof = await buildCorpusProof();
+  const byId = new Map(proof.renditions.map((r) => [r.id, r]));
+  const media = new Map((proof.media || []).map((m) => [m.id, m]));
+  const scenes = [...proof.spine, ...proof.branches.flatMap((b) => b.scenes)].filter((s) => s.layout === 'systemMap');
+  assert.ok(scenes.length > 0, 'the corpus produces systemMap scenes');
+
+  for (const scene of scenes) {
+    const ctx = {
+      brand: proof.brand,
+      specimen: proof.specimens.find((s) => s.id === scene.specimenId) || null,
+      renditions: (scene.renditionIds || []).map((id) => byId.get(id)).filter(Boolean),
+      media,
+      labelIllustrative: true,
+    };
+    for (const bp of BPS) {
+      for (const box of measureScene(scene, ctx, bp).boxes.filter((b) => /^map/.test(b.role))) {
+        assert.equal(box.text, box.text.trim(), `${scene.id} ${bp}: padded map label`);
+        const width = measureText(box.text, substituted(box, proof.brand));
+        assert.ok(width <= box.containerWidthPx * 1.02,
+          `${scene.id} ${bp}: ${box.role} runs past its node: ${JSON.stringify(box.text)}`);
+      }
+    }
   }
 });

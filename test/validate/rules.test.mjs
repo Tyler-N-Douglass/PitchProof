@@ -18,6 +18,11 @@ import {
   runPreflight, RULES, ruleFor, severityOf, resolveSeverity, summarize,
   DECLARED_SEVERITY, NARROWABLE, sortFindings, makeFinding, compareFindings, autoFixes,
 } from '../../src/validate/index.js';
+import { beatShape, logoPayloadUsable } from '../../src/validate/rules.js';
+import { revealPathIndex } from '../../src/validate/preflight.js';
+import { buildScene, registerAllLayouts } from '../../src/scene/index.js';
+import { buildDeck } from '../../src/runtime/deck.js';
+import { elementId } from '../../src/core/ids.js';
 import {
   cleanProof, defectProof, danglingRevealProof, withRenderedReveals,
   copy, NOW, MUCH_LATER, LEAKY_DOCUMENT, CLEAN_DOCUMENT,
@@ -158,6 +163,54 @@ test('ASSET_MISSING names the dangling reference and offers to trim the block', 
   assert.equal(finding.locus.assetId, 'md_nowhere');
   assert.equal(finding.autoFixAvailable, true);
   assert.match(finding.message, /broken image/);
+});
+
+/**
+ * The regression for the defect L10 reported as L10-D10. §4 documents
+ * `LogoAsset.data` as "inline SVG markup or data URI" for *either* `kind`, and
+ * the rule used to demand literal markup whenever `kind` was `'svg'`. A logo the
+ * contract permits therefore drew a severity-1 `ASSET_MISSING` — a refusal to
+ * emit an honest proof, which is the most expensive kind of false positive a
+ * severity-1 rule can have (L11-D21).
+ */
+test('ASSET_MISSING accepts an SVG logo in either form the contract permits', async () => {
+  const inline = '<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="#123A8C"/></svg>';
+  const forms = [
+    ['inline markup', inline],
+    ['a percent-encoded data URI', `data:image/svg+xml,${encodeURIComponent(inline)}`],
+    ['a base64 data URI', `data:image/svg+xml;base64,${Buffer.from(inline, 'utf8').toString('base64')}`],
+  ];
+  for (const [what, data] of forms) {
+    const proof = copy(cleanProof());
+    proof.brand.logos[0].kind = 'svg';
+    proof.brand.logos[0].data = data;
+    const findings = (await preflight(proof)).filter((f) => f.code === 'ASSET_MISSING');
+    assert.deepEqual(findings, [], `an SVG logo carried as ${what} is contract-legal and must not be reported`);
+  }
+});
+
+test('ASSET_MISSING still reports a logo with nothing behind it', async () => {
+  const empty = [
+    ['no payload at all', ''],
+    ['prose where the markup should be', 'company-logo.svg'],
+    ['a data URI that declares SVG and carries none', 'data:image/svg+xml,'],
+    ['a data URI with a broken percent-escape', 'data:image/svg+xml,%E0%A4%A'],
+  ];
+  for (const [what, data] of empty) {
+    const proof = copy(cleanProof());
+    proof.brand.logos[0].kind = 'svg';
+    proof.brand.logos[0].data = data;
+    const findings = (await preflight(proof)).filter((f) => f.code === 'ASSET_MISSING');
+    assert.equal(findings.length, 1, `a logo with ${what} is a missing asset`);
+    assert.equal(findings[0].locus.assetId, 'lg_primary');
+    assert.match(findings[0].message, /SVG markup or data URI/);
+  }
+});
+
+test('logoPayloadUsable holds raster logos to a data URI', () => {
+  assert.equal(logoPayloadUsable('raster', 'data:image/png;base64,iVBORw0KGgo='), true);
+  assert.equal(logoPayloadUsable('raster', '<svg viewBox="0 0 2 2"></svg>'), false);
+  assert.equal(logoPayloadUsable('raster', ''), false);
 });
 
 test('ASSET_OVERSIZE quotes both the byte share and the §8 capture cap', async () => {
@@ -363,6 +416,120 @@ test('DUPLICATE_SCENE separates a repeated id from repeated content', async () =
   assert.equal(byContent.length, 1);
   assert.equal(byContent[0].severity, 2, 'identical content under distinct ids navigates fine');
   assert.deepEqual(byContent[0].detail.sceneIds, ['sc_a', 'sc_twin']);
+});
+
+/**
+ * The regression for the content half of `DUPLICATE_SCENE`, which could not fire.
+ *
+ * `Beat.reveals` holds element ids and `elementId(sceneId, path)` derives them
+ * from the scene id, so a duplicate built the way a seller's duplicate is really
+ * built — `buildScene` over the same specimen, renditions, layout and copy, under
+ * a fresh id — held entirely different reveal ids from its original and never
+ * matched. The only scenes whose reveals *did* match were scenes sharing an id,
+ * which is the case the first half of the rule already owns; the second half was
+ * dead code (L11-D20).
+ *
+ * This test builds the twin through L8 rather than by copying an object, so it
+ * reproduces the exact shape that used to slip through.
+ */
+/** Two scenes built by L8 from one set of inputs, under two ids. */
+function twinScenes(proof, source, ids) {
+  registerAllLayouts();
+  return ids.map((id) => buildScene({
+    layout: source.layout,
+    specimen: proof.specimens.find((sp) => sp.id === source.specimenId) || null,
+    renditions: proof.renditions.filter((r) => source.renditionIds.includes(r.id)),
+    headline: source.headline,
+    subhead: source.subhead,
+    id,
+  }));
+}
+
+test('DUPLICATE_SCENE catches two scenes built from the same inputs under different ids', async () => {
+  const proof = copy(cleanProof());
+  const [a, b] = twinScenes(proof, proof.spine[0], ['sc_twin_a', 'sc_twin_b']);
+
+  // The premise: the two are duplicates in every visible way and share not one
+  // reveal id, because `elementId(sceneId, path)` mixes the scene id into every
+  // one of them. A rule that compares reveal ids sees two unrelated scenes.
+  const aReveals = new Set(a.beats.flatMap((x) => x.reveals));
+  assert.ok(a.beats.length > 0 && b.beats.length === a.beats.length);
+  assert.ok(
+    b.beats.flatMap((x) => x.reveals).every((id) => !aReveals.has(id)),
+    'the twins must share no reveal id, or this test proves nothing',
+  );
+
+  proof.spine.push(a, b);
+  const findings = (await preflight(proof)).filter((f) => f.code === 'DUPLICATE_SCENE');
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 2, 'distinct ids navigate fine — this is a warning, not a block');
+  assert.deepEqual(findings[0].detail.sceneIds, ['sc_twin_a', 'sc_twin_b']);
+  assert.match(findings[0].message, /identical in layout, copy and reveals/);
+});
+
+test('DUPLICATE_SCENE catches a scene deep-copied with its original\'s reveal ids intact', async () => {
+  const proof = copy(cleanProof());
+  const twin = copy(proof.spine[0]);
+  twin.id = 'sc_deep_copy';
+  twin.beats = twin.beats.map((b, i) => ({ ...b, id: `bt_copy_${i}` }));
+  proof.spine.push(twin);
+  const findings = (await preflight(proof)).filter((f) => f.code === 'DUPLICATE_SCENE');
+  assert.equal(findings.length, 1, 'a copy carrying stale ids is still the same scene on screen');
+  assert.deepEqual(findings[0].detail.sceneIds, [proof.spine[0].id, 'sc_deep_copy'].sort());
+});
+
+test('DUPLICATE_SCENE leaves two scenes alone once their beats tell a different story', async () => {
+  const proof = copy(cleanProof());
+  const [a, b] = twinScenes(proof, proof.spine[0], ['sc_twin_a', 'sc_twin_b']);
+  assert.ok(a.beats.length >= 2, 'this case needs a scene with more than one beat');
+  // Same elements, staged as one beat instead of several: a different telling.
+  b.beats = [{ ...b.beats[0], reveals: b.beats.flatMap((x) => x.reveals) }];
+  proof.spine.push(a, b);
+  const findings = (await preflight(proof)).filter((f) => f.code === 'DUPLICATE_SCENE');
+  assert.deepEqual(findings, []);
+});
+
+test('a scene whose beats are grouped differently is not a duplicate of one that is not', async () => {
+  // The control proof stages its first scene by hand, in two beats. L8 would
+  // stage the same content in three. The fingerprint must tell them apart, or
+  // every rebuild of an existing scene would read as a duplicate of it.
+  const proof = copy(cleanProof());
+  const [rebuilt] = twinScenes(proof, proof.spine[0], ['sc_rebuilt']);
+  assert.notEqual(rebuilt.beats.length, proof.spine[0].beats.length);
+  proof.spine.push(rebuilt);
+  const findings = (await preflight(proof)).filter((f) => f.code === 'DUPLICATE_SCENE');
+  assert.deepEqual(findings, []);
+});
+
+test('beatShape divides the scene id out of a scene\'s reveals', () => {
+  const paths = new Map([['el_one', 'head'], ['el_two', 'stack/source']]);
+  const scene = {
+    id: 'sc_a',
+    beats: [{ reveals: ['el_two', 'el_one'] }, { reveals: ['el_unknown', 'el_alsounknown'] }],
+  };
+  assert.deepEqual(beatShape(scene, paths), [['@head', '@stack/source'], ['#0', '#1']]);
+  // An id no scene renders still gets an id-free label, so two scenes carrying
+  // the same structural mistake fingerprint alike.
+  const other = { id: 'sc_b', beats: [{ reveals: ['el_two', 'el_one'] }, { reveals: ['el_x', 'el_y'] }] };
+  assert.deepEqual(beatShape(other, paths), beatShape(scene, paths));
+  // And beat order is content: the same reveals, restaged, are a different shape.
+  const restaged = { id: 'sc_c', beats: [{ reveals: ['el_one', 'el_two'] }] };
+  assert.notDeepEqual(beatShape(restaged, paths), beatShape(scene, paths));
+});
+
+test('revealPathIndex recovers the path behind every reveal id in the deck', async () => {
+  const proof = copy(cleanProof());
+  const deck = buildDeck(proof);
+  const index = revealPathIndex(proof, deck);
+  for (const scene of proof.spine) {
+    for (const beat of scene.beats) {
+      for (const id of beat.reveals) {
+        const path = index.get(id);
+        assert.equal(typeof path, 'string', `no path recovered for ${id}`);
+        assert.equal(elementId(scene.id, path), id, 'the recovered path must re-mint the id it came from');
+      }
+    }
+  }
 });
 
 test('SIZE_BUDGET_EXCEEDED blocks only when the undegradable floor is over budget', async () => {

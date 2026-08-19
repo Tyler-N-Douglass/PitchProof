@@ -264,8 +264,9 @@ function node(ctx, spec) {
       'data-pp-unit-h': String(MAP.lineStep.title),
       'data-pp-ws': 'nowrap',
       // The wrap ellipsises what it had to cut, so a truncation here is one the
-      // viewer can see rather than a label that silently stops (§22.2).
-      'data-pp-to': title.truncated ? 'ellipsis' : null,
+      // viewer can see rather than a label that silently stops (§22.2). Only
+      // the line that was actually cut says so — the lines above it are whole.
+      'data-pp-to': title.truncated && i === titleLines.length - 1 ? 'ellipsis' : null,
     }, line))),
   metaLines.length
     ? h('text', {
@@ -282,7 +283,7 @@ function node(ctx, spec) {
       'data-pp-unit-w': String(innerW),
       'data-pp-unit-h': String(MAP.lineStep.meta),
       'data-pp-ws': 'nowrap',
-      'data-pp-to': meta.truncated ? 'ellipsis' : null,
+      'data-pp-to': meta.truncated && i === metaLines.length - 1 ? 'ellipsis' : null,
     }, line)))
     : null);
 }
@@ -348,7 +349,7 @@ export function wrap(text, role, maxUnits, maxLines, brand) {
  */
 function mapStyle(role, brand) {
   const spec = styleForRole(role, 'md', brand, { scale: 1 });
-  return { ...spec.style, family: renderedFamily(brand, spec.face, spec.style.weight) };
+  return { ...spec.style };
 }
 
 /**
