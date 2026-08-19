@@ -51,7 +51,7 @@
 import { contentId } from '../core/ids.js';
 import { styleString } from '../core/vdom.js';
 import { CONTRAST_AA_BODY } from '../core/contracts.js';
-import { parseStylesheet, computeCascade, backgroundColorOf } from './css.js';
+import { parseStylesheet, computeCascade, backgroundColorOf, resolveLengthPx, resolveLineHeightPx } from './css.js';
 import { parseColor, contrastRatio, compositeOver, toHex } from './color-value.js';
 import { requiresProvenanceLabel, isUnearnedVerification, promotionRecord } from './promotion.js';
 
@@ -60,6 +60,49 @@ export const PROVENANCE_LABEL_CLASS = 'pp-provenance';
 
 /** §18.1's size floor, in CSS px. */
 export const MIN_LABEL_FONT_PX = 11;
+
+/**
+ * How much room the label's own text needs, in multiples of its font size
+ * (C9).
+ *
+ * §18.1 says the label "cannot be styled to invisibility (contrast and size
+ * floors enforced at emit)". The first version of this check read that as a
+ * list of ways to hide a box and answered each one: `display:none`,
+ * `visibility:hidden`, `opacity:0`, `clip-path`, off-screen positioning,
+ * `transform:scale(0)`, and a `width`/`height` that was the literal string `0`.
+ * Thirteen attacks bounced off it, and two walked through:
+ *
+ * ```css
+ * .pp-provenance{height:1px!important;overflow:hidden!important}
+ * .pp-provenance{letter-spacing:-1em!important}
+ * ```
+ *
+ * Neither is a new trick. `height:1px` is `height:0` with a typo, and a list of
+ * literal values will always be one property behind whoever is writing the
+ * stylesheet. So the question the check asks changed: not *"is this declaration
+ * one of the ones we know about"* but **"is there room for the label's own line
+ * of text, in CSS pixels"**. A box is judged against the line box the label's
+ * own `font-size` and `line-height` produce; tracking is judged against the
+ * font size it is applied to. Both are measurements, and both are units the
+ * next attack has to survive rather than a spelling it has to avoid.
+ *
+ * The widths are generous on purpose. `LABEL_MIN_WIDTH_EM` at the 11px floor is
+ * 66px — about eleven characters of a fifty-character sentence — so a design
+ * that puts the label in a genuinely narrow column still clears it, and a
+ * nineteen-pixel smear does not.
+ */
+export const LABEL_MIN_WIDTH_EM = 6;
+
+/**
+ * The tightest negative tracking a label may carry, as a fraction of its font
+ * size. Real typography uses down to about -0.05em on display sizes; at -0.1em
+ * glyphs begin to touch, and `-1em` — the attack — stacks every character on
+ * the one before it.
+ */
+export const LABEL_MIN_TRACKING_EM = -0.1;
+
+/** Overflow values that cut the label off rather than letting it spill. */
+const CLIPPING_OVERFLOW = new Set(['hidden', 'clip']);
 
 /** Attribute a layout may use to scope a rendition's subtree. */
 export const RENDITION_ATTR = 'data-pp-rendition';
@@ -332,6 +375,22 @@ export function judgeLabelStyle(chain, rules) {
     reasons.push(`font-size computes to ${round(fontSizePx)}px, below the ${MIN_LABEL_FONT_PX}px floor §18.1 enforces`);
   }
 
+  // C9. The size floor, measured rather than spelled: room for the label's own
+  // line of text, and tracking that leaves the characters apart.
+  const room = judgeLabelRoom(chain, computed);
+  reasons.push(...room.reasons);
+
+  // The floor again, on the size the label is actually painted at. A chain that
+  // scales the label to a fifth renders 12px type at 2.4px, and no list of
+  // `transform` spellings would have caught `scale(0.2)` while catching
+  // `scale(0)`.
+  if (room.scale < 1) {
+    const rendered = fontSizePx * room.scale;
+    if (!(rendered >= MIN_LABEL_FONT_PX)) {
+      reasons.push(`the label is scaled by ${round(room.scale)}, so ${round(fontSizePx)}px type renders at ${round(rendered)}px — below the ${MIN_LABEL_FONT_PX}px floor §18.1 enforces`);
+    }
+  }
+
   const background = resolveBackground(chain, computed);
   const foregroundRaw = parseColor(self.props.color || '') || { r: 0, g: 0, b: 0, a: 1 };
   const foreground = compositeOver({ ...foregroundRaw, a: foregroundRaw.a * self.effectiveOpacity }, background);
@@ -351,8 +410,169 @@ export function judgeLabelStyle(chain, rules) {
       foreground: toHex(foreground),
       background: toHex(background),
       opacity: Number(self.effectiveOpacity.toFixed(3)),
+      lineBoxPx: round(room.lineBoxPx),
+      boxHeightPx: room.boxHeightPx === null ? null : round(room.boxHeightPx),
+      boxWidthPx: room.boxWidthPx === null ? null : round(room.boxWidthPx),
+      clipped: room.clipped,
+      trackingPx: round(room.trackingPx),
+      scale: round(room.scale),
     },
   };
+}
+
+/**
+ * Is there room for the label's own line of text? (C9)
+ *
+ * Three measurements, taken off the cascade rather than off the spelling of any
+ * one declaration:
+ *
+ *   1. **The line box** the label's `font-size` and `line-height` produce. That
+ *      is the height a single line of it needs.
+ *   2. **The tightest fixed box** anywhere on the chain from `<html>` to the
+ *      label — the smallest resolvable `height`/`max-height` and
+ *      `width`/`max-width` — together with whether anything on that chain
+ *      clips. A short box that lets its content spill is a layout choice; a
+ *      short box that cuts it off is the label being hidden. `height:1px;
+ *      overflow:hidden` is the second, and so is every other number below the
+ *      line box.
+ *   3. **Tracking**, as a fraction of the size it is applied at. `letter-spacing`
+ *      and `word-spacing` inherit, so the whole chain is read and the tightest
+ *      wins.
+ *
+ * A dimension whose pixel value depends on layout — `50%`, `auto`, `calc()` —
+ * is not judged at all, because the emitter does not lay the document out and a
+ * law resting on a guess is worse than no law. `resolveLengthPx` returns `null`
+ * for those, and `null` means "this one says nothing", not "this one is fine".
+ *
+ * Scroll containers are deliberately **not** counted as clipping: `overflow:
+ * auto` on a short box leaves the label reachable, and the runtime's own scene
+ * container is exactly that. `hidden` and `clip` are not reachable.
+ *
+ * @param {import('./css.js').ElementDesc[]} chain     html → label
+ * @param {import('./css.js').ComputedStyle[]} computed
+ * @returns {{reasons: string[], lineBoxPx: number, boxHeightPx: number|null, boxWidthPx: number|null, clipped: boolean, trackingPx: number, scale: number}}
+ */
+export function judgeLabelRoom(chain, computed) {
+  const self = computed[computed.length - 1];
+  const rootPx = computed.length ? computed[0].fontSizePx : 16;
+  const fontSizePx = self.fontSizePx;
+  const lineBoxPx = Math.max(fontSizePx, resolveLineHeightPx(self.props['line-height'], fontSizePx, rootPx));
+
+  const widthFloor = LABEL_MIN_WIDTH_EM * fontSizePx;
+  /** @type {string[]} */
+  const reasons = [];
+  /** @type {number|null} */
+  let boxHeightPx = null;
+  /** @type {number|null} */
+  let boxWidthPx = null;
+  let clipped = false;
+  let trackingPx = 0;
+  let scale = 1;
+
+  for (let i = 0; i < computed.length; i++) {
+    const style = computed[i];
+    const el = chain[i];
+    const who = i === chain.length - 1 ? 'the label' : `an ancestor <${el.tag}${el.classes.length ? `.${el.classes.join('.')}` : ''}>`;
+
+    // Clipping is judged **on the element that declares the small box**, never
+    // across the chain. A one-pixel label inside a clipping stage still shows
+    // its text: the text spills out of the label and the stage clips at the
+    // stage's own edge, which is nowhere near it. It is the element that is
+    // both too small and cutting its own content off that hides the label —
+    // `.pp-provenance{height:1px;overflow:hidden}`, exactly.
+    const cuts = clipsContent(style);
+    if (cuts) clipped = true;
+
+    for (const prop of ['height', 'max-height']) {
+      const px = resolveLengthPx(style.props[prop], style.fontSizePx, rootPx);
+      if (px === null) continue;
+      if (boxHeightPx === null || px < boxHeightPx) boxHeightPx = px;
+      if (cuts && px < lineBoxPx) {
+        reasons.push(
+          `${prop}:${String(style.props[prop]).trim()} on ${who} leaves ${round(px)}px for a line box of ${round(lineBoxPx)}px, `
+          + 'and that element clips what does not fit — a box too short to hold one line of the label is the label styled to invisibility (§18.1)',
+        );
+      }
+    }
+    for (const prop of ['width', 'max-width']) {
+      const px = resolveLengthPx(style.props[prop], style.fontSizePx, rootPx);
+      if (px === null) continue;
+      if (boxWidthPx === null || px < boxWidthPx) boxWidthPx = px;
+      if (cuts && px < widthFloor) {
+        reasons.push(
+          `${prop}:${String(style.props[prop]).trim()} on ${who} leaves ${round(px)}px against a ${round(widthFloor)}px floor `
+          + `(${LABEL_MIN_WIDTH_EM}em of ${round(fontSizePx)}px type), and that element clips what does not fit — there is not room to read it (§18.1)`,
+        );
+      }
+    }
+
+    for (const prop of ['letter-spacing', 'word-spacing']) {
+      const raw = String(style.props[prop] || '').trim().toLowerCase();
+      if (!raw || raw === 'normal') continue;
+      const px = resolveLengthPx(raw, style.fontSizePx, rootPx);
+      if (px === null) continue;
+      const floor = LABEL_MIN_TRACKING_EM * style.fontSizePx;
+      if (px < trackingPx) trackingPx = px;
+      if (px < floor) {
+        reasons.push(
+          `${prop}:${String(style.props[prop]).trim()} on ${who} computes to ${round(px)}px against ${round(style.fontSizePx)}px type, `
+          + `past the ${LABEL_MIN_TRACKING_EM}em floor — the characters collapse onto one another`,
+        );
+      }
+    }
+
+    scale *= scaleFactorOf(style);
+  }
+
+  return { reasons, lineBoxPx, boxHeightPx, boxWidthPx, clipped, trackingPx, scale };
+}
+
+/**
+ * Does this element cut its content off rather than let it spill?
+ * @param {import('./css.js').ComputedStyle} style
+ * @returns {boolean}
+ */
+export function clipsContent(style) {
+  const shorthand = String(style.props.overflow || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const values = [
+    ...shorthand,
+    String(style.props['overflow-x'] || '').trim().toLowerCase(),
+    String(style.props['overflow-y'] || '').trim().toLowerCase(),
+  ];
+  return values.some((v) => CLIPPING_OVERFLOW.has(v));
+}
+
+/**
+ * The smallest scale factor an element applies to itself, from `transform`,
+ * the `scale` property, or `zoom`. 1 when it applies none.
+ * @param {import('./css.js').ComputedStyle} style
+ * @returns {number}
+ */
+export function scaleFactorOf(style) {
+  let factor = 1;
+
+  const transform = String(style.props.transform || '').toLowerCase();
+  const fn = /scale(x|y|3d)?\(([^)]*)\)/g;
+  let hit;
+  while ((hit = fn.exec(transform)) !== null) {
+    const parts = hit[2].split(',').map((p) => parseFloat(p.trim())).filter((n) => Number.isFinite(n));
+    if (!parts.length) continue;
+    factor *= Math.min(...parts.map(Math.abs));
+  }
+
+  const scaleProp = String(style.props.scale || '').trim().toLowerCase();
+  if (scaleProp && scaleProp !== 'none') {
+    const parts = scaleProp.split(/\s+/).map((p) => (p.endsWith('%') ? parseFloat(p) / 100 : parseFloat(p))).filter((n) => Number.isFinite(n));
+    if (parts.length) factor *= Math.min(...parts.map(Math.abs));
+  }
+
+  const zoom = String(style.props.zoom || '').trim().toLowerCase();
+  if (zoom && zoom !== 'normal') {
+    const n = zoom.endsWith('%') ? parseFloat(zoom) / 100 : parseFloat(zoom);
+    if (Number.isFinite(n) && n >= 0) factor *= n;
+  }
+
+  return factor;
 }
 
 /** @param {number} n @returns {number} */

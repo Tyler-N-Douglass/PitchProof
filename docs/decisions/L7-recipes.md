@@ -622,3 +622,147 @@ it survives an export **and cannot be hand-forged**". That is the F23 overclaim
 restated, in the lane whose UI a seller actually reads. It is L12's file; the
 correction is reported to the integrator rather than made here. The panel's own
 rendered wording is already accurate — only the doc comment above it is not.
+
+---
+
+## D-L7-18 — A rendition this lane produced is never a `raw` block; direction and language ride on optional extensions (finding C8)
+
+**Unsettled by:** §4 freezes `ContentBlock` with no way to express writing
+direction. §8 says a `raw` copy of the source is kept "but never present raw HTML
+in a scene without a user opt-in per specimen". §9.1 asks `locale-fanout` for
+"locale-appropriate structure, not just translated strings". Nothing says which
+of those rules governs a *rendition* whose structure includes direction.
+
+**What was wrong.** This lane encoded RTL prose as `raw` blocks holding
+`<p dir="rtl" lang="ar-SA">…</p>`. Every layout is right to flatten a `raw` block
+to plain text — `src/scene/blocks.js` did so under a caption reading "Source
+markup, shown as text" — so the ar-SA rendition rendered left to right, and it
+rendered *labelled as the prospect's own captured page source rather than as this
+lane's output*. `dir="rtl"` appeared nowhere in the emitted artifact. The only
+survivor was a table row reading "Writing direction · right to left": the recipe
+**describing** the difference in place of the deck **showing** it, which is
+exactly the distinction §9.1 draws. Two rules collided and the wrong one won.
+
+**Decision, in four parts.**
+
+1. **`raw` is for captured source, and this lane does not produce captured
+   source.** §8's opt-in rule protects against presenting the *prospect's* markup
+   unexamined — HTML a layout must not trust or execute. A rendition a seed
+   recipe built is neither the prospect's nor markup. L8 is not wrong to flatten
+   a `raw` block; the defect was that this lane's own output arrived as one. A
+   heading is a `heading` block, a paragraph is a `paragraph` block, a list is a
+   `list` block, and a test asserts across all eight recipes that none of them
+   emits `raw` for anything it generated.
+
+2. **Direction and language are optional §4 extensions, on the block and on the
+   rendition, block winning.**
+
+   ```ts
+   /* below FROZEN REGION END */
+   interface ContentBlock { dir?: 'ltr' | 'rtl' | 'auto'; lang?: string }
+   interface Rendition    { dir?: 'ltr' | 'rtl' | 'auto'; lang?: string }
+   ```
+
+   Both levels, because they answer different questions and the asymmetry is the
+   argument. **Direction is a property of the rendition**: the whole ar-SA card
+   is laid out right to left, including its table, its call to action and its
+   figure captions, so declaring it once is both true and robust to a layout that
+   subsets or reorders blocks. **Language is a property of a run of text**: a
+   rendition mixes the source's words with this lane's own structural labels, so
+   no single tag is true of the whole of it. Carrying only one level would force
+   a choice between losing direction when blocks are regrouped and asserting a
+   language that is false of half the card. `locale-fanout` therefore sets
+   `Rendition.dir`, sets `dir` on every block, sets `lang` per block, and sets no
+   `Rendition.lang`.
+
+3. **`dir` is the market's. `lang` is the source's. Never the other way round.**
+   This is the CRITIQUE-1 ambiguity, judged. The recipe reformats and does not
+   translate (D-L7-11), so an ar-SA rendition of an English page is English text
+   in a right-to-left layout. That pairing is unusual and it is *correct*: it is
+   precisely what the recipe genuinely produced, and it is what §9.1 asks the
+   deck to show. Marking that text `lang="ar-SA"` would be a false claim about
+   the content — §18.2 in a quieter register than a fabricated statistic, and
+   worse in one respect, because it also hands a screen reader an Arabic voice
+   for English words. Where the specimen declares no language, nothing is
+   claimed: `sourceLanguage()` returns `null` and no `lang` is written. This
+   lane's own structural labels — the format-contract card, the "no source
+   content" slot — are marked `lang="en"`, which is what they are.
+
+   The rendition's notes say this out loud for RTL markets, and L8 renders notes
+   verbatim: *"The layout is the market's; the words are still the source's,
+   which is why they read left to right inside a right-to-left page."*
+
+4. **Both values are validated where they are set, not where they are emitted.**
+   `buildRendition` refuses a `dir` outside `DIRECTIONS` and a `lang` that is not
+   a conservative BCP-47 tag, because both reach an HTML attribute and the
+   emitter is not the place to discover that a rendition carries `lang='en"
+   onload="…'`. Absent stays absent: `undefined` means "this recipe made no claim
+   about direction", which is a different thing from "left to right", and an id
+   minted before the extensions existed is unchanged by their existence
+   (`stableStringify` drops `undefined` keys).
+
+**What the fix is not.** It is **not** that the ar-SA rendition starts showing
+Arabic. Inventing translated copy is the §18.2 violation a localisation demo is
+most tempted by, and D-L7-11 already refuses it. The LTR Latin text on the ar-SA
+card is correct and stays correct. What changed is that the deck now *shows* the
+structural difference the recipe genuinely produced instead of listing it in a
+table and rendering the card as flattened source.
+
+**Convergence with L8.** The shape above was chosen independently in `src/scene/`
+in the same pass: `src/scene/direction.js` reads `dir`/`lang` off a block, falls
+back to the container's, and normalises to the same three values. `DIRECTIONS` is
+exported from `src/recipe/index.js` and matches theirs, so a value L7 emits is a
+value L8 honours and vice versa.
+
+**Second-order fix: the helpers that dropped the field.** `cloneBlock` and
+`mapBlockText` rebuild a block field by field, so anything §4 does not name was
+silently discarded between the template that set it and the layout that reads
+it. That is the failure mode of every optional extension, so `carryDirection`
+now runs in both, and a test asserts it.
+
+**The adapter, too.** `runAdapter` for an RTL market sets `Rendition.dir` from
+the market named in the label — an endpoint asked for `ar-SA` may return real
+Arabic, and nothing else in that path would tell a layout to lay it out right to
+left. It sets no `lang`: what language an endpoint answered in is not something
+this module read, and naming one would be a claim about content it did not
+examine.
+
+---
+
+## D-L7-19 — A pasted code block is `paragraph` + `pre`, not `raw` (finding C8, second instance)
+
+**Unsettled by:** §4's `ContentBlock` union is frozen and has no code variant.
+
+**Decision.** `parsePasted` renders a fenced code block, and a `<pre>` in pasted
+HTML, as `{type: 'paragraph', text, pre: true}` rather than as a `raw` block
+wrapping `<pre><code>…</code></pre>`.
+
+**Why.** The same defect as D-L7-18, found by looking for the rest of the
+category rather than only where the critic pointed. The `<pre><code>` wrapper was
+*this parser's* markup, not the paste's — so a code sample a user typed into
+their own rendition was reaching the deck under a caption calling it the
+prospect's captured source markup. It is neither the prospect's nor source.
+
+**Why `pre` and not a new block type.** §4 permits optional fields and forbids
+renaming or retyping; adding a `'code'` variant to the frozen union would break
+every exhaustive switch across four lanes. `pre?: boolean` on a paragraph is the
+additive form of the same information.
+
+**Why this one degrades safely on its own.** A layout that has never heard of
+`pre` renders a paragraph — which is exactly what the old `raw` block rendered
+as once `stripTags` had run, minus a caption that was not true. So unlike the
+`dir`/`lang` extension, nothing is lost if L8 never reads it, and this is
+reported to the integrator as a secondary ask rather than a coupled one.
+
+---
+
+## D-L7-20 — Where the same defect was found outside this lane
+
+**Unsettled by:** nothing; recorded so it is not lost.
+
+`src/specimen/blocks.js` emits `{type: 'raw', html: '<pre>…</pre>'}` for a `<pre>`
+element found during capture. That is L6's file and this lane did not touch it.
+Unlike the two cases above, the argument there is genuinely balanced: the
+`<pre>`'s *contents* are the prospect's, so `raw` is defensible, but the `<pre>`
+wrapper is the capturer's and the "Source markup, shown as text" caption is
+therefore half true. Reported across the lane boundary rather than fixed here.

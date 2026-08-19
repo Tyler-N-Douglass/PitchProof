@@ -334,6 +334,87 @@ test('an empty state names the thing that is empty and the way out of it', async
   assert.match(panelText('emit'), /has not been computed yet/i);
 });
 
+// ----------------------------------------------------------------- C11 -----
+
+/**
+ * The same law applied to a sweep instead of an empty collection.
+ *
+ * CRITIQUE-2 C11: with zero scenes the Rehearse panel printed "Sweep clean
+ * across 2 checks", "No blocking findings", "Scenes walked 0" and "Nothing
+ * blocks the emit" — over a status bar reading "This proof has no spine. Add at
+ * least one scene before emitting." Every sentence was generated from something
+ * the panel knew; two of them were false at the moment they were printed. §14
+ * makes rehearsal "the last pass before you walk in", so a reassuring sentence
+ * on that screen is load-bearing in a way it is nowhere else.
+ *
+ * The shape of the guard matches the rest of this file: the false sentences are
+ * banned *and* the true ones are pinned, so the finding cannot be closed by
+ * deleting the reassurance. `test/ui/critique-2.test.mjs` holds the other half —
+ * that "Nothing blocks the emit." is still printed on a proof where nothing
+ * does.
+ *
+ * @param {any} app
+ * @returns {string}
+ */
+function rehearseText(app) {
+  app.ui.section = 'rehearse';
+  return visibleStrings(PANELS.rehearse(app)).join('\n');
+}
+
+test('C11: a sweep that walked no scenes does not call itself clean', async () => {
+  const app = await studio();
+  await app.dispatch('rehearse.sweep');
+  assert.equal(app.ui.sweep.at !== null, true, 'a sweep really ran');
+  assert.deepEqual(app.ui.sweep.findings, [], 'and raised nothing, which is the state C11 was about');
+
+  const text = rehearseText(app);
+  assert.doesNotMatch(text, /Nothing blocks the emit\./, 'the emit is closed: there is no spine to emit');
+  assert.doesNotMatch(text, /Sweep clean/i, 'a sweep of nothing is not a clean sweep');
+  assert.doesNotMatch(text, /No blocking findings\. The emit is open/i, 'nor is it an open emit');
+
+  assert.match(text, /nothing was walked|walked no scenes/i, 'it says what did not happen');
+  assert.match(text, /no scenes yet|no spine/i, 'and why');
+  assert.match(text, /Add a scene/i, 'and what to do about it');
+  assert.match(text, /Scenes walked/, 'the count that makes it vacuous stays on screen');
+});
+
+test('C11: the panel and the status bar give the same answer about the emit', async () => {
+  const app = await studio();
+  await app.dispatch('rehearse.sweep');
+
+  const gate = emitBlockers(app);
+  assert.equal(gate.canEmit, false, 'a proof with no spine cannot be emitted');
+  const text = rehearseText(app);
+  assert.match(
+    text,
+    new RegExp(gate.blockers[0].message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    'the blocking-findings section names the blocker the gate is actually holding, in the gate\'s own words',
+  );
+});
+
+test('C11: the notification the sweep raises says the same thing as the panel', async () => {
+  const app = await studio();
+  await app.dispatch('rehearse.sweep');
+  const notice = app.ui.notices.at(-1);
+  assert.equal(notice.tone, 'warn', 'not the green tick that "clean" earns');
+  assert.match(notice.text, /walked no scenes/i);
+  assert.match(notice.text, /Add a scene/i);
+});
+
+test('C11: with a scene walked, the sweep stops apologising for a deck that exists', async () => {
+  const app = await studio();
+  app.dispatch('scene.add', 'quoteCard');
+  await app.dispatch('rehearse.sweep');
+
+  const text = rehearseText(app);
+  assert.doesNotMatch(text, /walked no scenes|nothing was walked/i, 'a scene was walked');
+  assert.match(text, /Scenes walked/, 'and the count says how many');
+  // The brand of a brand-new project is still unreviewed, so the emit is closed
+  // for that reason instead — and the panel must say so rather than either
+  // claiming the way is clear or blaming the sweep.
+  assert.match(text, /The sweep raised no blocking finding/, 'the findings and the gate are two different statements');
+});
+
 // ----------------------------------------------------------------- F23 -----
 
 /**

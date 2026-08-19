@@ -32,6 +32,17 @@ export const PROVENANCE_LABEL_CLASS = 'pp-provenance';
 export const PROVENANCE_LABEL_TEXT = 'Illustrative example — not client-approved content';
 
 /**
+ * The horizontal room `.pp-provenance` spends on itself, both sides summed, in
+ * px: `padding: 3px 8px` plus the `border-left: 3px solid var(--pp-warning)`
+ * rule that makes the label distinctive without relying on a fill whose
+ * contrast nothing guarantees. L2 owns those declarations in `runtime.css`;
+ * this is the measurement's half of them, so the box the detector is handed is
+ * the box the words actually get. `test/scene/geometry-browser.test.mjs` reads
+ * the number back off Chromium.
+ */
+export const PROVENANCE_LABEL_INSET_PX = 8 + 8 + 3;
+
+/**
  * §9: any rendition not `client-supplied` and not explicitly promoted to
  * `verified-by-user` must carry a visible label. Written as "not one of the two
  * safe values" rather than "equals illustrative", so a provenance value this
@@ -67,6 +78,17 @@ export function provenanceLabel(rendition, ctx) {
     class: PROVENANCE_LABEL_CLASS,
     'data-pp-tx': 'provenance',
     'data-pp-provenance-for': rendition.id,
+    // The pill's own gutters and rule, which are not the container's and were
+    // not being subtracted from it.
+    'data-pp-inset': String(PROVENANCE_LABEL_INSET_PX),
+    // `inline-flex`, so the pill is as wide as its words up to the room it has.
+    // The measurement reports the *room*, which is the number the detector needs
+    // and the number a longer label in another brand's face would fill; the
+    // rendered box is narrower whenever the words are short. Marked so
+    // test/scene/geometry-browser.test.mjs checks it as a fitted box — the
+    // browser width bounded by the model, not equal to it — rather than
+    // silently tolerating the one shape whose width is content-derived.
+    'data-pp-fit': 'shrink',
   }, PROVENANCE_LABEL_TEXT);
 }
 
@@ -177,6 +199,13 @@ export function withProvenanceLedger(tree, ctx) {
   const order = new Map((Array.isArray(ctx.renditions) ? ctx.renditions : [])
     .filter(Boolean).map((r, i) => [r.id, i]));
 
+  // Two declared tracks, not two shrink-to-fit flex items. A ledger row used to
+  // be `display: flex` with the name at `flex: 0 1 auto` beside a label at
+  // `flex: 0 0 auto`, which at `sm` left the name a five-pixel box holding a
+  // hundred and twenty-one pixels of text — reported by the model as a 328px
+  // container, and therefore reported as fitting (CRITIQUE-2 C1). The row is now
+  // a grid whose label track is `--pp-sc-ledger-label-w` and whose name track is
+  // what is left, both numbers this measurement can state.
   const rows = pending.map((rendition) => h('li', {
     class: 'pp-provenance-ledger-row',
     'data-pp-box': 'provenanceLedger',
@@ -187,8 +216,10 @@ export function withProvenanceLedger(tree, ctx) {
     class: 'pp-provenance-ledger-name',
     'data-pp-tx': 'noteLabel',
     'data-pp-clamp': '1',
+    'data-pp-inset': 'ledger-label-w,ledger-label-gap',
   }, renditionLabel(rendition, order.has(rendition.id) ? order.get(rendition.id) : 0)),
-  provenanceLabel(rendition, ctx)));
+  h('div', { class: 'pp-provenance-ledger-label', 'data-pp-width': 'ledger-label-w' },
+    provenanceLabel(rendition, ctx))));
 
   const ledger = h('ul', { class: PROVENANCE_LEDGER_CLASS }, rows);
   // The root states the strip's row count so `measureScene` can take the room
@@ -213,18 +244,36 @@ export function sceneHead(ctx, options = {}) {
   const { scene } = ctx;
   const path = options.path || 'head';
   const kicker = options.kicker || null;
-  if (!kicker && !scene.headline && !scene.subhead && !options.extra) return null;
+  const extra = options.extra || null;
+  if (!kicker && !scene.headline && !scene.subhead && !extra) return null;
   return h('header', {
-    class: 'pp-scene-head',
+    class: `pp-scene-head${extra ? ' pp-scene-head--extra' : ''}`,
     'data-pp-box': 'head',
     'data-pp-el': ctx.el(path),
     'data-pp-group': options.group || 'head',
   },
-  h('div', { class: 'pp-scene-head-text' },
-    kicker ? h('p', { class: 'pp-kicker', 'data-pp-tx': 'kicker' }, kicker) : null,
-    scene.headline ? h('h2', { class: 'pp-headline', 'data-pp-tx': 'headline', 'data-pp-clamp': '2' }, scene.headline) : null,
-    scene.subhead ? h('p', { class: 'pp-subhead', 'data-pp-tx': 'subhead', 'data-pp-clamp': '2' }, scene.subhead) : null),
-  options.extra || null);
+  h('div', {
+    class: 'pp-scene-head-text',
+    // The chip is a declared track (`--pp-sc-head-extra-w`), so the text column
+    // is the rest of the row and this measurement can say so. It used to be a
+    // flex sibling with no declared width at all: the model handed the headline
+    // the whole 350px stage at `sm` where Chromium hands it 131, and six scene
+    // headlines were cut with the detector silent (CRITIQUE-2 C1). At `sm` the
+    // token is `100%` — the chip drops to its own row — and the inset is zero.
+    'data-pp-inset': extra ? 'head-extra-w,head-col-gap' : null,
+  },
+  kicker ? h('p', { class: 'pp-kicker', 'data-pp-tx': 'kicker' }, kicker) : null,
+  scene.headline ? h('h2', { class: 'pp-headline', 'data-pp-tx': 'headline', 'data-pp-clamp': '2' }, scene.headline) : null,
+  scene.subhead
+    ? h('p', {
+      class: 'pp-subhead',
+      'data-pp-tx': 'subhead',
+      'data-pp-clamp': '2',
+      // `.pp-subhead { max-width: var(--pp-sc-subhead-max-w) }`.
+      'data-pp-max': 'subhead-max-w',
+    }, scene.subhead)
+    : null),
+  extra ? h('div', { class: 'pp-scene-head-extra', 'data-pp-width': 'head-extra-w' }, extra) : null);
 }
 
 /**
@@ -372,9 +421,26 @@ export function presentableNotes(rendition) {
  * @returns {import('../core/vdom.js').VNode}
  */
 export function emptyState(message, options = {}) {
-  return h('div', { class: 'pp-empty', 'data-pp-box': options.box || null },
-    h('p', { class: 'pp-empty-text', 'data-pp-tx': 'caption' }, message));
+  return h('div', {
+    class: 'pp-empty',
+    'data-pp-box': options.box || null,
+    // `.pp-empty { padding: 24px; border: 1px dashed }` — the frame's own room.
+    'data-pp-inset': String(EMPTY_STATE_INSET_PX),
+  },
+  h('p', {
+    class: 'pp-empty-text',
+    'data-pp-tx': 'caption',
+    // `.pp-empty-text { max-width: var(--pp-sc-empty-max-w) }`.
+    'data-pp-max': 'empty-max-w',
+  }, message));
 }
+
+/**
+ * `.pp-empty`'s horizontal gutters, both sides, in px: `padding: 24px` inside a
+ * `1px dashed` frame. Stated here because the stylesheet states it in place;
+ * `test/scene/geometry-browser.test.mjs` is what keeps the two equal.
+ */
+export const EMPTY_STATE_INSET_PX = 50;
 
 /**
  * A count, rendered as a number and a noun. Arithmetic over the model — never

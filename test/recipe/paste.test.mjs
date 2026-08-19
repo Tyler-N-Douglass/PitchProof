@@ -52,7 +52,7 @@ test('parsePasted on Markdown-ish text', () => {
   const blocks = parsePasted(PASTED.markdown);
   assertContractValid(blocks);
   assert.deepEqual(blocks.map((b) => b.type), [
-    'heading', 'paragraph', 'heading', 'list', 'quote', 'table', 'cta', 'raw',
+    'heading', 'paragraph', 'heading', 'list', 'quote', 'table', 'cta', 'paragraph',
   ]);
 
   assert.deepEqual(blocks[0], { type: 'heading', level: 1, text: 'Retail media, unified across every market' });
@@ -73,7 +73,10 @@ test('parsePasted on Markdown-ish text', () => {
     rows: [['Plan', 'Seats', 'Price'], ['Team', '10', '$400']],
   });
   assert.deepEqual(blocks[6], { type: 'cta', label: 'Book a demo', href: '/book-a-demo' });
-  assert.match(blocks[7].html, /^<pre><code>plan --market all<\/code><\/pre>$/);
+  // C8: a fenced code block is the pasted rendition's own content, so it is a
+  // typed block flagged `pre` — never a `raw` block, which a layout presents as
+  // "Source markup, shown as text" and which this is not.
+  assert.deepEqual(blocks[7], { type: 'paragraph', text: 'plan --market all', pre: true });
 });
 
 test('Markdown: setext headings, ordered lists, and a table without a rule row', () => {

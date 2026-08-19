@@ -37,13 +37,13 @@ import { stableStringify } from '../core/hash.js';
 import { toHtml } from '../core/vdom.js';
 import { Runtime } from '../runtime/runtime.js';
 import { getLayout } from '../runtime/layouts.js';
-import { encodePayload, splitMedia } from './model.js';
+import { encodePayload, splitMedia, hoistFirstPaintMedia } from './model.js';
 import { ppRehydrateMedia } from './artifact-runtime.js';
 import { inlineRuntime } from './document.js';
 import { compileFallbackTheme, compileFontFaces } from './theme.js';
 import { scanForNetworkReferences, scanModelAssets } from './scan.js';
 import { allScenesOf, labelOptionFinding } from './provenance.js';
-import { budgetAssets, collectAssets, sizeBudgetFinding } from './budget.js';
+import { budgetAssets, collectAssets, dedupeAssets, assetFootprint, sizeBudgetFinding } from './budget.js';
 import { runEmitGate } from './gate.js';
 
 /** §6: a specimen older than this at emit time is stale. */
@@ -121,9 +121,23 @@ export async function emit(proof, options, deps) {
   let undegradable = [];
   let built = buildDocument(working, { runtimeJs, runtimeCss, themeCss, userCss, fontCss });
 
+  let footprint = measureFootprint(built, working);
+
   for (let pass = 0; pass < BUDGET_PASSES && built.bytes > emitOptions.maxBytes; pass++) {
-    const assetBytes = collectAssets(working).reduce((sum, a) => sum + a.bytes, 0);
-    const reserveBytes = Math.max(0, built.bytes - assetBytes);
+    // C2. The reserve — "what the document costs before assets" — used to be
+    // `built.bytes` minus the sum of `collectAssets`, which is neither what the
+    // document spends on assets nor a bound on it. It over-counted every image
+    // two `MediaRef`s share and under-counted every image the opening beat
+    // paints, because that one is written into the pre-rendered markup as well
+    // as into the media table. On a proof with a 1.3MB hero on scene 1 the
+    // reserve came out 1.3MB heavy, and a budget the artifact met untouched was
+    // refused.
+    //
+    // Nothing is inferred now. `assetFootprint` counts each payload in the
+    // document that was actually built, so `reserveBytes + assetBytes` is
+    // `built.bytes` exactly, and the copy counts go to the allocator so that
+    // both the stopping point and the reported saving are about the file.
+    const reserveBytes = footprint.reserveBytes;
     // Always from `original`, never from the previous pass's output. Each pass
     // refines the reserve — the bytes the document costs before assets — but a
     // plan measured against an already-degraded proof would report savings
@@ -132,6 +146,7 @@ export async function emit(proof, options, deps) {
     // that a Review build depends on.
     const budgeted = budgetAssets(original, emitOptions.maxBytes, {
       reserveBytes,
+      copies: footprint.byAssetId,
       renderScene: built.renderScene,
       quality: emitOptions.imageQuality,
       resample: deps.resample,
@@ -141,6 +156,7 @@ export async function emit(proof, options, deps) {
     undegradable = budgeted.undegradable;
     working = budgeted.proof;
     built = buildDocument(working, { runtimeJs, runtimeCss, themeCss, userCss, fontCss });
+    footprint = measureFootprint(built, working);
   }
 
   const { html, bytes, renderScene, reconstructed, encoded } = built;
@@ -214,6 +230,19 @@ export async function emit(proof, options, deps) {
     compression: { mode: encoded.mode, modelBytes: encoded.modelBytes, mediaBytes: encoded.mediaBytes },
     measured: encoded.measured,
     undegradable,
+    // The budget, as it was actually measured on the artifact above — not as it
+    // was estimated. `reserveBytes + assetBytes === bytes`, always, and
+    // `test/emit/budget.test.mjs` asserts it against the emitted string rather
+    // than against these three numbers. A caller that wants to know why an emit
+    // degraded (or why it refused) reads this; §13 asks for the report to be
+    // the real one, and a report whose arithmetic a caller cannot check is not.
+    budget: {
+      maxBytes: emitOptions.maxBytes,
+      bytes,
+      reserveBytes: footprint.reserveBytes,
+      assetBytes: footprint.assetBytes,
+      copies: [...footprint.byAssetId.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([assetId, n]) => ({ assetId, copies: n })),
+    },
   };
 
   if (blocking.length) {
@@ -221,6 +250,22 @@ export async function emit(proof, options, deps) {
   }
 
   return ok(result);
+}
+
+/**
+ * What the built document actually spends on the proof's assets (C2).
+ *
+ * Deduped by payload before it is measured, because `collectAssets` yields one
+ * entry per `MediaRef` and `splitMedia` writes one entry per distinct payload —
+ * so a picture two references share would otherwise be charged twice for the
+ * same bytes in the file.
+ *
+ * @param {{html: string, bytes: number}} built
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @returns {import('./budget.js').AssetFootprint}
+ */
+function measureFootprint(built, proof) {
+  return assetFootprint(built.html, dedupeAssets(collectAssets(proof)));
 }
 
 /**
@@ -272,7 +317,15 @@ export function buildDocument(proof, parts) {
 
   const runtime = new Runtime(reconstructed, {});
   const renderScene = (scene) => runtime.renderScene(scene);
-  const firstPaintHtml = toHtml(runtime.render());
+  // C2. The opening beat has to carry its pictures as literal `src` values or
+  // there is no paint before JavaScript, and the media table has to carry every
+  // payload or there is no model. Writing both is writing the same megabyte
+  // twice. `hoistFirstPaintMedia` leaves the copy that must be there and turns
+  // the other into a five-byte reference the boot script resolves out of the
+  // markup it is already looking at.
+  const hoisted = hoistFirstPaintMedia(runtime.render(), split.table);
+  const firstPaintHtml = toHtml(hoisted.tree);
+  const mediaText = hoisted.lines.join('\n');
 
   const html = inlineRuntime({
     runtimeJs: parts.runtimeJs,
@@ -283,12 +336,25 @@ export function buildDocument(proof, parts) {
     proof: reconstructed,
     firstPaintHtml,
     payload: encoded.payload,
-    mediaText: encoded.mediaText,
+    mediaText,
     mode: encoded.mode,
     bootSource: encoded.bootSource,
   });
 
-  return { html, bytes: utf8Length(html), renderScene, reconstructed, runtime, encoded, firstPaintHtml };
+  // `compression.mediaBytes` is a claim about the file, so it is measured on
+  // what was written, not on what `splitMedia` produced before the hoist.
+  const emitted = { ...encoded, mediaText, mediaBytes: utf8Length(mediaText) };
+
+  return {
+    html,
+    bytes: utf8Length(html),
+    renderScene,
+    reconstructed,
+    runtime,
+    encoded: emitted,
+    firstPaintHtml,
+    hoisted,
+  };
 }
 
 /**

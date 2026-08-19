@@ -126,6 +126,26 @@ export function renderedFamily(brand, role, weight = 400) {
  * @param {import('../core/contracts.d.ts').ColorRole} role
  * @returns {string|null}
  */
+/**
+ * The border width the artifact will actually draw with, in px — §7's shape
+ * group, or 1 where the brand declares nothing.
+ *
+ * `scenes.css` writes `var(--pp-border-width)` on the one piece of scene
+ * furniture that wears the prospect's shape language and also holds text: the
+ * CTA pill. That is two multiples of this number out of the label's inner
+ * width, and a measurement that assumed a hairline there would over-report the
+ * container on exactly the brands whose buttons are heaviest (CRITIQUE-2 C1).
+ * Panels are deliberately drawn with `PANEL_BORDER_PX` instead — see
+ * geometry.js — so this is the whole of the brand's influence on a text box.
+ *
+ * @param {import('../core/contracts.d.ts').BrandSystem|null|undefined} brand
+ * @returns {number}
+ */
+export function borderWidthFor(brand) {
+  const w = brand && brand.shape ? Number(brand.shape.borderWidthPx) : NaN;
+  return Number.isFinite(w) && w >= 0 ? w : 1;
+}
+
 export function colorFor(brand, role) {
   const colors = (brand && Array.isArray(brand.colors)) ? brand.colors : [];
   const found = colors.find((c) => c && c.role === role && typeof c.hex === 'string');

@@ -37,6 +37,26 @@ import { artifactRuntimeSource } from './artifact-runtime.js';
 export const MEDIA_PLACEHOLDER_FLOOR = 64;
 
 /**
+ * Attribute the emitter puts on a pre-rendered element whose media the table
+ * borrows back instead of writing out a second time. Its value is the media
+ * table index it stands in for.
+ */
+export const MEDIA_REF_ATTR = 'data-pp-m';
+
+/**
+ * Attributes a hoisted payload may be read back out of at boot.
+ *
+ * Deliberately short. Every name here is an ordinary HTML attribute whose
+ * `getAttribute` returns the literal text that was written — no namespace
+ * resolution, no URL normalisation. `xlink:href` is not on the list: it is an
+ * SVG-namespaced attribute whose `getAttribute` name depends on how the
+ * document was parsed, and an artifact that cannot read one payload back is an
+ * artifact with a hole in its model. Elements inside `<svg>` are skipped
+ * entirely for the same reason.
+ */
+export const HOISTABLE_ATTRS = Object.freeze(['src', 'poster', 'href', 'data']);
+
+/**
  * @typedef {object} SplitModel
  * @property {any} model              the proof with base64 media replaced by `@m<n>`
  * @property {string[]} table         the extracted data URIs, in first-use order
@@ -102,6 +122,108 @@ export function splitMedia(proof) {
   const model = walk(proof);
   const mediaText = table.join('\n');
   return { model, table, mediaBytes: utf8Length(mediaText) };
+}
+
+/**
+ * @typedef {object} HoistedMedia
+ * @property {any} tree        the first-paint tree, with `data-pp-m` on the elements that lend a payload
+ * @property {string[]} lines  the media table as it should be written: a data URI, or `@<attribute>`
+ * @property {number} hoisted  how many table entries the markup now carries instead
+ * @property {number} savedBytes  bytes the document no longer writes twice
+ */
+
+/**
+ * Stop writing the opening beat's pictures into the file twice (C2).
+ *
+ * `splitMedia` already carries each payload once *in the media table*. The
+ * pre-rendered opening beat is a second copy of every payload it paints, and it
+ * is not optional: §12's cold-boot budget is met by having the first scene
+ * already in the markup, so the `<img>` needs a real `src` before a line of
+ * JavaScript has run. On a proof whose opening scene shows a 1.3MB screenshot
+ * that is 1.3MB of the file spent saying the same thing twice — 43% of the
+ * artifact in the case that motivated this — and the size budgeter was charged
+ * for one copy while the seller paid for two.
+ *
+ * So the markup keeps the payload and the table borrows it back. Each element
+ * that lends one is marked `data-pp-m="<table index>"`, and its table line
+ * becomes `@<attribute>` — three or five bytes instead of a megabyte. At boot,
+ * `ppBootArtifact` reads the attribute off the marked element before the
+ * runtime touches the stage, so the model it reassembles is byte-identical to
+ * the one that was encoded.
+ *
+ * Deliberate limits:
+ *
+ *   - **Only the first element to carry a payload lends it.** Two `<img>` tags
+ *     showing the same picture both need a real `src`; the second copy is a
+ *     cost the markup genuinely has, and `assetFootprint` charges it.
+ *   - **Nothing inside `<svg>`.** See `HOISTABLE_ATTRS`.
+ *   - **Nothing inside a `raw` node.** Its content is an opaque HTML string;
+ *     the emitter does not know what element the payload sits on, so it does
+ *     not pretend to.
+ *   - **Only payloads in the table.** Anything `splitMedia` left in the model
+ *     is inside the compressed payload and is not a second literal copy.
+ *
+ * The tree is rebuilt rather than mutated: the caller's nodes may be shared
+ * with the runtime's own render of the same scene.
+ *
+ * @param {any} tree                 the first-paint VNode tree
+ * @param {string[]} table           `splitMedia(...).table`
+ * @returns {HoistedMedia}
+ */
+export function hoistFirstPaintMedia(tree, table) {
+  const lines = (table || []).slice();
+  if (!lines.length) return { tree, lines, hoisted: 0, savedBytes: 0 };
+
+  /** @type {Map<string, number>} */
+  const indexOfPayload = new Map();
+  for (let i = 0; i < lines.length; i++) if (!indexOfPayload.has(lines[i])) indexOfPayload.set(lines[i], i);
+
+  /** @type {Set<number>} */
+  const lent = new Set();
+  let savedBytes = 0;
+
+  /**
+   * @param {any} node
+   * @param {boolean} inSvg
+   * @returns {any}
+   */
+  const walk = (node, inSvg) => {
+    if (node === null || node === undefined || node === false) return node;
+    if (Array.isArray(node)) return node.map((child) => walk(child, inSvg));
+    if (typeof node !== 'object') return node;
+    if ('raw' in node) return node;
+    if (!node.t) return node;
+
+    const tag = String(node.t).toLowerCase();
+    const nowInSvg = inSvg || tag === 'svg';
+    const attrs = node.a || {};
+    /** @type {Record<string, unknown>|null} */
+    let replacement = null;
+
+    if (!nowInSvg) {
+      for (const name of HOISTABLE_ATTRS) {
+        const value = attrs[name];
+        if (typeof value !== 'string') continue;
+        const index = indexOfPayload.get(value);
+        if (index === undefined || lent.has(index)) continue;
+        lent.add(index);
+        savedBytes += utf8Length(lines[index]) - (1 + name.length);
+        lines[index] = `@${name}`;
+        // The marker goes first so it is stable to read in the emitted markup;
+        // attribute order is object key order (`toHtml`), and §17.6 asserts a
+        // byte-identical re-emit.
+        replacement = { [MEDIA_REF_ATTR]: String(index), ...attrs };
+        break;
+      }
+    }
+
+    const children = node.c ? walk(node.c, nowInSvg) : node.c;
+    if (!replacement && children === node.c) return node;
+    return { ...node, a: replacement || attrs, c: children };
+  };
+
+  const walked = walk(tree, false);
+  return { tree: walked, lines, hoisted: lent.size, savedBytes };
 }
 
 /**

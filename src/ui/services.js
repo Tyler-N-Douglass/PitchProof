@@ -24,6 +24,7 @@
 import { ok, err } from '../core/result.js';
 import { contentId } from '../core/ids.js';
 import { normalizeEmitOptions } from '../core/contracts.js';
+import { embeddedFontFile } from './model.js';
 
 // ---------------------------------------------------------------------------
 // LANE IMPORTS — the integrator's block.
@@ -351,9 +352,9 @@ export function makeServices(env) {
      * and the emit passed no `themeCss` at all, so every emitted file fell
      * through to L10's `compileFallbackTheme` — the path named for a build where
      * L5 has not landed. Nineteen of twenty-three custom properties happened to
-     * agree; the four that did not were the stage padding, the transition
-     * duration and the shadow, which is precisely the set §15's "live preview at
-     * true aspect" promises to be showing. Two functions compiling the same
+     * agree; the four that did not were the scale, the stage padding, the
+     * transition duration and the shadow — precisely the set §15's "live preview
+     * at true aspect" promises to be showing. Two functions compiling the same
      * brand is a divergence waiting to widen, so there is now one.
      * @param {any} brand
      * @returns {string}
@@ -886,7 +887,7 @@ export function makeServices(env) {
           // C7: the artifact wears the theme the preview showed, compiled once.
           themeCss: services.artifactThemeCss(proof && proof.brand),
           // C3: and the faces the user supplied a licensed file for, so the
-          // `@font-face` rules L10 is ready to write actually reach the file.
+          // font-face rules L10 is ready to write actually reach the file.
           fonts: artifactFonts(proof && proof.brand),
         });
       } catch (e) { return err(`Emit failed: ${message(e)}`, e); }
@@ -939,7 +940,7 @@ export function makeServices(env) {
 function message(e) { return e instanceof Error ? e.message : String(e); }
 
 /**
- * The faces the emitter may write an `@font-face` rule for.
+ * The faces the emitter may write a font-face rule for.
  *
  * §13 inlines "fonts (only user-supplied, license-asserted)", and §7 makes the
  * supplied file the thing that licences the claim. So a face reaches this list
@@ -960,8 +961,8 @@ export function artifactFonts(brand) {
   const out = [];
   for (const face of (brand && brand.faces) || []) {
     if (!face || face.embeddable !== true) continue;
-    const file = face.fontFile;
-    if (!file || typeof file.dataUri !== 'string' || !file.dataUri.startsWith('data:')) continue;
+    const file = embeddedFontFile(face);
+    if (!file) continue;
     const assertion = face.rightsAssertion;
     if (!assertion || !assertion.assertedBy || !assertion.statement) continue;
     const weights = (face.weightsSeen || []).filter((w) => Number.isFinite(w));
@@ -974,23 +975,6 @@ export function artifactFonts(brand) {
     });
   }
   return out;
-}
-
-/**
- * Faces that claim a licence with no file behind them.
- *
- * There is no longer a control that can produce one — the checkbox that could
- * was CRITIQUE-2 C3 and is gone — but a project saved by an older build can
- * carry one, and an imported `.pitchproof.json` can carry one from anywhere.
- * The claim is cleared on load rather than honoured; this is how the studio
- * finds them.
- * @param {any} brand
- * @returns {any[]}
- */
-export function unfoundedFontClaims(brand) {
-  return ((brand && brand.faces) || []).filter((face) => face
-    && face.embeddable === true
-    && !(face.fontFile && typeof face.fontFile.dataUri === 'string' && face.fontFile.dataUri.startsWith('data:')));
 }
 
 /**

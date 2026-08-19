@@ -19,6 +19,7 @@
 
 import { h } from '../../core/vdom.js';
 import { renderBlock, summarize } from '../blocks.js';
+import { flowAttrs, flowOf } from '../direction.js';
 import {
   sceneHead, provenanceLabel, emptyState,
   specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger,
@@ -77,6 +78,7 @@ function stepsOf(ctx) {
       rendition,
       path: `stack/step/${index}`,
       group: `stack/${steps.length}`,
+      ...flowOf(rendition),
     });
   });
   return steps;
@@ -84,33 +86,50 @@ function stepsOf(ctx) {
 
 /** @returns {import('../../core/vdom.js').VNode} */
 function renderStep(ctx, step, index, total) {
-  const { title, blurb } = summarize(step.blocks);
+  const { title, blurb, dir, lang } = summarize(step.blocks);
   const lead = step.blocks.length ? step.blocks[0] : null;
+  const n = String(total);
+  const flow = { dir: step.dir || dir || null, lang: step.lang || lang || null };
   return h('li', {
     class: `pp-stack-step pp-stack-step--${step.kind}`,
-    'data-pp-box': 'stackStep',
-    'data-pp-n': String(total),
+    'data-pp-n': n,
     'data-pp-el': ctx.el(step.path),
     'data-pp-group': step.group,
     'data-pp-rendition': step.rendition ? step.rendition.id : null,
   },
-  h('div', { class: 'pp-stack-rail', 'aria-hidden': 'true' },
-    h('span', { class: 'pp-stack-index', 'data-pp-tx': 'stepIndex' }, String(index + 1))),
-  h('div', { class: 'pp-stack-body' },
+  // The rail is a declared grid track (`--pp-sc-stack-rail-w`) and the badge in
+  // it is exactly that wide, so `stackRail` is the box the number is measured
+  // against rather than the whole step (CRITIQUE-2 C1).
+  h('div', { class: 'pp-stack-rail', 'data-pp-box': 'stackRail', 'data-pp-n': n, 'aria-hidden': 'true' },
+    h('span', { class: 'pp-stack-index', 'data-pp-tx': 'stepIndex', 'data-pp-width': 'stack-rail-w' }, String(index + 1))),
+  // `stackStep` names the panel the step's text is laid out in — the body, not
+  // the row that also holds the rail. The box and the geometry now describe the
+  // same element.
+  h('div', { class: 'pp-stack-body', 'data-pp-box': 'stackStep', 'data-pp-n': n },
     h('div', { class: 'pp-stack-head' },
-      h('p', { class: 'pp-stack-label', 'data-pp-tx': 'stepLabel', 'data-pp-clamp': '1' }, step.title),
+      // A declared two-track row: the meta column is `--pp-sc-step-meta-w` and
+      // the label is what is left. It used to be two shrink-to-fit flex items
+      // with the right-hand one at `flex: 0 0 auto`, which crushed the label to
+      // a zero-width box at `sm` while the model reported 284px.
+      h('p', {
+        class: 'pp-stack-label',
+        'data-pp-tx': 'stepLabel',
+        'data-pp-clamp': '1',
+        'data-pp-inset': 'step-meta-w,step-meta-gap',
+        ...flowAttrs(flow),
+      }, step.title),
       // The provenance label rides in the header rather than under the content:
       // a state in a chain is one or two lines tall, and a label below the copy
       // would push that copy out of its own step.
-      h('div', { class: 'pp-stack-head-right' },
+      h('div', { class: 'pp-stack-head-right', 'data-pp-width': 'step-meta-w' },
         step.meta ? h('p', { class: 'pp-stack-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, step.meta) : null,
         provenanceLabel(step.rendition, ctx))),
     h('div', { class: 'pp-stack-content' },
       lead && lead.type !== 'paragraph' && lead.type !== 'heading'
-        ? renderBlock(lead, { media: ctx.media, density: 'condensed', clampParagraph: 2, maxListItems: 3, maxTableRows: 3 })
+        ? renderBlock(lead, { media: ctx.media, density: 'condensed', clampParagraph: 2, maxListItems: 3, maxTableRows: 3, ...flow })
         : [
-          title ? h('p', { class: 'pp-stack-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '1' }, title) : null,
-          blurb ? h('p', { class: 'pp-stack-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2' }, blurb) : null,
+          title ? h('p', { class: 'pp-stack-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '1', ...flowAttrs(flow) }, title) : null,
+          blurb ? h('p', { class: 'pp-stack-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2', ...flowAttrs(flow) }, blurb) : null,
           !title && !blurb ? h('p', { class: 'pp-stack-empty', 'data-pp-tx': 'caption' }, 'No content blocks at this state.') : null,
         ])));
 }

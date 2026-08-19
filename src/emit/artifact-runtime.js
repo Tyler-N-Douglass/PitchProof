@@ -250,6 +250,48 @@ export function ppUtf8Decode(bytes) {
 }
 
 /**
+ * Read the media table out of the document.
+ *
+ * Most lines are a data URI and are taken as they are. A line of the form
+ * `@src` is not a payload: it is the emitter saying "the opening beat is
+ * already painting this one, borrow it". §12 requires the first scene to be in
+ * the markup as static HTML, so its pictures need real `src` values before any
+ * JavaScript runs — and writing those same payloads into the table as well cost
+ * the file a second full copy of every picture the opening scene shows. The
+ * emitter marks the lending element `data-pp-m="<line index>"` and writes the
+ * attribute name instead of the megabyte.
+ *
+ * This runs at boot, before the runtime touches the stage, so the pre-rendered
+ * markup is still exactly as it was emitted. A reference that cannot be
+ * resolved throws rather than silently handing the runtime a model with `@m7`
+ * where a picture should be: `ppBootArtifact` turns that into
+ * `data-pp-boot-error`, which is visible, instead of a broken image, which is
+ * not.
+ *
+ * @param {string} text  the media element's textContent
+ * @param {Document} doc
+ * @returns {string[]}
+ */
+export function ppReadMediaTable(text, doc) {
+  var table = [];
+  var body = String(text || '');
+  if (!body) return table;
+  var lines = body.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (!line) continue;
+    if (line.charAt(0) === '@') {
+      var host = doc && doc.querySelector ? doc.querySelector('[data-pp-m="' + i + '"]') : null;
+      var borrowed = host && host.getAttribute ? host.getAttribute(line.slice(1)) : null;
+      if (!borrowed) throw new Error('artifact: media table entry ' + i + ' borrows "' + line.slice(1) + '" from the opening beat, and the opening beat does not carry it');
+      line = borrowed;
+    }
+    table[i] = line;
+  }
+  return table;
+}
+
+/**
  * Put the media back.
  *
  * D6 keeps media out of the compressed payload — it is already in compressed
@@ -348,15 +390,7 @@ export function ppBootArtifact(config) {
 
   return ppDecodePayload(payload, config.mode).then(function (raw) {
     var proof = JSON.parse(ppUtf8Decode(raw));
-    var table = [];
-    if (mediaNode && mediaNode.textContent) {
-      var text = mediaNode.textContent;
-      var lines = text.split('\n');
-      for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-        if (line) table.push(line);
-      }
-    }
+    var table = ppReadMediaTable(mediaNode ? mediaNode.textContent : '', doc);
     if (table.length) ppRehydrateMedia(proof, table);
 
     if (runtimeApi && typeof runtimeApi.registerAllLayouts === 'function') runtimeApi.registerAllLayouts();
@@ -421,6 +455,7 @@ export function artifactRuntimeSource(mode) {
     return [
       ppBase64ToBytes.toString(),
       ppUtf8Decode.toString(),
+      ppReadMediaTable.toString(),
       ppRehydrateMedia.toString(),
       ppDecodePayloadRaw.toString(),
       'var ppDecodePayload = ppDecodePayloadRaw;',
@@ -431,6 +466,7 @@ export function artifactRuntimeSource(mode) {
     ppBase64ToBytes.toString(),
     ppInflateRaw.toString(),
     ppUtf8Decode.toString(),
+    ppReadMediaTable.toString(),
     ppRehydrateMedia.toString(),
     ppDecodePayload.toString(),
     ppBootArtifact.toString(),

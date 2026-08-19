@@ -199,6 +199,158 @@ export function dedupeAssets(assets) {
 }
 
 /**
+ * How many times each asset's payload is actually written into a document
+ * (C2).
+ *
+ * The budgeter used to assume "one asset, one copy": `collectAssets` was summed
+ * and the sum subtracted from the built size to get the document's fixed cost.
+ * That assumption is false in both directions and the artifact paid for it.
+ *
+ *   - **Too many.** `collectAssets` yields one entry per `MediaRef`, so an
+ *     image referenced by a specimen and by the rendition made from it was
+ *     counted twice while `splitMedia` carries it once. (`dedupeAssets` fixes
+ *     that half, and the emitter now dedupes before it measures.)
+ *   - **Too few.** An asset the opening beat paints is written into the
+ *     pre-rendered markup *and* into the media table, because the first paint
+ *     has to happen before a line of JavaScript runs. That asset costs the file
+ *     twice and the budgeter charged it once — a 1.3MB hero photograph on the
+ *     opening scene put the reserve out by 1.3MB, which is how a budget the
+ *     artifact met untouched came back refused.
+ *
+ * Neither is fixable by a better assumption, so nothing is assumed: the payload
+ * is counted in the document that was actually built. Longest payload first,
+ * with the ranges it claims masked out, so a data URI nested inside another one
+ * — an `<image>` inside an inline SVG — is charged to the outer asset that
+ * really carries it and not to both.
+ *
+ * An asset that appears **zero** times is not missing: it is inside the base64
+ * model payload, because it was too short or too un-base64 for `splitMedia` to
+ * hoist into the media table. Its bytes are real but they are compressed and
+ * interleaved with everything else in that payload, so they belong to the
+ * document reserve, not to any line item the budgeter could promise a saving
+ * on. See `assetFootprint`.
+ *
+ * @param {string} html          the built document
+ * @param {AssetEntry[]} assets  deduped by payload — `dedupeAssets(collectAssets(proof))`
+ * @returns {Map<string, number>} data URI → times it is written into `html`
+ */
+export function countAssetCopies(html, assets) {
+  const text = String(html || '');
+  /** @type {Map<string, number>} */
+  const copies = new Map();
+  /** Claimed [start, end) ranges, kept sorted by start. */
+  /** @type {{from: number, to: number}[]} */
+  const claimed = [];
+
+  const unique = [];
+  const seen = new Set();
+  for (const asset of assets) {
+    if (typeof asset.dataUri !== 'string' || !asset.dataUri || seen.has(asset.dataUri)) continue;
+    seen.add(asset.dataUri);
+    unique.push(asset.dataUri);
+  }
+  // Longest first, so an outer payload claims its span before an inner one can.
+  unique.sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
+
+  for (const uri of unique) {
+    let count = 0;
+    let at = 0;
+    for (;;) {
+      const i = text.indexOf(uri, at);
+      if (i < 0) break;
+      const end = i + uri.length;
+      if (!overlapsClaimed(claimed, i, end)) {
+        count += 1;
+        insertClaim(claimed, i, end);
+        at = end;
+      } else {
+        at = i + 1;
+      }
+    }
+    copies.set(uri, count);
+  }
+  return copies;
+}
+
+/**
+ * @param {{from: number, to: number}[]} claimed
+ * @param {number} from
+ * @param {number} to
+ * @returns {boolean}
+ */
+function overlapsClaimed(claimed, from, to) {
+  for (const range of claimed) {
+    if (range.from >= to) break;
+    if (range.to > from) return true;
+  }
+  return false;
+}
+
+/**
+ * @param {{from: number, to: number}[]} claimed
+ * @param {number} from
+ * @param {number} to
+ */
+function insertClaim(claimed, from, to) {
+  let i = 0;
+  while (i < claimed.length && claimed[i].from < from) i++;
+  claimed.splice(i, 0, { from, to });
+}
+
+/**
+ * @typedef {object} AssetFootprint
+ * @property {Map<string, number>} copies       data URI → copies written into the document
+ * @property {Map<string, number>} byAssetId    every asset id → copies of its payload
+ * @property {number} assetBytes                bytes the document spends on assets, exactly
+ * @property {number} reserveBytes              every other byte in the document, exactly
+ * @property {number} documentBytes             `utf8Length(html)`
+ * @property {AssetEntry[]} inPayload           assets carried inside the model payload
+ */
+
+/**
+ * What a built document actually spends on assets, and on everything else.
+ *
+ * The one invariant this exists to make true, asserted in
+ * `test/emit/budget.test.mjs` against emitted strings:
+ *
+ * ```
+ * reserveBytes + assetBytes === utf8Length(html)
+ * ```
+ *
+ * `reserveBytes` is therefore a measurement rather than an estimate — it is
+ * every byte of the document that is not a literal asset payload, the model
+ * payload and the runtime bundle included. That is exactly the number the size
+ * budget needs: `maxBytes - reserveBytes` is what is left for pictures.
+ *
+ * @param {string} html
+ * @param {AssetEntry[]} assets  deduped by payload
+ * @returns {AssetFootprint}
+ */
+export function assetFootprint(html, assets) {
+  const copies = countAssetCopies(html, assets);
+  /** @type {Map<string, number>} */
+  const byAssetId = new Map();
+  /** @type {AssetEntry[]} */
+  const inPayload = [];
+  let assetBytes = 0;
+  for (const asset of assets) {
+    const n = copies.get(asset.dataUri) || 0;
+    assetBytes += n * asset.bytes;
+    for (const id of asset.assetIds || [asset.assetId]) byAssetId.set(id, n);
+    if (n === 0) inPayload.push(asset);
+  }
+  const documentBytes = utf8Length(String(html || ''));
+  return {
+    copies,
+    byAssetId,
+    assetBytes,
+    reserveBytes: Math.max(0, documentBytes - assetBytes),
+    documentBytes,
+    inPayload,
+  };
+}
+
+/**
  * @param {{sequence: number, sceneIndex: number, beatIndex: number}} a
  * @param {{sequence: number, sceneIndex: number, beatIndex: number}} b
  * @returns {boolean} true when `a` appears before `b`
@@ -447,12 +599,13 @@ export function applyReplacements(proof, byPayload) {
  * @property {number} rank
  * @property {{w: number, h: number, quality: number}} from
  * @property {{w: number, h: number, quality: number}} to
- * @property {number} predictedBytes  what the allocator expected the asset to cost afterwards
- * @property {number} actualBytes     what it cost after the re-encode
+ * @property {number} predictedBytes  what the allocator expected the asset to cost the document afterwards
+ * @property {number} actualBytes     what it cost the document after the re-encode
  * @property {string} reason
- * @property {number} beforeBytes
- * @property {number} afterBytes
- * @property {number} savedBytes      exactly `beforeBytes - afterBytes`
+ * @property {number} copies          times this payload is written into the document (C2)
+ * @property {number} beforeBytes     what the **document** spent on this payload: `copies × utf8Length(dataUri)`
+ * @property {number} afterBytes      what it spends now
+ * @property {number} savedBytes      exactly `beforeBytes - afterBytes`, and exactly the bytes the file lost
  * @property {number} steps
  * @property {string[]} assetIds      every asset id carrying this payload; one
  *                                    line covers all of them, because degrading
@@ -466,6 +619,9 @@ export function applyReplacements(proof, byPayload) {
  * @param {number} maxBytes
  * @param {object} [options]
  * @param {number} [options.reserveBytes]  bytes the document costs before assets
+ * @param {Map<string, number>} [options.copies]  asset id → how many times its payload is written into
+ *   the document, from `assetFootprint`. Absent, every payload is assumed to be written once, which is
+ *   what a caller budgeting a proof in isolation can know. `emit()` measures it instead of assuming it.
  * @param {(scene: import('../core/contracts.d.ts').Scene) => any} [options.renderScene]
  * @param {number} [options.quality]
  * @param {(input: any) => any} [options.resample]
@@ -476,14 +632,40 @@ export function budgetAssets(proof, maxBytes, options = {}) {
   const reserve = Math.max(0, Number(options.reserveBytes) || 0);
   const budget = Math.max(0, (Number(maxBytes) || 0) - reserve);
 
-  const assets = dedupeAssets(collectAssets(proof));
-  locateAssets(proof, assets, options.renderScene);
-  rankAssets(assets);
+  const everyAsset = dedupeAssets(collectAssets(proof));
+  locateAssets(proof, everyAsset, options.renderScene);
+  rankAssets(everyAsset);
+
+  // How many times the document writes each payload. Measured by `emit()` from
+  // the document it just built; assumed to be once by a caller who has not
+  // built one yet (C2).
+  const copiesOf = options.copies instanceof Map
+    ? (/** @type {AssetEntry} */ a) => {
+      const n = options.copies.get(a.assetId);
+      return typeof n === 'number' ? n : 1;
+    }
+    : () => 1;
+
+  /**
+   * An asset written into the document zero times is not absent — it is inside
+   * the base64 model payload, where `splitMedia` leaves anything too short or
+   * too un-base64 to hoist into the media table. Those bytes are real, but they
+   * are deflated and interleaved with the rest of the model, so no per-asset
+   * saving can be measured for them and none is promised: they are part of the
+   * reserve, and the ladder does not touch them. §13 asks for a report of
+   * exactly what was degraded and by how much; a line claiming a payload asset
+   * saved its full uncompressed length would be off by the compression ratio.
+   */
+  const assets = everyAsset.filter((a) => copiesOf(a) > 0);
+  const payloadResident = everyAsset.filter((a) => copiesOf(a) === 0);
 
   /** Keyed by the original payload, which is what the artifact pays for once. */
   const originalBytes = new Map(assets.map((a) => [a.dataUri, a.bytes]));
   const originalSize = new Map(assets.map((a) => [a.dataUri, { ...a.intrinsic }]));
-  let total = assets.reduce((sum, a) => sum + a.bytes, 0);
+  /** Keyed by payload: the whole cost of that payload to the document. */
+  const copyCount = new Map(assets.map((a) => [a.dataUri, copiesOf(a)]));
+  const costOf = (/** @type {string} */ key, /** @type {number} */ bytes) => (copyCount.get(key) || 1) * bytes;
+  let total = assets.reduce((sum, a) => sum + costOf(a.dataUri, a.bytes), 0);
 
   /** @type {Map<string, {dataUri: string, width: number, height: number, bytes: number}>} */
   const replacements = new Map();
@@ -538,7 +720,7 @@ export function budgetAssets(proof, maxBytes, options = {}) {
         if (!produced) continue;
         if (produced.bytes >= currentBytes) continue;
 
-        total -= currentBytes - produced.bytes;
+        total -= costOf(key, currentBytes - produced.bytes);
         replacements.set(key, produced);
         lastGood.set(key, { scale, bytes: produced.bytes });
         progress.set(key, { steps: next, how: produced.how, predicted });
@@ -556,10 +738,23 @@ export function budgetAssets(proof, maxBytes, options = {}) {
         const mime = parsed ? parsed.mime : 'unknown';
         undegradable.push({
           assetId: asset.assetId,
-          bytes: asset.bytes,
+          bytes: costOf(asset.dataUri, asset.bytes),
           reason: `${mime} cannot be re-encoded any smaller by the in-repo codec; supply a host resampler (deps.resample) or capture it smaller`,
         });
       }
+    }
+  }
+
+  // Named whenever the budget is missed, whether or not the ladder ran: a
+  // seller told "nothing else can be degraded" while a megabyte of inline SVG
+  // sits in the payload has been told something untrue.
+  if (total > budget || reserve > (Number(maxBytes) || 0)) {
+    for (const asset of payloadResident) {
+      undegradable.push({
+        assetId: asset.assetId,
+        bytes: asset.bytes,
+        reason: 'carried inside the compressed model payload rather than written into the document, so the budgeter cannot measure — or honestly promise — a saving on it; shrink it before it reaches the emitter',
+      });
     }
   }
 
@@ -571,18 +766,25 @@ export function budgetAssets(proof, maxBytes, options = {}) {
     const step = progress.get(asset.dataUri);
     const before = /** @type {number} */ (originalBytes.get(asset.dataUri));
     const fromSize = /** @type {{w: number, h: number}} */ (originalSize.get(asset.dataUri));
+    // Every byte figure on the line is what the **document** paid, not what one
+    // copy of the payload weighs (C2). A hero the opening beat paints is
+    // written into the pre-rendered markup and into the media table both, and a
+    // seller reading "saved 1.0MB" about a file that lost 2.0MB has been given
+    // a number about nothing.
+    const copies = copyCount.get(asset.dataUri) || 1;
     plan.push({
       assetId: asset.assetId,
       assetIds: asset.assetIds.slice(),
       rank: asset.rank,
       from: { w: fromSize.w, h: fromSize.h, quality },
       to: { w: replacement.width, h: replacement.height, quality },
-      predictedBytes: step ? step.predicted : before,
-      actualBytes: replacement.bytes,
+      copies,
+      predictedBytes: copies * (step ? step.predicted : before),
+      actualBytes: copies * replacement.bytes,
       reason: step ? step.how : 're-encoded',
-      beforeBytes: before,
-      afterBytes: replacement.bytes,
-      savedBytes: before - replacement.bytes,
+      beforeBytes: copies * before,
+      afterBytes: copies * replacement.bytes,
+      savedBytes: copies * (before - replacement.bytes),
       steps: step ? step.steps : 0,
     });
   }

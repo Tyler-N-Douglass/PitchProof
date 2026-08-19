@@ -32,9 +32,10 @@ export {
 } from './scan.js';
 
 export {
-  assertProvenance, judgeLabelStyle, resolveBackground, describeElement, walkWithChain, renditionAppearsIn,
+  assertProvenance, judgeLabelStyle, judgeLabelRoom, clipsContent, scaleFactorOf,
+  resolveBackground, describeElement, walkWithChain, renditionAppearsIn,
   documentChainPrefix, allScenesOf, nodeText, provenanceFinding, labelOptionFinding,
-  PROVENANCE_LABEL_CLASS, MIN_LABEL_FONT_PX, RENDITION_ATTR,
+  PROVENANCE_LABEL_CLASS, MIN_LABEL_FONT_PX, LABEL_MIN_WIDTH_EM, LABEL_MIN_TRACKING_EM, RENDITION_ATTR,
 } from './provenance.js';
 
 export {
@@ -44,6 +45,7 @@ export {
 export {
   budgetAssets, collectAssets, dedupeAssets, rankAssets, locateAssets, degradeAsset, minifySvg,
   applyReplacements, beatIndexResolver, sizeBudgetFinding, predictEmittedBytes,
+  countAssetCopies, assetFootprint,
   dataUriPrefixBytes, SCALE_LADDER, PNG_CONTAINER_BYTES,
 } from './budget.js';
 
@@ -52,10 +54,13 @@ export {
   STAGE_ROOT_ID, PRERENDERED_ATTR, MODEL_ELEMENT_ID, MEDIA_ELEMENT_ID, INERT_SCRIPT_TYPE,
 } from './document.js';
 
-export { encodePayload, splitMedia, isExtractableMedia, MEDIA_PLACEHOLDER_FLOOR } from './model.js';
+export {
+  encodePayload, splitMedia, isExtractableMedia, hoistFirstPaintMedia,
+  MEDIA_PLACEHOLDER_FLOOR, MEDIA_REF_ATTR, HOISTABLE_ATTRS,
+} from './model.js';
 
 export {
-  ppBase64ToBytes, ppInflateRaw, ppUtf8Decode, ppRehydrateMedia, ppDecodePayload,
+  ppBase64ToBytes, ppInflateRaw, ppUtf8Decode, ppReadMediaTable, ppRehydrateMedia, ppDecodePayload,
   ppDecodePayloadRaw, ppBootArtifact, artifactRuntimeSource,
 } from './artifact-runtime.js';
 
@@ -63,7 +68,8 @@ export { compileFallbackTheme, compileFontFaces, quoteFamily, stackFor, ROLE_VAR
 
 export {
   parseStylesheet, parseSelector, parseDeclarations, computeCascade, matchesSelector,
-  specificityOf, resolveVars, resolveFontSize, parseOpacity, backgroundColorOf,
+  specificityOf, resolveVars, resolveFontSize, resolveLengthPx, resolveLineHeightPx,
+  splitTopLevel, parseOpacity, backgroundColorOf,
   conditionsApply, splitSelectorList, TRACKED_PROPS, INHERITED_PROPS,
 } from './css.js';
 

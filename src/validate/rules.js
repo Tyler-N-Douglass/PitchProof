@@ -1012,15 +1012,35 @@ const duplicateScene = {
       if (!branchesById.has(branch.id)) branchesById.set(branch.id, []);
       branchesById.get(branch.id).push(branch);
     }
+    // L2 records what its own collision policy cost: `Deck.duplicateBranchIds`
+    // is the ids it dropped a sequence for (API.md Part 3b). The rule does not
+    // need it — the collision is a fact about `proof.branches` and is derived
+    // there, so the finding fires with no deck at all — but when a deck is in
+    // hand it turns "this proof declares a duplicate" into "and the deck built
+    // for this sweep has already lost one of them", which is a different and
+    // stronger sentence. It is read, never depended on.
+    const dropped = new Set(Array.isArray(ctx.deck && ctx.deck.duplicateBranchIds)
+      ? ctx.deck.duplicateBranchIds
+      : []);
     for (const [branchId, group] of [...branchesById].sort((a, b) => a[0].localeCompare(b[0]))) {
-      const named = group.map((b) => `"${b.objection || b.id}"`).join(' and ');
+      const quoted = group.map((b) => `"${b.objection || b.id}"`);
+      const named = quoted.length <= 2
+        ? quoted.join(' and ')
+        : `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+      const subject = group.length === 1 ? `Branch ${named} carries` : `${group.length} branches (${named}) carry`;
+      // Reported as observed rather than predicted, when there is a deck to observe.
+      const droppedByDeck = dropped.has(branchId);
+      const confirmed = droppedByDeck ? ' The deck built for this sweep has already dropped one of them.' : '';
       if (branchId === SPINE) {
         out.push(makeFinding({
           code: 'DUPLICATE_SCENE',
           locus: { branchId },
           key: `branch-id-spine:${branchId}`,
-          message: `Branch ${named} carries the id "${SPINE}", which is the id the deck gives the spine itself. The deck holds one sequence per id, so this branch replaces the whole spine: the proof's own scenes never enter the artifact and every return to the spine lands inside the branch. Give the branch its own id.`,
-          detail: { branchId, kind: 'spine-collision', occurrences: group.length, objections: group.map((b) => b.objection || null) },
+          message: `${subject} the id "${SPINE}", which is the id the deck gives the spine itself. The deck holds one sequence per id, so the branch replaces the whole spine: the proof's own spine scenes never enter the artifact, and every return to the spine lands inside the branch instead. Give the branch its own id.${confirmed}`,
+          detail: {
+            branchId, kind: 'spine-collision', droppedByDeck,
+            occurrences: group.length, objections: group.map((b) => b.objection || null),
+          },
         }));
         continue;
       }
@@ -1029,10 +1049,11 @@ const duplicateScene = {
         code: 'DUPLICATE_SCENE',
         locus: { branchId },
         key: `branch-id:${branchId}`,
-        message: `Branch id ${branchId} is claimed by ${group.length} branches (${named}). The deck holds one sequence per id, so only one of them is the branch this id names: the other's ${group.map((b) => (b.scenes || []).length).reduce((a, b) => a + b, 0) === 0 ? 'declaration' : 'scenes'} never enter the deck, and every anchor and every jump-index entry that names this id opens the same one — the presenter takes the objection the lost branch was written for, presses the key, and the client sees the other answer. Give each branch its own id.`,
+        message: `Branch id ${branchId} is claimed by ${group.length} branches (${named}). The deck holds one sequence per id, so only one of them is the branch this id names. ${group.length === 2 ? 'The other never enters' : 'The others never enter'} the deck at all — no anchor, no jump-index entry, no key — and every navigation that names this id opens the survivor instead. The presenter takes the objection the lost branch was written for, presses the key, and the client sees the other answer. Give each branch its own id.${confirmed}`,
         detail: {
           branchId,
           kind: 'branch-id',
+          droppedByDeck,
           occurrences: group.length,
           objections: group.map((b) => b.objection || null),
           sceneCounts: group.map((b) => (b.scenes || []).length),

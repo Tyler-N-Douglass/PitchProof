@@ -534,6 +534,7 @@ cannot. It throws rather than returning a failing palette.
 
 ```js
 detectFaces(doc, css, {available?}): TypeFace[]        // uses core/text-metrics resolveFace + metricDelta
+attachUserFont(face, {bytes, dataUri, weights, rightsAssertion}): TypeFace   // the ONLY route to embeddable: true
 extractLogos(doc, assets, {idMinter}): LogoAsset[]
 inverseVariant(logo): LogoAsset|null                   // only when monochrome; null otherwise
 detectShape(css): {radiusPx, borderWidthPx, shadowLevel}
@@ -544,6 +545,15 @@ compileTheme(brand): {css: string, vars: Record<string, string>}   // --pp-* onl
 
 `compileTheme` emits the `--pp-*` custom properties the artifact stylesheet
 reads. It must never emit a `--st-*` name.
+
+`attachUserFont` is declared here rather than as a Part 5 extra because §7 makes
+it a **law**: *"`embeddable` is false unless the user explicitly supplies a font
+file they assert they have rights to."* It is the only route to `embeddable:
+true`, and nothing may set the flag directly. Leaving it out of this fence is how
+the studio went a whole pass without offering any way to supply a font while
+shipping a checkbox that asserted a licence for a file nobody had — a claim
+changing without a fact changing, which is the failure §18 exists to prevent
+(CRITIQUE-2 C3, dispute D-L12-9).
 
 ### L6 Specimen — `src/specimen/index.js`
 
@@ -688,6 +698,72 @@ mountStudio({document, window, store, clock, runtimeJs, runtimeCss}): StudioApp
 
 ---
 
+---
+
+## Part 3b — the cross-lane optional extensions
+
+§4's frozen contracts take **optional** additions below the FROZEN REGION END
+marker. Most are one lane's private business. These are not: more than one lane
+reads them, so their shape and their resolution rule belong here.
+
+### Writing direction and language — L7 writes, L8 renders
+
+```ts
+interface ContentBlock { dir?: 'ltr' | 'rtl' | 'auto'; lang?: string; pre?: boolean }
+interface Rendition    { dir?: 'ltr' | 'rtl' | 'auto'; lang?: string }
+```
+
+**Resolution: a block's value wins; the rendition's is the fallback for blocks
+that declare nothing.** L7 publishes `DIRECTIONS`; L8's `src/scene/direction.js`
+publishes the same three values and `resolveFlow(block, container)` implements
+the rule. The two lanes arrived at this shape independently in the same pass,
+which is the strongest evidence available that it is the right one.
+
+**Why both levels.** They answer different questions, and the asymmetry is the
+argument. Direction is a property of the *rendition* — the whole ar-SA card,
+table and CTA and captions included — and it survives a layout subsetting the
+blocks. Language is a property of a *run of text*, because a rendition mixes the
+source's words with the tool's own English labels, so no single tag is true of
+the whole of it. `locale-fanout` therefore sets `Rendition.dir`, `dir` on every
+block, and `lang` per block, and deliberately sets **no** `Rendition.lang`.
+
+**`dir` is the market's; `lang` is the source's — never the other way round.**
+The ar-SA rendition still shows LTR Latin text, because inventing Arabic copy
+would be fabrication (§18.2). Marking that text `lang="ar-SA"` would be a false
+claim about the content, and worse than most in one respect: it hands a screen
+reader an Arabic voice for English words. Where the specimen declares no
+language, nothing is claimed.
+
+This exists because §9.1 asks `locale-fanout` for *"locale-appropriate
+structure, not just translated strings"* and the ar-SA rendition was arriving as
+`raw` blocks, which §8 correctly makes a layout flatten to text under "Source
+markup, shown as text" — so the Arabic-market card rendered left-to-right,
+labelled as the prospect's own page source (CRITIQUE-2 C8). Two rules collided
+and the wrong one won: §8 is about *captured* source, and a rendition a seed
+recipe produced is not captured source. `raw` now means what it says.
+
+`pre` is secondary and degrades safely: a layout that ignores it renders a
+paragraph, which is exactly what the `raw` block rendered as after `stripTags`,
+minus a caption that was untrue.
+
+### `Deck.duplicateBranchIds` — L2 writes, L11 and L12 read
+
+```ts
+interface Deck { duplicateBranchIds: string[] }
+```
+
+Branch ids the proof declared more than once, or which collided with the spine's
+reserved `'spine'`. `buildDeck` keeps the **first** occurrence and drops the
+rest — the same collision policy it already applied to scene ids, applied once
+instead of twice in opposite directions.
+
+Recorded rather than thrown, because `runPreflight` builds the deck *before*
+running the rules: a throwing `buildDeck` would replace L11's severity-1 finding
+— which names both branches to rename — with an exception, and the seller would
+get a crash where they now get a sentence. The list is how the studio preview,
+the rehearse walk and the branch panel find out that the deck is not the proof.
+
+
 ## Part 4 — The build
 
 ```
@@ -721,7 +797,6 @@ withdraw something another lane depends on.
 | L4 | `brand/color.js` | `extractPalette` | The one-call pipeline L5's `buildBrandSystem` consumes |
 | L4 | `brand/color.js` | `colorConfidenceDetail` | §7's low-confidence review surface |
 | L4 | `brand/color.js` | `ContrastSolveError` | `solveRoles` throws it; callers must handle it |
-| L5 | `brand/theme.js` | `attachUserFont` | The only route to `embeddable: true` (§7) |
 | L5 | `brand/theme.js` | `assertNoStudioVars` | D11 made mechanical: throws on any `--st-` name in artifact CSS |
 | L6 | `specimen/index.js` | `unresolvedMediaRefs` | L11's `ASSET_MISSING` |
 | L6 | `specimen/index.js` | `setRawHtmlOptIn`, `rawFallbackBlocks` | §8's per-specimen raw opt-in |

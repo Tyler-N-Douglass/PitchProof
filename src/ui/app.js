@@ -27,7 +27,7 @@ import { Emitter } from '../core/events.js';
 import { CommandStack, replaceCommand } from '../core/command.js';
 import { Patcher, delegate, ARG_ATTR, ENTER_ATTR } from './render.js';
 import { Preview } from './preview.js';
-import { newDoc } from './model.js';
+import { clearUnfoundedFontClaims, newDoc } from './model.js';
 import { makeServices } from './services.js';
 import { ACTIONS, actionIndex } from './actions.js';
 import { renderStudio } from './layout.js';
@@ -305,6 +305,17 @@ export class StudioApp extends Emitter {
         error: null,
         revision: result.value.record.revision,
       };
+      // The project the studio last *wrote* is the project it reopens.
+      //
+      // CRITIQUE-2 C6: this was written only by `loadRecord`, which runs on open
+      // and on import — so a project created in this session and saved was never
+      // recorded as the last one, and the first reload after building it opened
+      // an empty studio. Nothing was lost; the record was in IndexedDB and one
+      // more open restored it. But the project it forgot was the one being built
+      // right now, on the reload nobody planned, which is §20.10's "loses work"
+      // exactly. A save is the strongest possible statement about which project
+      // is in hand, so it is the statement that is recorded.
+      void this.store.setSetting(SETTING_KEYS.lastProject, doc.id);
       this.reportPressure(result.value.pressure);
       await this.refreshProjects();
     } else {
@@ -377,7 +388,14 @@ export class StudioApp extends Emitter {
    * @param {any} record
    */
   loadRecord(record) {
-    this.stack.reset({ id: record.id, name: record.name, seed: record.seed, proof: record.proof });
+    // §7: `embeddable` is false unless the user supplied a file. A record that
+    // claims otherwise — written by an older build, or arriving in an imported
+    // `.pitchproof.json` from anywhere at all — is corrected on the way in and
+    // the correction is announced, because L11 reads the claim as "this family
+    // is available" and would otherwise stay quiet about a substitution the
+    // client's machine will make (CRITIQUE-2 C3).
+    const { proof, cleared } = clearUnfoundedFontClaims(record.proof);
+    this.stack.reset({ id: record.id, name: record.name, seed: record.seed, proof });
     this.ui.selection = {
       specimenId: null, renditionId: null, sceneId: (record.proof.spine || [])[0]?.id || null,
       branchId: null, recipeId: null, beatIndex: 0, colorRole: null, faceIndex: null, logoId: null,
@@ -386,6 +404,14 @@ export class StudioApp extends Emitter {
     this.ui.emit = { result: null, running: false, error: null, at: null };
     this.ui.save = { status: 'saved', at: record.savedAt || null, error: null, revision: record.revision || 1 };
     if (this.store) void this.store.setSetting(SETTING_KEYS.lastProject, record.id);
+    if (cleared.length) {
+      this.notify(
+        'warn',
+        `${cleared.join(', ')} claimed a font licence with no font file attached, so the claim was cleared on open. `
+        + 'Attach the licensed file on the Brand panel to embed the face; until then the artifact substitutes the fallback stack, and the sweep says so.',
+        { sticky: true },
+      );
+    }
   }
 
   // -- dispatch -------------------------------------------------------------

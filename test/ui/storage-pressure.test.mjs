@@ -18,11 +18,23 @@ import { fixtureDoc, fakeServices, makeClock } from '../fixtures/ui/studio-fixtu
 /**
  * A backend that reports whatever pressure a test wants and can be made to fail
  * on write.
+ *
+ * The reported estimate and the enforced capacity are deliberately two
+ * different things here. `MemoryBackend` now refuses a write past the quota it
+ * reports (CRITIQUE-2 C15, and rightly — a backend that reports a quota it
+ * never enforces is lying about the only thing it is asked). These tests are
+ * about the *pressure reading*, so they rig ratios like 98/100 that are not
+ * byte counts at all; enforcing 100 bytes would fail every save and turn every
+ * assertion below into a test of the refusal path, which `a failing save
+ * surfaces an error` covers on purpose through `failWith`.
+ *
+ * So: `estimate()` reports the rigged ratio, and the inherited enforcement runs
+ * against a real capacity that comfortably holds the fixture project.
  */
 class RiggedBackend extends MemoryBackend {
   /** @param {{usage: number, quota: number}} estimate */
   constructor(estimate) {
-    super(estimate.quota);
+    super(64 * 1024 * 1024);
     this.rigged = estimate;
     /** @type {string|null} */
     this.failWith = null;

@@ -23,6 +23,7 @@
  */
 
 import { h } from '../../core/vdom.js';
+import { flowAttrs, flowOf } from '../direction.js';
 import {
   provenanceLabel, emptyState, specimenTitle, renditionLabel, withProvenanceLedger,
 } from '../parts.js';
@@ -79,8 +80,16 @@ export function fullBleed(ctx) {
   scene.subhead
     ? h('p', { class: 'pp-bleed-sub', 'data-pp-tx': 'displaySub', 'data-pp-clamp': '3' }, scene.subhead)
     : null,
+  // The caption is the carrier's own words — a media block's caption from the
+  // rendition or from the specimen — so it reads in that content's direction,
+  // unlike the kicker above it, which is the rendition's *label* (C8).
   pick.caption
-    ? h('p', { class: 'pp-bleed-caption', 'data-pp-tx': 'caption', 'data-pp-clamp': '2' }, pick.caption)
+    ? h('p', {
+      class: 'pp-bleed-caption',
+      'data-pp-tx': 'caption',
+      'data-pp-clamp': '2',
+      ...flowAttrs(flowOf(pick.rendition || ctx.specimen)),
+    }, pick.caption)
     : null,
     !scene.headline && !scene.subhead && !pick.caption && !pick.source
       ? emptyState('This scene has no headline yet.')

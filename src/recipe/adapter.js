@@ -31,6 +31,7 @@
 import { ok, err } from '../core/result.js';
 import { sha256Hex } from '../core/hash.js';
 import { buildRendition } from './provenance.js';
+import { localeById } from './locales.js';
 import { parsePasted } from './paste.js';
 import { assertNoFabricatedFacts, unsourcedNote } from './facts.js';
 import { validateBlock } from '../core/contracts.js';
@@ -297,16 +298,36 @@ export async function runAdapter(recipe, specimen, config = /** @type {any} */({
     factNote,
   ].filter(Boolean).join(' ');
 
+  const finalLabel = parsed.label || requestedLabel;
+
+  // Writing direction, when the label names a market whose direction is known
+  // (finding C8). An adapter asked for `ar-SA` may return real Arabic, and
+  // nothing else in this path would tell a layout to lay it out right to left.
+  //
+  // The direction is a fact about the *market named in the label*, which the
+  // caller chose — not a guess about the payload's language. No `lang` is set
+  // for the same reason it is not guessed anywhere else in this lane: what
+  // language an endpoint answered in is not something this module knows, and
+  // naming one would be a claim about content the tool did not read.
+  //
+  // It is set on the rendition rather than on each block because it is a
+  // fallback: a block that declares its own direction still wins (L8's
+  // `resolveFlow`), so an endpoint that marked its output block by block is not
+  // overridden by the label.
+  const market = localeById(finalLabel);
+  const marketDir = market ? market.dir : undefined;
+
   let rendition;
   try {
     rendition = buildRendition({
       specimen,
       recipe,
-      label: parsed.label || requestedLabel,
+      label: finalLabel,
       blocks: parsed.blocks,
       media: [],
       producedBy: 'adapter',
       notes,
+      dir: marketDir,
     });
   } catch (e) {
     return err(`runAdapter: could not build a rendition — ${e instanceof Error ? e.message : String(e)}`);

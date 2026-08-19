@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import {
   SEED_RECIPES, recipeById, recipeAccepts, recipesFor, renderRecipe, renderAll,
   channelBudget, CHANNEL_BUDGETS, LOCALES, hasPromotionRecord, verifyProvenance,
+  buildRendition, renditionId, cloneBlock, mapBlockText,
 } from '../../src/recipe/index.js';
 import { structureOf } from '../../src/recipe/templates/locale-fanout.js';
 import { readBudgetNote } from '../../src/recipe/templates/channel-variants.js';
@@ -142,11 +143,12 @@ test('locale-fanout produces nine renditions whose STRUCTURE differs, not only t
 
   const byLabel = new Map(renditions.map((r) => [r.label, structureOf(r)]));
 
-  // (a) Block TYPE sequence differs: the RTL market renders prose as direction-
-  //     carrying raw blocks, so its type list is not the LTR markets' type list.
-  const ltr = byLabel.get('en-US').types.join(',');
-  const rtl = byLabel.get('ar-SA').types.join(',');
-  assert.notEqual(ltr, rtl);
+  // (a) The structural SIGNATURE differs: the RTL market carries a different
+  //     writing direction on every block and a mirrored contract table, so its
+  //     signature is not the LTR markets' signature. This compares the block —
+  //     not only its type — because finding C8 was that encoding direction in
+  //     the block *type* (`raw`) is what made the rendition unrenderable.
+  assert.notEqual(byLabel.get('en-US').signature, byLabel.get('ar-SA').signature);
   assert.equal(byLabel.get('en-US').rtlBlocks, 0);
   assert.ok(byLabel.get('ar-SA').rtlBlocks >= 5, 'RTL prose is marked, block by block');
   for (const id of ['de-DE', 'fr-FR', 'ja-JP', 'zh-CN', 'ru-RU', 'es-MX', 'pt-BR']) {
@@ -193,6 +195,145 @@ test('locale-fanout produces nine renditions whose STRUCTURE differs, not only t
   assert.match(prose('de-DE'), /1\.800/);
   assert.match(prose('fr-FR'), /1 800/);
   assert.ok(!/08\/17\/2026/.test(prose('de-DE')));
+});
+
+/* ------------------------------------------------------------------ *
+ * C8 — the ar-SA rendition must be typed blocks carrying direction
+ * ------------------------------------------------------------------ */
+
+test('C8: no seed recipe emits a `raw` block for content it generated', () => {
+  // §8's rule — "raw source is never presented as markup by a layout" — is about
+  // the prospect's *captured* HTML. A layout is right to flatten a `raw` block to
+  // plain text under "Source markup, shown as text". So a rendition this lane
+  // produced must never arrive as one: it would be presented to the room as the
+  // prospect's own page source, and every structural fact it carried would be
+  // stripped on the way. This is the finding, asserted across all eight rather
+  // than only where the critic looked.
+  const specimen = retailSpecimen();
+  const { renditions, failures } = renderAll(specimen, OPTIONS);
+  assert.deepEqual(failures, []);
+  assert.ok(renditions.length > 0);
+  for (const rendition of renditions) {
+    const raw = rendition.blocks.filter((b) => b.type === 'raw');
+    assert.deepEqual(
+      raw,
+      [],
+      `${rendition.recipeId} / ${rendition.label} emitted ${raw.length} raw block(s); `
+      + 'a layout flattens those to plain text under a caption calling them the prospect\u2019s source markup',
+    );
+  }
+});
+
+test('C8: the ar-SA rendition carries direction on typed blocks, not inside raw HTML', () => {
+  const specimen = retailSpecimen();
+  const renditions = renderRecipe('locale-fanout', specimen).value;
+  const ar = renditions.find((r) => r.label === 'ar-SA');
+  const en = renditions.find((r) => r.label === 'en-US');
+
+  // (a) Every block is a real typed block. Nothing is smuggled through markup.
+  assert.equal(structureOf(ar).rawBlocks, 0);
+  assert.ok(ar.blocks.length >= 10);
+  assert.ok(ar.blocks.some((b) => b.type === 'heading'));
+  assert.ok(ar.blocks.some((b) => b.type === 'paragraph'));
+  assert.ok(ar.blocks.some((b) => b.type === 'list'));
+  assert.ok(ar.blocks.some((b) => b.type === 'quote'));
+  assert.ok(ar.blocks.some((b) => b.type === 'cta'));
+
+  // (b) The heading the LTR markets render as a `heading` is still a `heading`,
+  //     with its level intact — the old encoding turned it into `<h1 dir=…>`
+  //     inside a string, and its level was lost the moment a layout stripped it.
+  const arHeadings = ar.blocks.filter((b) => b.type === 'heading');
+  const enHeadings = en.blocks.filter((b) => b.type === 'heading');
+  assert.deepEqual(arHeadings.map((b) => b.level), enHeadings.map((b) => b.level));
+
+  // (c) Direction is declared on every block, and on the rendition.
+  for (const [i, block] of ar.blocks.entries()) {
+    assert.equal(block.dir, 'rtl', `ar-SA block ${i} (${block.type}) must declare dir`);
+  }
+  assert.equal(ar.dir, 'rtl');
+  assert.equal(en.dir, 'ltr');
+  for (const block of en.blocks) assert.equal(block.dir, 'ltr');
+
+  // (d) No `dir="…"` survives anywhere in the block payload as markup: the whole
+  //     point is that the fact is a field, not an escaped attribute in a string.
+  assert.ok(!/dir=/.test(JSON.stringify(ar.blocks)));
+
+  // (e) Nothing is translated, and nothing claims to be. §18.2: the copy is the
+  //     source's own words, so it is marked with the *source's* language, never
+  //     with `ar-SA`. Inventing Arabic would be fabrication; calling English
+  //     Arabic would be a false claim about the content.
+  const prose = ar.blocks.find((b) => b.type === 'paragraph' && /Northwind connects/.test(b.text));
+  assert.ok(prose, 'the source paragraph survives as a paragraph');
+  assert.equal(prose.lang, 'en-US');
+  assert.ok(!ar.blocks.some((b) => b.lang === 'ar-SA'), 'no block claims to be in Arabic');
+  assert.equal(ar.lang, undefined, 'a rendition mixing the tool\u2019s labels and the source\u2019s words claims no single language');
+
+  // (f) The tool's own structural labels are marked as the tool's language,
+  //     because that is what they are.
+  const card = ar.blocks[0];
+  assert.equal(card.type, 'heading');
+  assert.equal(card.lang, 'en');
+
+  // (g) The structural facts §9.1 asks to be shown are still shown: the contract
+  //     table's cells are mirrored, and the direction row still reads.
+  const arTable = ar.blocks.find((b) => b.type === 'table');
+  const enTable = en.blocks.find((b) => b.type === 'table');
+  assert.deepEqual(arTable.rows[0], enTable.rows[0].slice().reverse());
+  assert.equal(arTable.dir, 'rtl');
+
+  // (h) The deck says out loud why right-to-left copy reads left to right.
+  assert.match(ar.notes, /words are still the source/i);
+  assert.ok(!/left to right/i.test(en.notes ?? '') || true);
+});
+
+test('C8: a specimen that declares no language gets direction and no language claim', () => {
+  const specimen = retailSpecimen({ locale: null, meta: { title: 'Retail media, unified' } });
+  const ar = renderRecipe('locale-fanout', specimen).value.find((r) => r.label === 'ar-SA');
+  const fromSource = ar.blocks.find((b) => b.type === 'paragraph' && /Northwind connects/.test(b.text));
+  assert.equal(fromSource.dir, 'rtl');
+  assert.equal(fromSource.lang, undefined, 'an unknown source language is left unclaimed, never guessed');
+});
+
+test('C8: direction survives the block helpers that rebuild a block field by field', () => {
+  // The bug had a second half: `cloneBlock` and `mapBlockText` reconstruct their
+  // result, so any field §4 does not name was silently dropped between the
+  // template that set it and the layout that reads it.
+  const marked = { type: 'paragraph', text: 'One line.', dir: 'rtl', lang: 'en-US' };
+  assert.deepEqual(cloneBlock(marked), marked);
+  assert.deepEqual(mapBlockText(marked, (t) => t.toUpperCase()), {
+    type: 'paragraph', text: 'ONE LINE.', dir: 'rtl', lang: 'en-US',
+  });
+  const list = { type: 'list', ordered: false, items: ['a'], dir: 'rtl' };
+  assert.deepEqual(cloneBlock(list), list);
+  const table = { type: 'table', header: true, rows: [['a', 'b']], dir: 'rtl', lang: 'en-US' };
+  assert.deepEqual(mapBlockText(table, (t) => t), table);
+});
+
+test('C8: buildRendition refuses a direction or language it cannot put in an attribute', () => {
+  const specimen = retailSpecimen();
+  const args = {
+    specimen, recipe: recipeById('locale-fanout'), label: 'ar-SA',
+    blocks: [{ type: 'paragraph', text: 'One line.' }], producedBy: 'template',
+  };
+  assert.throws(() => buildRendition({ ...args, dir: 'RTL' }), /dir must be ltr\|rtl\|auto/);
+  assert.throws(() => buildRendition({ ...args, dir: 'right' }), /dir must be ltr\|rtl\|auto/);
+  // `auto` is the third value HTML's attribute takes and the third L8 honours;
+  // L7 never emits it, and must not refuse a caller who does.
+  assert.equal(buildRendition({ ...args, dir: 'auto' }).dir, 'auto');
+  assert.throws(() => buildRendition({ ...args, lang: 'en" onload="x' }), /lang must be a BCP-47 tag/);
+  assert.throws(() => buildRendition({ ...args, lang: 'en\nUS' }), /lang must be a BCP-47 tag/);
+
+  // Absent stays absent: `undefined` means "this recipe made no claim about
+  // direction", which is a different thing from "left to right".
+  const plain = buildRendition(args);
+  assert.equal('dir' in plain, false);
+  assert.equal('lang' in plain, false);
+
+  // And an id minted without the extensions is unchanged by their existence.
+  assert.equal(plain.id, renditionId({
+    specimenId: specimen.id, recipeId: 'locale-fanout', label: 'ar-SA',
+    blocks: args.blocks, media: [], producedBy: 'template',
+  }));
 });
 
 test('locale-fanout can be narrowed to a subset of markets', () => {

@@ -10,13 +10,16 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { budgetAssets, collectAssets, rankAssets, minifySvg, SCALE_LADDER } from '../../src/emit/budget.js';
+import {
+  budgetAssets, collectAssets, dedupeAssets, countAssetCopies, assetFootprint, rankAssets, minifySvg, SCALE_LADDER,
+} from '../../src/emit/budget.js';
 import { emit } from '../../src/emit/index.js';
 import { utf8Length, parseDataUri } from '../../src/core/bytes.js';
 import { Runtime } from '../../src/runtime/runtime.js';
 import { registerTestLayouts } from '../fixtures/emit/layouts.mjs';
 import { runtimeBundle, FIXED_CLOCK } from '../fixtures/emit/runtime-bundle.mjs';
 import { emitProof, pngDataUri } from '../fixtures/emit/proofs.mjs';
+import { artifactModel } from '../fixtures/emit/artifact-dom.mjs';
 
 const { js: runtimeJs, css: runtimeCss } = runtimeBundle();
 
@@ -232,7 +235,7 @@ test('an identical asset used twice is carried once and degraded once', () => {
 // Critic F13 — one line per asset, and a prediction worth reading
 // ---------------------------------------------------------------------------
 
-import { dedupeAssets, predictEmittedBytes, dataUriPrefixBytes, PNG_CONTAINER_BYTES } from '../../src/emit/budget.js';
+import { predictEmittedBytes, dataUriPrefixBytes, PNG_CONTAINER_BYTES } from '../../src/emit/budget.js';
 
 /**
  * A proof whose media is inlined more than once — the shape the critic hit,
@@ -373,4 +376,213 @@ test('an untouched MediaRef keeps the meaning it arrived with', () => {
   const proof = emitProof({ imageEdge: 32 });
   const result = budgetAssets(proof, 50_000_000, { renderScene: sceneRenderer(proof) });
   assert.equal(result.proof, proof, 'nothing was degraded, so nothing was rewritten');
+});
+
+
+// --------------------------------------------------------------------- C2
+//
+// The budgeter used to reason about a number that was not in the file. It
+// summed `collectAssets` — one entry per `MediaRef`, so a picture two
+// references shared was counted twice — and subtracted that from the built size
+// to get the reserve, while the document was carrying every payload the opening
+// beat paints a second time in the pre-rendered markup. The reserve came out
+// megabytes wrong in both directions at once, and the three things that ride on
+// it rode on the error: the refusal, the stopping point, and the report a
+// seller reads.
+//
+// Everything below is measured against an emitted string. Not "the estimate is
+// close": equal.
+
+const budgetDeps = { runtimeJs, runtimeCss, clock: FIXED_CLOCK };
+
+/** Emit with a budget nothing can hit, to learn the artifact's natural size. */
+async function emitNaturally(proof) {
+  const result = await emit(proof, { maxBytes: 1_000_000_000 }, budgetDeps);
+  assert.equal(result.ok, true, result.ok ? '' : result.error);
+  return result.value;
+}
+
+/**
+ * Count a payload in a document the way a reader would: every occurrence,
+ * non-overlapping. Written out longhand rather than called out of `budget.js`,
+ * because this is the ground truth the module is being checked against.
+ */
+function occurrencesOf(html, needle) {
+  let count = 0;
+  let at = 0;
+  for (;;) {
+    const i = html.indexOf(needle, at);
+    if (i < 0) return count;
+    count += 1;
+    at = i + needle.length;
+  }
+}
+
+/** Every distinct payload the emitted model carries, and what the file spends on it. */
+function measuredFromFile(html) {
+  const model = artifactModel(html);
+  const assets = dedupeAssets(collectAssets(model));
+  let bytes = 0;
+  /** @type {Map<string, number>} */
+  const copies = new Map();
+  for (const asset of assets) {
+    const n = occurrencesOf(html, asset.dataUri);
+    copies.set(asset.assetId, n);
+    bytes += n * asset.bytes;
+  }
+  return { assets, copies, bytes };
+}
+
+test('the bytes the budgeter reasons about are the bytes in the file (C2)', async () => {
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 200 });
+  const natural = await emitNaturally(proof);
+
+  // Budgets expressed against the *asset* half of the file, because the other
+  // half is the runtime bundle and no allocator can spend that. `reserveBytes`
+  // is the emitter's own measurement of it, which is the number under test.
+  for (const fraction of [1, 0.8, 0.6, 0.4, 0.2]) {
+    const maxBytes = natural.budget.reserveBytes + Math.floor(natural.budget.assetBytes * fraction);
+    const result = await emit(proof, { maxBytes }, budgetDeps);
+    assert.equal(result.ok, true, `budget ${fraction}: ${result.ok ? '' : result.error}`);
+    const { bytes, html, budget } = result.value;
+
+    assert.equal(bytes, utf8Length(html), `budget ${fraction}: EmitResult.bytes is not the length of the document`);
+    assert.equal(
+      budget.reserveBytes + budget.assetBytes, bytes,
+      `budget ${fraction}: reserve ${budget.reserveBytes} + assets ${budget.assetBytes} is not the ${bytes}-byte file`,
+    );
+    assert.equal(budget.bytes, bytes);
+    assert.equal(budget.maxBytes, maxBytes);
+
+    const measured = measuredFromFile(html);
+    assert.equal(
+      budget.assetBytes, measured.bytes,
+      `budget ${fraction}: the budgeter counted ${budget.assetBytes} asset bytes and the file carries ${measured.bytes}`,
+    );
+    const reported = new Map(budget.copies.map((c) => [c.assetId, c.copies]));
+    for (const [assetId, expected] of measured.copies) {
+      assert.equal(
+        reported.get(assetId), expected,
+        `budget ${fraction}: ${assetId} is written ${expected} time(s) into the file and the budgeter believes ${reported.get(assetId)}`,
+      );
+    }
+  }
+});
+
+test('a budget the artifact already meets is not refused (C2)', async () => {
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 220 });
+  const natural = await emitNaturally(proof);
+
+  // The exact natural size, and one byte under it. Both were refused with a
+  // severity-1 SIZE_BUDGET_EXCEEDED while the reserve was inflated by every
+  // asset the opening beat paints.
+  for (const maxBytes of [natural.bytes, natural.bytes - 1]) {
+    const result = await emit(proof, { maxBytes }, budgetDeps);
+    assert.equal(result.ok, true, `maxBytes ${maxBytes} was refused: ${result.ok ? '' : result.error}`);
+    assert.ok(result.value.bytes <= maxBytes, `maxBytes ${maxBytes} produced ${result.value.bytes} bytes`);
+  }
+});
+
+test('the artifact does not throw away quality it did not need to (C2)', async () => {
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 220 });
+  const natural = await emitNaturally(proof);
+
+  // A budget 5% under the natural size must not cost the pictures three
+  // quarters of their pixels. The allocator spends one ladder step at a time
+  // and stops the moment the file fits, so the overshoot is bounded by the last
+  // step it took — not by a reserve that was wrong by the size of the assets.
+  const maxBytes = natural.budget.reserveBytes + Math.floor(natural.budget.assetBytes * 0.95);
+  const result = await emit(proof, { maxBytes }, budgetDeps);
+  assert.equal(result.ok, true, result.ok ? '' : result.error);
+  assert.ok(result.value.bytes <= maxBytes);
+
+  const biggestStep = Math.max(...result.value.degradations.map((d) => d.savedBytes), 0);
+  const unused = maxBytes - result.value.bytes;
+  assert.ok(
+    unused <= biggestStep,
+    `left ${unused} bytes of a ${maxBytes}-byte budget unused, more than the ${biggestStep}-byte step that overshot it`,
+  );
+});
+
+test('the reported saving is the saving the file made (C2, §17.10)', async () => {
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 220 });
+  const natural = await emitNaturally(proof);
+  const before = measuredFromFile(natural.html);
+
+  let sawADegradation = false;
+  for (const fraction of [0.9, 0.75, 0.6, 0.45, 0.3]) {
+    const maxBytes = natural.budget.reserveBytes + Math.floor(natural.budget.assetBytes * fraction);
+    const result = await emit(proof, { maxBytes }, budgetDeps);
+    assert.equal(result.ok, true, `budget ${fraction} (maxBytes ${maxBytes}): ${result.ok ? '' : result.error}`);
+    if (result.value.degradations.length === 0) continue;
+    sawADegradation = true;
+
+    const after = measuredFromFile(result.value.html);
+    const reported = result.value.degradations.reduce((sum, d) => sum + d.savedBytes, 0);
+    assert.equal(
+      reported, before.bytes - after.bytes,
+      `budget ${fraction}: the report claims ${reported} bytes saved and the file gave back ${before.bytes - after.bytes}`,
+    );
+    for (const line of result.value.degradations) {
+      assert.equal(line.savedBytes, line.beforeBytes - line.afterBytes, `${line.assetId}: savedBytes is not the delta`);
+      assert.ok(line.copies >= 1, `${line.assetId}: a line must say how many copies of the payload it is about`);
+      assert.equal(line.afterBytes, line.copies * (line.afterBytes / line.copies), `${line.assetId}: afterBytes must be the document cost`);
+    }
+  }
+  assert.equal(sawADegradation, true, 'the fixture must degrade at some budget, or this test asserts nothing');
+});
+
+test('an asset written twice is charged twice (C2)', () => {
+  // The accounting has to survive a document that genuinely carries a payload
+  // more than once — two <img> tags on the opening beat showing the same
+  // picture both need a real src, and only one of them can lend it to the media
+  // table. `countAssetCopies` is what says so.
+  const uri = pngDataUri(16, 16, 7);
+  const other = pngDataUri(24, 24, 9);
+  const assets = [
+    { assetId: 'a', assetIds: ['a'], dataUri: uri, bytes: utf8Length(uri) },
+    { assetId: 'b', assetIds: ['b'], dataUri: other, bytes: utf8Length(other) },
+  ];
+  const html = `<img src="${uri}"><img src="${uri}"><i>${other}</i>`;
+  const copies = countAssetCopies(html, assets);
+  assert.equal(copies.get(uri), 2);
+  assert.equal(copies.get(other), 1);
+
+  const footprint = assetFootprint(html, assets);
+  assert.equal(footprint.assetBytes, 2 * utf8Length(uri) + utf8Length(other));
+  assert.equal(footprint.reserveBytes + footprint.assetBytes, utf8Length(html));
+  assert.equal(footprint.byAssetId.get('a'), 2);
+  assert.equal(footprint.inPayload.length, 0);
+});
+
+test('a payload the document never writes out is reserve, not a line item (C2)', () => {
+  // Anything `splitMedia` leaves in the model travels inside the deflated,
+  // base64 payload. Its bytes are real and they are counted — in the reserve,
+  // where they are — but no per-asset saving can be measured for it, so the
+  // budgeter neither promises one nor pretends the asset is absent.
+  const uri = pngDataUri(16, 16, 3);
+  const assets = [{ assetId: 'hidden', assetIds: ['hidden'], dataUri: uri, bytes: utf8Length(uri) }];
+  const html = '<p>nothing here carries it</p>';
+  const footprint = assetFootprint(html, assets);
+  assert.equal(footprint.assetBytes, 0);
+  assert.equal(footprint.reserveBytes, utf8Length(html));
+  assert.equal(footprint.inPayload.length, 1);
+  assert.equal(footprint.byAssetId.get('hidden'), 0);
+});
+
+test('an asset the budgeter cannot measure is named rather than passed over (C2)', () => {
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 64 });
+  const assets = dedupeAssets(collectAssets(proof));
+  const copies = new Map(assets.flatMap((a) => a.assetIds.map((id) => [id, 0])));
+  const result = budgetAssets(proof, 60_000, { copies, reserveBytes: 500_000, renderScene: sceneRenderer(proof) });
+  assert.deepEqual(result.plan, [], 'nothing the file does not write out can be degraded on a promise');
+  assert.ok(result.undegradable.length > 0, 'and nothing may be silently passed over either');
+  for (const entry of result.undegradable) {
+    assert.match(entry.reason, /compressed model payload/);
+  }
 });

@@ -428,7 +428,7 @@ export function matchesSelector(selector, chain, index) {
 /** Properties the cascade evaluator inherits. */
 export const INHERITED_PROPS = new Set([
   'color', 'font-size', 'font-family', 'font-weight', 'font', 'visibility',
-  'text-indent', 'line-height', 'letter-spacing', 'text-transform', 'white-space',
+  'text-indent', 'line-height', 'letter-spacing', 'word-spacing', 'text-transform', 'white-space',
 ]);
 
 /** Everything the provenance checker reads. Anything else is ignored on purpose. */
@@ -436,7 +436,9 @@ export const TRACKED_PROPS = [
   'display', 'visibility', 'opacity', 'color', 'background-color', 'background',
   'font-size', 'font', 'font-family', 'position', 'left', 'top', 'right', 'bottom',
   'width', 'height', 'max-width', 'max-height', 'min-width', 'min-height',
-  'transform', 'scale', 'clip', 'clip-path', 'overflow', 'text-indent',
+  'transform', 'scale', 'zoom', 'clip', 'clip-path', 'text-indent',
+  'overflow', 'overflow-x', 'overflow-y', 'white-space',
+  'letter-spacing', 'word-spacing',
   'filter', 'content-visibility', 'z-index', 'line-height', 'inset',
 ];
 
@@ -668,6 +670,111 @@ export function resolveFontSize(value, parentPx, rootPx) {
   }
   if (v.endsWith('px')) return num;
   return num;
+}
+
+/**
+ * A box length in CSS pixels, or `null` when it cannot be known statically.
+ *
+ * `resolveFontSize` always answers, because a font size always has an inherited
+ * value to fall back on. A box dimension does not: `width: 50%` depends on a
+ * containing block the emitter never lays out, and guessing would put a law on
+ * top of a guess. So this returns `null` for anything whose pixel value depends
+ * on layout — percentages, `auto`, `calc()`, the intrinsic keywords — and a
+ * number only when the declaration itself fixes one.
+ *
+ * Viewport units resolve against the smallest breakpoint the product supports
+ * (390×844), which is the fail-safe reading for a floor: it is the smallest the
+ * box can ever be.
+ *
+ * @param {string|undefined} value
+ * @param {number} fontSizePx   the element's own computed font size, for `em`/`ex`/`ch`
+ * @param {number} rootPx       the root font size, for `rem`
+ * @returns {number|null}
+ */
+export function resolveLengthPx(value, fontSizePx, rootPx) {
+  if (value === undefined || value === null) return null;
+  const v = String(value).trim().toLowerCase();
+  if (!v) return null;
+  if (v === '0') return 0;
+  if (/^(auto|none|inherit|initial|unset|revert|min-content|max-content|fit-content|stretch|available)$/.test(v)) return null;
+
+  const group = /^(min|max|clamp)\(([\s\S]+)\)$/.exec(v);
+  if (group) {
+    const parts = splitTopLevel(group[2]).map((part) => resolveLengthPx(part, fontSizePx, rootPx));
+    if (parts.some((n) => n === null)) return null;
+    const numbers = /** @type {number[]} */ (parts);
+    if (group[1] === 'min') return Math.min(...numbers);
+    if (group[1] === 'max') return Math.max(...numbers);
+    // clamp(a, b, c) can never render below `a`, and a floor is judged on the
+    // smallest value a declaration can produce.
+    return numbers[0];
+  }
+  if (v.includes('calc(') || v.includes('var(') || v.includes('%')) return null;
+
+  const num = parseFloat(v);
+  if (!Number.isFinite(num)) return null;
+  if (/^-?[\d.]+$/.test(v)) return null;                 // a bare number is not a length
+  if (v.endsWith('rem')) return num * rootPx;
+  if (v.endsWith('em')) return num * fontSizePx;
+  if (v.endsWith('ex')) return num * fontSizePx * 0.5;
+  if (v.endsWith('ch')) return num * fontSizePx * 0.5;
+  if (v.endsWith('px')) return num;
+  if (v.endsWith('pt')) return (num * 96) / 72;
+  if (v.endsWith('pc')) return (num * 96) / 6;
+  if (v.endsWith('in')) return num * 96;
+  if (v.endsWith('cm')) return (num * 96) / 2.54;
+  if (v.endsWith('mm')) return (num * 96) / 25.4;
+  if (v.endsWith('vh')) return num * 8.44;
+  if (v.endsWith('vw') || v.endsWith('vmin')) return num * 3.9;
+  if (v.endsWith('vmax')) return num * 8.44;
+  if (v.endsWith('q')) return (num * 96) / 101.6;
+  return null;
+}
+
+/**
+ * Split a comma list without breaking inside nested functions.
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function splitTopLevel(text) {
+  /** @type {string[]} */
+  const parts = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of String(text)) {
+    if (ch === '(') depth++;
+    if (ch === ')') depth--;
+    if (ch === ',' && depth === 0) { parts.push(current); current = ''; continue; }
+    current += ch;
+  }
+  parts.push(current);
+  return parts.map((p) => p.trim()).filter((p) => p !== '');
+}
+
+/**
+ * The line box a run of text occupies, in CSS pixels.
+ *
+ * `normal` is 1.2 in every engine the artifact will meet; a unitless number
+ * multiplies the font size; a length or percentage is what it says.
+ *
+ * @param {string|undefined} value
+ * @param {number} fontSizePx
+ * @param {number} rootPx
+ * @returns {number}
+ */
+export function resolveLineHeightPx(value, fontSizePx, rootPx) {
+  const v = String(value === undefined || value === null ? '' : value).trim().toLowerCase();
+  if (!v || v === 'normal' || v === 'inherit' || v === 'initial' || v === 'unset' || v === 'revert') return fontSizePx * 1.2;
+  if (/^-?[\d.]+$/.test(v)) {
+    const factor = parseFloat(v);
+    return Number.isFinite(factor) ? Math.max(0, factor) * fontSizePx : fontSizePx * 1.2;
+  }
+  if (v.endsWith('%')) {
+    const pct = parseFloat(v);
+    return Number.isFinite(pct) ? (Math.max(0, pct) / 100) * fontSizePx : fontSizePx * 1.2;
+  }
+  const px = resolveLengthPx(v, fontSizePx, rootPx);
+  return px === null ? fontSizePx * 1.2 : Math.max(0, px);
 }
 
 /**

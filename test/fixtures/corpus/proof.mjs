@@ -730,6 +730,47 @@ export const PLANTS = [
     },
   },
   {
+    name: 'DUPLICATE_BRANCH_ID',
+    code: 'DUPLICATE_SCENE',
+    describe: 'the seller duplicated a branch to edit and never changed its id',
+    apply(proof) {
+      const [first, second] = proof.branches;
+      if (!first || !second) throw new Error('corpus plant: fewer than two branches to collide');
+      // The shadowed branch keeps its own scenes and objection — this is a
+      // collision of identity, not of content, which is exactly what makes it
+      // silent. `buildDeck` keeps the first and drops the second, so before
+      // this was reported the presenter's key opened the wrong branch and every
+      // deck-driven rule skipped the dropped branch's scenes entirely.
+      const shadowedId = second.id;
+      second.id = first.id;
+      // Every anchor that named the second branch now names the first, which is
+      // what a studio "duplicate" produces: two branches with one id, both
+      // reachable in the model, one of them invisible to the deck. Leaving the
+      // old anchors stale would plant a *ghost anchor* as well and the plant
+      // would be measuring two defects at once.
+      const allScenes = proof.spine.concat(...proof.branches.map((b) => b.scenes));
+      for (const scene of allScenes) {
+        scene.branchAnchors = scene.branchAnchors.map((id) => (id === shadowedId ? first.id : id));
+      }
+      return [{ code: 'DUPLICATE_SCENE', branchId: first.id, severity: 1 }];
+    },
+    alsoMoves: {
+      // The corpus hangs its nested branch off a scene inside the branch that
+      // gets shadowed. When that scene leaves the deck the nested branch is
+      // anchored nowhere, so §10's `returnPolicy: 'anchor'` has no scene to
+      // return to. **One duplicated id strands a branch two levels away**,
+      // which is the clearest statement of why this is severity 1.
+      //
+      // `TEXT_OVERFLOW` is deliberately *not* declared here. The shadowed
+      // branch's scenes do leave the sweep — that is the real harm, and L11's
+      // argument for severity 1 — but on this corpus those scenes raise no
+      // overflow finding, so nothing moves. Declaring it would have been a
+      // plausible sentence about a number that does not change, and the
+      // stale-declaration check caught it.
+      BRANCH_NO_RETURN: 'a branch nested inside the shadowed one loses the scene that offered it',
+    },
+  },
+  {
     name: 'BEAT_EMPTY',
     code: 'BEAT_EMPTY',
     describe: 'the seller swapped a scene\'s layout and left its beats pointing at the old one',

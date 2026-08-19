@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { encodePayload, splitMedia, isExtractableMedia } from '../../src/emit/model.js';
 import {
   ppInflateRaw, ppBase64ToBytes, ppUtf8Decode, ppRehydrateMedia, ppDecodePayload,
-  artifactRuntimeSource,
+  ppReadMediaTable, artifactRuntimeSource,
 } from '../../src/emit/artifact-runtime.js';
 import { emit } from '../../src/emit/index.js';
 import { deflateRaw } from '../../src/core/deflate.js';
@@ -25,6 +25,7 @@ import { stableStringify } from '../../src/core/hash.js';
 import { registerTestLayouts } from '../fixtures/emit/layouts.mjs';
 import { runtimeBundle, FIXED_CLOCK } from '../fixtures/emit/runtime-bundle.mjs';
 import { emitProof, tinyProof } from '../fixtures/emit/proofs.mjs';
+import { artifactMediaTable, artifactModel } from '../fixtures/emit/artifact-dom.mjs';
 
 const { js: runtimeJs, css: runtimeCss } = runtimeBundle();
 const deps = { runtimeJs, runtimeCss, clock: FIXED_CLOCK };
@@ -66,13 +67,15 @@ test('the artifact round-trips its own model payload', async () => {
   assert.equal(result.ok, true, result.ok ? '' : result.error);
 
   const payload = between(result.value.html, '<script id="pp-model" type="application/octet-stream">', '</script>');
-  const mediaText = between(result.value.html, '<script id="pp-media" type="application/octet-stream">', '</script>');
   const mode = result.value.compression.mode;
 
   const bytes = ppBase64ToBytes(payload);
   const raw = mode === 'deflate' ? ppInflateRaw(bytes) : bytes;
   const model = JSON.parse(ppUtf8Decode(raw));
-  const table = mediaText.split('\n').filter(Boolean);
+  // Through the artifact's own reader, because C2 gave the media table a second
+  // kind of line: the payloads the opening beat already paints are borrowed
+  // back out of the markup instead of written twice.
+  const table = artifactMediaTable(result.value.html);
   const rebuilt = ppRehydrateMedia(model, table);
 
   assert.equal(rebuilt.id, proof.id);
@@ -212,3 +215,71 @@ function between(haystack, open, close) {
   assert.notEqual(end, -1, `could not find ${close}`);
   return haystack.slice(from, end);
 }
+
+
+// --------------------------------------------------------------------- C2
+
+test('the opening beat\'s pictures are written into the file once, not twice (C2)', async () => {
+  registerTestLayouts();
+  const proof = emitProof({ imageEdge: 200 });
+  const result = await emit(proof, {}, deps);
+  assert.equal(result.ok, true, result.ok ? '' : result.error);
+  const html = result.value.html;
+
+  // §12 needs the opening beat painted before any JavaScript runs, so its
+  // pictures are in the markup as literal `src` values. D6 needs every payload
+  // in the media table, so the runtime can rebuild the model. Doing both wrote
+  // the same megabyte twice; the table now borrows the markup's copy.
+  const payloads = new Set();
+  for (const media of [...proof.specimens.flatMap((s) => s.media || []), ...proof.renditions.flatMap((r) => r.media || [])]) {
+    payloads.add(media.dataUri);
+  }
+  assert.ok(payloads.size > 0, 'the fixture must carry media, or this test asserts nothing');
+
+  let borrowed = 0;
+  for (const uri of payloads) {
+    let count = 0;
+    let at = 0;
+    for (;;) {
+      const i = html.indexOf(uri, at);
+      if (i < 0) break;
+      count += 1;
+      at = i + uri.length;
+    }
+    assert.equal(count, 1, `a payload appears ${count} times in the emitted file; the artifact pays for every one of them`);
+  }
+
+  const table = artifactMediaTable(html);
+  const written = between(html, '<script id="pp-media" type="application/octet-stream">', '</script>').split('\n');
+  for (let i = 0; i < written.length; i++) {
+    if (written[i].charAt(0) === '@') {
+      borrowed += 1;
+      assert.match(html, new RegExp(`data-pp-m="${i}"`), `line ${i} borrows a payload from markup that does not mark it`);
+      assert.ok(table[i].startsWith('data:'), `line ${i} did not resolve back to a payload`);
+    }
+  }
+  assert.ok(borrowed > 0, 'the fixture must paint at least one picture on the opening beat');
+
+  // And the model the artifact rebuilds is the model that was encoded.
+  const rebuilt = artifactModel(html);
+  const byId = new Map([...rebuilt.specimens.flatMap((s) => s.media || []), ...rebuilt.renditions.flatMap((r) => r.media || [])].map((m) => [m.id, m]));
+  for (const media of [...proof.specimens.flatMap((s) => s.media || []), ...proof.renditions.flatMap((r) => r.media || [])]) {
+    assert.equal(byId.get(media.id).dataUri, media.dataUri, `${media.id} did not come back byte-identical`);
+  }
+});
+
+test('a borrowed media line that the markup cannot answer fails loudly (C2)', () => {
+  // The failure mode this replaces is worse than a throw: a model carrying the
+  // string "@m3" where a picture should be, rendered as a broken image and — on
+  // a browser that resolves it as a relative URL — a network request out of an
+  // artifact whose whole promise is that it makes none.
+  assert.throws(
+    () => ppReadMediaTable('@src', { querySelector: () => null }),
+    /the opening beat does not carry it/,
+  );
+  assert.throws(
+    () => ppReadMediaTable('@src', { querySelector: () => ({ getAttribute: () => null }) }),
+    /the opening beat does not carry it/,
+  );
+  assert.deepEqual(ppReadMediaTable('', { querySelector: () => null }), []);
+});

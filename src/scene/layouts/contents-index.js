@@ -53,7 +53,8 @@ export function contentsIndex(ctx) {
       h('div', { class: 'pp-index-text', 'data-pp-box': 'indexRow', 'data-pp-n': String(entries.length), 'data-pp-container': 'index' },
         h('p', { class: 'pp-index-title', 'data-pp-tx': 'indexTitle', 'data-pp-clamp': '2' }, entry.title),
         entry.blurb
-          ? h('p', { class: 'pp-index-blurb', 'data-pp-tx': 'indexBlurb', 'data-pp-clamp': '2' }, entry.blurb)
+          // `.pp-index-blurb { max-width: var(--pp-sc-blurb-max-w) }`.
+          ? h('p', { class: 'pp-index-blurb', 'data-pp-tx': 'indexBlurb', 'data-pp-clamp': '2', 'data-pp-max': 'blurb-max-w' }, entry.blurb)
           : null,
         provenanceLabel(entry.rendition, ctx)))))), ctx);
 }

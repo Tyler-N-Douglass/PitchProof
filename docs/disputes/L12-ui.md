@@ -236,3 +236,59 @@ illustrative label with no record at all — one word rather than six fields and
 hash — and that is a deliberate, labelled act by the operator, which is the model
 §9 chose. The correction F23 asks for is a wording correction, not a security
 one.
+
+---
+
+## D-L12-9 — `attachUserFont` is the only route §7 permits and is not in `API.md` Part 3
+
+**Severity: none; noted for the record, same shape as D-L12-4 and D-L12-8.**
+
+CRITIQUE-2 C3 asked for a route that accepts a font file. L5 publishes exactly
+the right one: `attachUserFont(faces, supply, {clock})` refuses without a file
+and refuses without a rights assertion naming who made it, and its module header
+calls itself "the **only** function in the product that can set
+`TypeFace.embeddable` to true". `src/ui/services.js` now consumes it, and
+`src/ui/panels/brand.js` renders the control that reaches it.
+
+`API.md` Part 3's L5 fence declares seven surfaces and this is not among them;
+it appears only in the "extra published surfaces" table further down, as *"the
+only route to `embeddable: true` (§7)"*. So `test/ui/lane-conformance.test.mjs`
+— which reads the fence — neither required the studio to wire it nor required a
+reason for declining it, and for a whole pass the studio declined it silently.
+That is the same asymmetry the conformance test was written to close, one level
+out: the test polices the fence, and the surface that mattered most here was
+outside it.
+
+**What this lane did:** consumed it as published, with no local reimplementation.
+`services.attachUserFont` is a three-line pass-through with the clock injected,
+so the refusals are L5's.
+
+**For the integrator:** promoting `attachUserFont` into the L5 fence in
+`API.md` Part 3 would put it under the conformance test, and the same argument
+applies to `PROMOTION_RECORD_LIMIT` (D-L12-8). Both are surfaces the studio must
+use to satisfy a spec clause; neither is declared where the test that enforces
+consumption can see it.
+
+---
+
+## D-L12-10 — L11 reads `embeddable` as ground truth, which is correct and worth stating
+
+**Severity: none; a note about a coupling, not an objection.**
+
+`src/validate/overflow.js:151` builds the available-family list from
+`face.embeddable`, so a face flagged embeddable is treated as present on the
+client's machine and FONT_UNAVAILABLE is not raised for it. That is the right
+reading — §7 makes the flag mean "the user supplied a file" — and it is precisely
+why CRITIQUE-2 C3 was severity 2 rather than cosmetic: one unfounded flag
+silenced the warning *and* changed what overflow was measured against.
+
+L12 now holds up its end: the flag is set only by L5's `attachUserFont`, no
+control can set it directly, and a record arriving with the flag and no file has
+it cleared on load (`model.clearUnfoundedFontClaims`, announced to the user).
+
+**Not a request for a change.** A defensive check in L11 — "embeddable, but is
+there a `fontFile`?" — would be a second, weaker copy of §7's invariant living in
+the lane that consumes it rather than the lanes that maintain it. Recorded so
+that whoever next reads `availableFamilies` knows the invariant is enforced
+upstream on purpose, and where.
+

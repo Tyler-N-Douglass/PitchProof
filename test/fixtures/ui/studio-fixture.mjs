@@ -284,6 +284,40 @@ export function fakeServices(options = {}) {
       confidence: { colors: 0.9, faces: 0.8, logos: 0.75, shape: 0.8, imagery: 0.78 },
     }),
     compileTheme: () => ({ css: ':root{--pp-primary:#123A8C}', vars: { '--pp-primary': '#123A8C' } }),
+    artifactThemeCss: () => ':root{--pp-primary:#123A8C}',
+    // §7's only route to `embeddable: true`, shaped like L5's: a file and a
+    // rights assertion, or nothing (CRITIQUE-2 C3). The fake refuses on the same
+    // two conditions the real one does, so a caller that skips either fails here
+    // rather than only in the studio.
+    attachUserFont: (faces, supply) => {
+      record('attachUserFont', [supply && supply.family]);
+      if (!supply || !supply.family) return err('attachUserFont: a family is required');
+      if (!supply.bytes && !supply.dataUri) return err('attachUserFont: a font file (bytes or dataUri) is required');
+      const assertion = supply.rightsAssertion;
+      if (!assertion || !assertion.assertedBy || !assertion.statement) {
+        return err('attachUserFont: a rights assertion naming who asserted it is required before a font may be embedded');
+      }
+      const list = faces.slice();
+      const at = list.findIndex((f) => f.family === supply.family);
+      const before = at >= 0 ? list[at] : { family: supply.family, role: 'body', fallbackStack: [supply.family], weightsSeen: [400], metricDelta: null };
+      const face = {
+        ...before,
+        embeddable: true,
+        available: true,
+        confidence: 1,
+        primaryWeight: (supply.weights || [])[0] || 400,
+        fontFile: {
+          fileName: supply.fileName,
+          mime: supply.mime || 'font/woff2',
+          style: supply.style || 'normal',
+          bytes: supply.bytes ? supply.bytes.length : null,
+          dataUri: supply.dataUri || null,
+        },
+        rightsAssertion: { assertedBy: assertion.assertedBy, statement: assertion.statement, assertedAt: clock() },
+      };
+      if (at >= 0) list[at] = face; else list.push(face);
+      return ok({ faces: list, face, assertion: { family: face.family, fileName: supply.fileName, assertedBy: assertion.assertedBy, statement: assertion.statement, assertedAt: face.rightsAssertion.assertedAt, bytes: supply.bytes ? supply.bytes.length : 0 } });
+    },
     inverseLogo: (logo) => ({ ...logo, id: `${logo.id}_inv`, variant: 'inverse' }),
 
     buildSpecimen: () => ok({ ...fixtureSpecimen(), id: contentId('specimen', `fake-${calls.length}`) }),

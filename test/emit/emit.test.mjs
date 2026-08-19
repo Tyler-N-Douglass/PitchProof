@@ -12,8 +12,8 @@ import { emit, scanForNetworkReferences, inlineRuntime, layoutsMissingFor } from
 import { resetLayouts } from '../../src/runtime/layouts.js';
 import { registerTestLayouts } from '../fixtures/emit/layouts.mjs';
 import { runtimeBundle, FIXED_CLOCK } from '../fixtures/emit/runtime-bundle.mjs';
+import { artifactModel } from '../fixtures/emit/artifact-dom.mjs';
 import { emitProof, tinyProof } from '../fixtures/emit/proofs.mjs';
-import { ppBase64ToBytes, ppInflateRaw, ppUtf8Decode, ppRehydrateMedia } from '../../src/emit/artifact-runtime.js';
 
 const { js: runtimeJs, css: runtimeCss } = runtimeBundle();
 const deps = { runtimeJs, runtimeCss, clock: FIXED_CLOCK };
@@ -283,14 +283,5 @@ test('a prospect name containing markup cannot break out of the title', async ()
  * @returns {any}
  */
 function decodeModel(html) {
-  const open = '<script id="pp-model" type="application/octet-stream">';
-  const start = html.indexOf(open) + open.length;
-  const payload = html.slice(start, html.indexOf('</script>', start));
-  const mediaOpen = '<script id="pp-media" type="application/octet-stream">';
-  const mediaStart = html.indexOf(mediaOpen) + mediaOpen.length;
-  const mediaText = html.slice(mediaStart, html.indexOf('</script>', mediaStart));
-  const mode = /ppBootArtifact\(\{[^}]*mode: "(\w+)"/.exec(html)[1];
-  const bytes = ppBase64ToBytes(payload);
-  const raw = mode === 'deflate' ? ppInflateRaw(bytes) : bytes;
-  return ppRehydrateMedia(JSON.parse(ppUtf8Decode(raw)), mediaText.split('\n').filter(Boolean));
+  return artifactModel(html);
 }

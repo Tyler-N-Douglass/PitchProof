@@ -38,6 +38,29 @@
  * - **`renditionsRequiringLabel(renditions)`** — the exact set the artifact must
  *   carry a visible provenance label for.
  *
+ * ## Writing direction (finding C8)
+ *
+ * A rendition this lane produced is **never** a `raw` block. §8's rule that a
+ * layout must not present raw source as markup is about the prospect's captured
+ * HTML; a `locale-fanout` rendition is this lane's own output, and arriving as
+ * `raw` got the whole ar-SA rendition flattened to plain text under a caption
+ * reading "Source markup, shown as text".
+ *
+ * Direction and language therefore ride on the §4 optional extensions rather
+ * than inside escaped markup:
+ *
+ * - `ContentBlock.dir?: 'ltr'|'rtl'|'auto'` and `ContentBlock.lang?: string`
+ * - `Rendition.dir?: 'ltr'|'rtl'|'auto'` and `Rendition.lang?: string`
+ * - a block's own value wins; the rendition's is the fallback for blocks that
+ *   declare nothing. `DIRECTIONS` is the accepted set, and matches
+ *   `src/scene/direction.js`.
+ *
+ * `dir` is the **market's** writing direction. `lang` is the language the text
+ * is **actually in** — the source's, never the market's, because the recipe
+ * reformats and does not translate (D-L7-18). `buildRendition` refuses a `dir`
+ * outside `DIRECTIONS` and a `lang` that is not a BCP-47 tag, because both reach
+ * an emitted attribute.
+ *
  * @module recipe
  */
 
@@ -48,7 +71,7 @@ export {
   hasPromotionRecord, readPromotionRecord, readPromotionRecords, parsePromotionRecords,
   formatPromotionRecord, promotionSignature, stripPromotionRecords, isIsoInstant,
   verifyProvenance, renditionsRequiringLabel, resolveProvenance, renditionId,
-  PROMOTION_RECORD_VERSION, PROMOTION_RECORD_RE, PROMOTION_RECORD_LIMIT,
+  PROMOTION_RECORD_VERSION, PROMOTION_RECORD_RE, PROMOTION_RECORD_LIMIT, DIRECTIONS,
 } from './provenance.js';
 
 export {
@@ -77,9 +100,12 @@ export {
   adapterSecretCount, blocksFromAdapterPayload,
 } from './adapter.js';
 
-export { LOCALES, localeById, localizeText, formatContractRows, legalPlacementLabel } from './locales.js';
+export { LOCALES, localeById, localizeText, formatContractRows, legalPlacementLabel, sourceLanguage } from './locales.js';
 
-export { slot, mediaFor, cloneBlock, mapBlockText, legalLine, bodyBlocks, leadHeadline, leadParagraph, leadCta, finish } from './blocks.js';
+export {
+  slot, mediaFor, cloneBlock, mapBlockText, legalLine, bodyBlocks, leadHeadline, leadParagraph, leadCta, finish,
+  withDirection, carryDirection, TOOL_LANG,
+} from './blocks.js';
 
 export {
   normalizeWhitespace, flatten, tokenize, numericTokens, groupKey, sentences,

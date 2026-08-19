@@ -2750,9 +2750,62 @@ __exports["lcsPairs"] = lcsPairs;
 __exports["alignPair"] = alignPair;
 __exports["alignColumns"] = alignColumns;
 };
+__modules["scene/direction.js"] = function (__exports, __require) {
+
+const DIRECTIONS = ['ltr', 'rtl', 'auto'];
+
+function flowOf(source) {
+  const dir = source && DIRECTIONS.includes(source.dir) ? source.dir : null;
+  const lang = source && typeof source.lang === 'string' && source.lang.trim()
+    ? source.lang.trim()
+    : null;
+  return { dir, lang };
+}
+
+function firstFlow(sources) {
+  const list = Array.isArray(sources) ? sources : [];
+
+  let dir = null;
+
+  let lang = null;
+  for (const source of list) {
+    const flow = flowOf(source);
+    if (!dir && flow.dir) dir = flow.dir;
+    if (!lang && flow.lang) lang = flow.lang;
+    if (dir && lang) break;
+  }
+  return { dir, lang };
+}
+
+function flowAttrs(flow) {
+
+  const out = {};
+  if (flow && DIRECTIONS.includes(flow.dir)) out.dir = flow.dir;
+  if (flow && typeof flow.lang === 'string' && flow.lang.trim()) out.lang = flow.lang.trim();
+  return out;
+}
+
+function resolveFlow(block, container = {}) {
+  const own = flowOf(block);
+  const outer = flowOf(container);
+  return { dir: own.dir || outer.dir, lang: own.lang || outer.lang };
+}
+
+function isRtl(flow) {
+  return !!flow && flow.dir === 'rtl';
+}
+
+__exports["DIRECTIONS"] = DIRECTIONS;
+__exports["flowOf"] = flowOf;
+__exports["firstFlow"] = firstFlow;
+__exports["flowAttrs"] = flowAttrs;
+__exports["resolveFlow"] = resolveFlow;
+__exports["isRtl"] = isRtl;
+};
 __modules["scene/blocks.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
+const { flowAttrs, resolveFlow, firstFlow } = __require("scene/direction.js");
 
 function headingRole(level) {
   const n = Number(level) || 1;
@@ -2764,6 +2817,7 @@ function renderBlock(block, options = {}) {
   const attrs = {
     class: `pp-block pp-block--${block && block.type ? block.type : 'unknown'}`,
     'data-pp-block': block && block.type ? block.type : 'unknown',
+    ...directionOf(block, o),
   };
   if (o.id) {
     attrs['data-pp-el'] = o.id;
@@ -2771,6 +2825,16 @@ function renderBlock(block, options = {}) {
   }
   return h('div', attrs, blockBody(block, o));
 }
+
+function directionOf(block, o = {}) {
+  return flowAttrs(resolveFlow(block, o));
+}
+
+const QUOTE_RULE_INSET_PX = 14;
+
+const CTA_PAD_PX = 28;
+
+const RAW_RULE_INSET_PX = 12;
 
 function blockBody(block, o) {
   if (!block || typeof block !== 'object') return null;
@@ -2798,17 +2862,18 @@ function blockBody(block, o) {
       const rest = items.length - shown.length;
       return h(block.ordered ? 'ol' : 'ul', { class: 'pp-list', 'data-pp-ordered': block.ordered ? 'true' : 'false' },
         shown.map((item, i) => h('li', { class: 'pp-list-item', 'data-pp-inset': 'list-marker-w' },
-          h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco' }, block.ordered ? `${i + 1}.` : '•'),
+          h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w' }, block.ordered ? `${i + 1}.` : '•'),
           h('span', { class: 'pp-list-text', 'data-pp-tx': 'listItem', 'data-pp-clamp': o.clampParagraph || null }, String(item ?? '')))),
         rest > 0
           ? h('li', { class: 'pp-list-more', 'data-pp-inset': 'list-marker-w' },
-            h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco' }, '·'),
+            h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w' }, '·'),
             h('span', { class: 'pp-list-text', 'data-pp-tx': 'caption' }, `${rest} more ${rest === 1 ? 'item' : 'items'} in the source`))
           : null);
     }
 
     case 'quote':
-      return h('blockquote', { class: 'pp-quote' },
+
+      return h('blockquote', { class: 'pp-quote', 'data-pp-inset': String(QUOTE_RULE_INSET_PX) },
         h('p', { class: 'pp-quote-text', 'data-pp-tx': 'blockQuote', 'data-pp-clamp': o.clampParagraph || null }, String(block.text ?? '')),
         block.attribution
           ? h('p', { class: 'pp-quote-attr', 'data-pp-tx': 'blockAttribution' }, String(block.attribution))
@@ -2843,7 +2908,12 @@ function blockBody(block, o) {
 
     case 'cta':
 
-      return h('span', { class: 'pp-cta', 'data-pp-tx': 'cta' }, String(block.label ?? ''));
+      return h('span', {
+        class: 'pp-cta',
+        'data-pp-tx': 'cta',
+        'data-pp-inset': `${CTA_PAD_PX},brand-border`,
+        'data-pp-fit': 'shrink',
+      }, String(block.label ?? ''));
 
     case 'media': {
       const ref = o.media ? o.media.get(String(block.ref)) : null;
@@ -2867,8 +2937,8 @@ function blockBody(block, o) {
 
     case 'raw':
 
-      return h('div', { class: 'pp-raw' },
-        h('p', { class: 'pp-raw-label', 'data-pp-tx': 'caption' }, 'Source markup, shown as text'),
+      return h('div', { class: 'pp-raw', 'data-pp-inset': String(RAW_RULE_INSET_PX) },
+        h('p', { class: 'pp-raw-label', 'data-pp-tx': 'caption', dir: 'ltr', lang: 'en' }, 'Source markup, shown as text'),
         h('p', { class: 'pp-raw-text', 'data-pp-tx': 'body', 'data-pp-clamp': o.clampParagraph || null }, stripTags(block.html)));
 
     default:
@@ -2904,7 +2974,8 @@ function summarize(blocks) {
     if (title && blurb) break;
   }
   if (!title && blurb) { title = blurb; blurb = null; }
-  return { title, blurb };
+
+  return { title, blurb, ...firstFlow(list) };
 }
 
 function padRow(row, cols) {
@@ -2928,6 +2999,10 @@ function stripTags(html) {
 
 __exports["headingRole"] = headingRole;
 __exports["renderBlock"] = renderBlock;
+__exports["directionOf"] = directionOf;
+__exports["QUOTE_RULE_INSET_PX"] = QUOTE_RULE_INSET_PX;
+__exports["CTA_PAD_PX"] = CTA_PAD_PX;
+__exports["RAW_RULE_INSET_PX"] = RAW_RULE_INSET_PX;
 __exports["blockBody"] = blockBody;
 __exports["renderBlocks"] = renderBlocks;
 __exports["firstOfType"] = firstOfType;
@@ -2941,6 +3016,8 @@ const { h } = __require("core/vdom.js");
 const PROVENANCE_LABEL_CLASS = 'pp-provenance';
 
 const PROVENANCE_LABEL_TEXT = 'Illustrative example — not client-approved content';
+
+const PROVENANCE_LABEL_INSET_PX = 8 + 8 + 3;
 
 function needsProvenanceLabel(rendition) {
   if (!rendition) return false;
@@ -2956,6 +3033,10 @@ function provenanceLabel(rendition, ctx) {
     class: PROVENANCE_LABEL_CLASS,
     'data-pp-tx': 'provenance',
     'data-pp-provenance-for': rendition.id,
+
+    'data-pp-inset': String(PROVENANCE_LABEL_INSET_PX),
+
+    'data-pp-fit': 'shrink',
   }, PROVENANCE_LABEL_TEXT);
 }
 
@@ -3007,8 +3088,10 @@ function withProvenanceLedger(tree, ctx) {
     class: 'pp-provenance-ledger-name',
     'data-pp-tx': 'noteLabel',
     'data-pp-clamp': '1',
+    'data-pp-inset': 'ledger-label-w,ledger-label-gap',
   }, renditionLabel(rendition, order.has(rendition.id) ? order.get(rendition.id) : 0)),
-  provenanceLabel(rendition, ctx)));
+  h('div', { class: 'pp-provenance-ledger-label', 'data-pp-width': 'ledger-label-w' },
+    provenanceLabel(rendition, ctx))));
 
   const ledger = h('ul', { class: PROVENANCE_LEDGER_CLASS }, rows);
 
@@ -3023,18 +3106,31 @@ function sceneHead(ctx, options = {}) {
   const { scene } = ctx;
   const path = options.path || 'head';
   const kicker = options.kicker || null;
-  if (!kicker && !scene.headline && !scene.subhead && !options.extra) return null;
+  const extra = options.extra || null;
+  if (!kicker && !scene.headline && !scene.subhead && !extra) return null;
   return h('header', {
-    class: 'pp-scene-head',
+    class: `pp-scene-head${extra ? ' pp-scene-head--extra' : ''}`,
     'data-pp-box': 'head',
     'data-pp-el': ctx.el(path),
     'data-pp-group': options.group || 'head',
   },
-  h('div', { class: 'pp-scene-head-text' },
-    kicker ? h('p', { class: 'pp-kicker', 'data-pp-tx': 'kicker' }, kicker) : null,
-    scene.headline ? h('h2', { class: 'pp-headline', 'data-pp-tx': 'headline', 'data-pp-clamp': '2' }, scene.headline) : null,
-    scene.subhead ? h('p', { class: 'pp-subhead', 'data-pp-tx': 'subhead', 'data-pp-clamp': '2' }, scene.subhead) : null),
-  options.extra || null);
+  h('div', {
+    class: 'pp-scene-head-text',
+
+    'data-pp-inset': extra ? 'head-extra-w,head-col-gap' : null,
+  },
+  kicker ? h('p', { class: 'pp-kicker', 'data-pp-tx': 'kicker' }, kicker) : null,
+  scene.headline ? h('h2', { class: 'pp-headline', 'data-pp-tx': 'headline', 'data-pp-clamp': '2' }, scene.headline) : null,
+  scene.subhead
+    ? h('p', {
+      class: 'pp-subhead',
+      'data-pp-tx': 'subhead',
+      'data-pp-clamp': '2',
+
+      'data-pp-max': 'subhead-max-w',
+    }, scene.subhead)
+    : null),
+  extra ? h('div', { class: 'pp-scene-head-extra', 'data-pp-width': 'head-extra-w' }, extra) : null);
 }
 
 function panelHead(spec) {
@@ -3104,9 +3200,21 @@ function presentableNotes(rendition) {
 }
 
 function emptyState(message, options = {}) {
-  return h('div', { class: 'pp-empty', 'data-pp-box': options.box || null },
-    h('p', { class: 'pp-empty-text', 'data-pp-tx': 'caption' }, message));
+  return h('div', {
+    class: 'pp-empty',
+    'data-pp-box': options.box || null,
+
+    'data-pp-inset': String(EMPTY_STATE_INSET_PX),
+  },
+  h('p', {
+    class: 'pp-empty-text',
+    'data-pp-tx': 'caption',
+
+    'data-pp-max': 'empty-max-w',
+  }, message));
 }
+
+const EMPTY_STATE_INSET_PX = 50;
 
 function countLabel(n, singular, plural) {
   const word = n === 1 ? singular : (plural || `${singular}s`);
@@ -3131,6 +3239,7 @@ function specimenTitle(specimen) {
 
 __exports["PROVENANCE_LABEL_CLASS"] = PROVENANCE_LABEL_CLASS;
 __exports["PROVENANCE_LABEL_TEXT"] = PROVENANCE_LABEL_TEXT;
+__exports["PROVENANCE_LABEL_INSET_PX"] = PROVENANCE_LABEL_INSET_PX;
 __exports["needsProvenanceLabel"] = needsProvenanceLabel;
 __exports["provenanceLabel"] = provenanceLabel;
 __exports["PROVENANCE_LEDGER_CLASS"] = PROVENANCE_LEDGER_CLASS;
@@ -3145,6 +3254,7 @@ __exports["specimenMeta"] = specimenMeta;
 __exports["renditionMeta"] = renditionMeta;
 __exports["presentableNotes"] = presentableNotes;
 __exports["emptyState"] = emptyState;
+__exports["EMPTY_STATE_INSET_PX"] = EMPTY_STATE_INSET_PX;
 __exports["countLabel"] = countLabel;
 __exports["waveGroup"] = waveGroup;
 __exports["renditionLabel"] = renditionLabel;
@@ -3155,6 +3265,7 @@ __modules["scene/layouts/split-before-after.js"] = function (__exports, __requir
 const { h } = __require("core/vdom.js");
 const { alignColumns } = __require("scene/align.js");
 const { renderBlock } = __require("scene/blocks.js");
+const { flowOf } = __require("scene/direction.js");
 const { sceneHead, panelHead, provenanceLabel, emptyState, specimenMeta, specimenTitle, renditionMeta, renditionLabel, withProvenanceLedger } = __require("scene/parts.js");
 
 function splitBeforeAfter(ctx) {
@@ -3221,6 +3332,7 @@ function renderSplit(ctx, sourceBlocks, rends, columnCount) {
     media: ctx.media,
   }),
   rends.map((rendition, colIndex) => cell(ctx, {
+    ...flowOf(rendition),
     columnClass: 'pp-col--after',
     n,
     index: row.cells[colIndex + 1],
@@ -3254,7 +3366,7 @@ function cell(ctx, spec) {
     'data-pp-el': ctx.el(spec.path(spec.index)),
     'data-pp-group': spec.group,
     'data-pp-rendition': spec.renditionId || null,
-  }, renderBlock(block, { media: spec.media, density: 'full' }));
+  }, renderBlock(block, { media: spec.media, density: 'full', dir: spec.dir || null, lang: spec.lang || null }));
 }
 
 __exports["splitBeforeAfter"] = splitBeforeAfter;
@@ -3263,6 +3375,7 @@ __modules["scene/layouts/fan-out.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
 const { renderBlock, summarize } = __require("scene/blocks.js");
+const { flowAttrs } = __require("scene/direction.js");
 const { sceneHead, panelHead, provenanceLabel, emptyState, waveGroup, specimenMeta, specimenTitle, renditionLabel, withProvenanceLedger } = __require("scene/parts.js");
 
 const WAVE_SIZE = 4;
@@ -3323,7 +3436,10 @@ function renderGrid(ctx, rends) {
   return h('div', { class: 'pp-fan-grid', 'data-pp-n': n },
     rends.map((rendition, index) => {
       const blocks = Array.isArray(rendition.blocks) ? rendition.blocks : [];
-      const { title, blurb } = summarize(blocks);
+      const summary = summarize(blocks);
+      const { title, blurb } = summary;
+
+      const flow = flowAttrs({ dir: rendition.dir || summary.dir, lang: rendition.lang || summary.lang });
       const group = waveGroup('fan', index, rends.length, WAVE_SIZE);
       return h('article', {
         class: 'pp-fan-card',
@@ -3337,8 +3453,8 @@ function renderGrid(ctx, rends) {
       h('header', { class: 'pp-fan-card-head' },
         h('p', { class: 'pp-fan-card-label', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' }, renditionLabel(rendition, index))),
       h('div', { class: 'pp-fan-card-body' },
-        title ? h('p', { class: 'pp-fan-card-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '2' }, title) : null,
-        blurb ? h('p', { class: 'pp-fan-card-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2' }, blurb) : null,
+        title ? h('p', { class: 'pp-fan-card-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '2', ...flow }, title) : null,
+        blurb ? h('p', { class: 'pp-fan-card-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2', ...flow }, blurb) : null,
         !title && !blurb
           ? h('p', { class: 'pp-fan-card-empty', 'data-pp-tx': 'caption' }, 'No content blocks on this rendition.')
           : null),
@@ -3353,6 +3469,7 @@ __modules["scene/layouts/stack.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
 const { renderBlock, summarize } = __require("scene/blocks.js");
+const { flowAttrs, flowOf } = __require("scene/direction.js");
 const { sceneHead, provenanceLabel, emptyState, specimenTitle, specimenMeta, renditionLabel, renditionMeta, withProvenanceLedger } = __require("scene/parts.js");
 
 function stack(ctx) {
@@ -3394,37 +3511,48 @@ function stepsOf(ctx) {
       rendition,
       path: `stack/step/${index}`,
       group: `stack/${steps.length}`,
+      ...flowOf(rendition),
     });
   });
   return steps;
 }
 
 function renderStep(ctx, step, index, total) {
-  const { title, blurb } = summarize(step.blocks);
+  const { title, blurb, dir, lang } = summarize(step.blocks);
   const lead = step.blocks.length ? step.blocks[0] : null;
+  const n = String(total);
+  const flow = { dir: step.dir || dir || null, lang: step.lang || lang || null };
   return h('li', {
     class: `pp-stack-step pp-stack-step--${step.kind}`,
-    'data-pp-box': 'stackStep',
-    'data-pp-n': String(total),
+    'data-pp-n': n,
     'data-pp-el': ctx.el(step.path),
     'data-pp-group': step.group,
     'data-pp-rendition': step.rendition ? step.rendition.id : null,
   },
-  h('div', { class: 'pp-stack-rail', 'aria-hidden': 'true' },
-    h('span', { class: 'pp-stack-index', 'data-pp-tx': 'stepIndex' }, String(index + 1))),
-  h('div', { class: 'pp-stack-body' },
-    h('div', { class: 'pp-stack-head' },
-      h('p', { class: 'pp-stack-label', 'data-pp-tx': 'stepLabel', 'data-pp-clamp': '1' }, step.title),
 
-      h('div', { class: 'pp-stack-head-right' },
+  h('div', { class: 'pp-stack-rail', 'data-pp-box': 'stackRail', 'data-pp-n': n, 'aria-hidden': 'true' },
+    h('span', { class: 'pp-stack-index', 'data-pp-tx': 'stepIndex', 'data-pp-width': 'stack-rail-w' }, String(index + 1))),
+
+  h('div', { class: 'pp-stack-body', 'data-pp-box': 'stackStep', 'data-pp-n': n },
+    h('div', { class: 'pp-stack-head' },
+
+      h('p', {
+        class: 'pp-stack-label',
+        'data-pp-tx': 'stepLabel',
+        'data-pp-clamp': '1',
+        'data-pp-inset': 'step-meta-w,step-meta-gap',
+        ...flowAttrs(flow),
+      }, step.title),
+
+      h('div', { class: 'pp-stack-head-right', 'data-pp-width': 'step-meta-w' },
         step.meta ? h('p', { class: 'pp-stack-meta', 'data-pp-tx': 'panelMeta', 'data-pp-clamp': '1' }, step.meta) : null,
         provenanceLabel(step.rendition, ctx))),
     h('div', { class: 'pp-stack-content' },
       lead && lead.type !== 'paragraph' && lead.type !== 'heading'
-        ? renderBlock(lead, { media: ctx.media, density: 'condensed', clampParagraph: 2, maxListItems: 3, maxTableRows: 3 })
+        ? renderBlock(lead, { media: ctx.media, density: 'condensed', clampParagraph: 2, maxListItems: 3, maxTableRows: 3, ...flow })
         : [
-          title ? h('p', { class: 'pp-stack-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '1' }, title) : null,
-          blurb ? h('p', { class: 'pp-stack-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2' }, blurb) : null,
+          title ? h('p', { class: 'pp-stack-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '1', ...flowAttrs(flow) }, title) : null,
+          blurb ? h('p', { class: 'pp-stack-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2', ...flowAttrs(flow) }, blurb) : null,
           !title && !blurb ? h('p', { class: 'pp-stack-empty', 'data-pp-tx': 'caption' }, 'No content blocks at this state.') : null,
         ])));
 }
@@ -3550,6 +3678,7 @@ __modules["scene/layouts/side-note.js"] = function (__exports, __require) {
 const { h } = __require("core/vdom.js");
 const { alignPair } = __require("scene/align.js");
 const { renderBlock } = __require("scene/blocks.js");
+const { flowOf } = __require("scene/direction.js");
 const { blockText } = __require("core/contracts.js");
 const { sceneHead, provenanceLabel, emptyState, waveGroup, presentableNotes, specimenMeta, specimenTitle, renditionLabel, withProvenanceLedger } = __require("scene/parts.js");
 
@@ -3660,7 +3789,7 @@ function renderNote(ctx, note, rowCount) {
   h('p', { class: 'pp-side-note-label', 'data-pp-tx': 'noteLabel', 'data-pp-clamp': '1' }, note.label),
   note.kind === 'note'
     ? h('p', { class: 'pp-side-note-text', 'data-pp-tx': 'note', 'data-pp-clamp': '6' }, note.text)
-    : renderBlock(note.block, { media: ctx.media, density: 'condensed', clampParagraph: 6, clampHeading: 2, maxListItems: 4, maxTableRows: 3 }),
+    : renderBlock(note.block, { media: ctx.media, density: 'condensed', clampParagraph: 6, clampHeading: 2, maxListItems: 4, maxTableRows: 3, ...flowOf(note.rendition) }),
   provenanceLabel(note.rendition, ctx));
 }
 
@@ -4276,6 +4405,15 @@ const GEOM = {
   sm: {
     'head-h': 84,
     'head-gap': 16,
+    'head-extra-w': '100%',
+    'head-col-gap': 0,
+    'step-meta-w': '100%',
+    'step-meta-gap': 0,
+    'ledger-label-w': '100%',
+    'ledger-label-gap': 0,
+    'subhead-max-w': 340,
+    'empty-max-w': 300,
+    'blurb-max-w': 320,
     'panel-pad': 14,
     'panel-head-h': 34,
     'row-gap': 10,
@@ -4311,6 +4449,15 @@ const GEOM = {
   md: {
     'head-h': 104,
     'head-gap': 24,
+    'head-extra-w': 260,
+    'head-col-gap': 16,
+    'step-meta-w': 200,
+    'step-meta-gap': 12,
+    'ledger-label-w': 320,
+    'ledger-label-gap': 10,
+    'subhead-max-w': 620,
+    'empty-max-w': 440,
+    'blurb-max-w': 640,
     'panel-pad': 18,
     'panel-head-h': 40,
     'row-gap': 12,
@@ -4346,6 +4493,15 @@ const GEOM = {
   lg: {
     'head-h': 120,
     'head-gap': 28,
+    'head-extra-w': 320,
+    'head-col-gap': 20,
+    'step-meta-w': 240,
+    'step-meta-gap': 14,
+    'ledger-label-w': 340,
+    'ledger-label-gap': 12,
+    'subhead-max-w': 760,
+    'empty-max-w': 520,
+    'blurb-max-w': 820,
     'panel-pad': 22,
     'panel-head-h': 46,
     'row-gap': 14,
@@ -4482,6 +4638,8 @@ const { BREAKPOINTS } = __require("core/contracts.js");
 const { geom, isProportional, BP_IDS } = __require("scene/tokens.js");
 
 const PANEL_BORDER_PX = 1;
+
+const NOTE_RULE_PX = 3;
 
 const MAP_DESIGN = { width: 960, height: 540 };
 
@@ -4634,7 +4792,11 @@ function boxGeometry(slot, bpIn, params = {}) {
       return inset(w, h, geom(bp, 'step-pad'));
     }
     case 'stackRail':
-      return { widthPx: geom(bp, 'stack-rail-w'), heightPx: s.bodyHeightPx };
+
+      return {
+        widthPx: geom(bp, 'stack-rail-w'),
+        heightPx: trackWidth(s.bodyHeightPx, n, geom(bp, 'stack-step-gap')),
+      };
 
     case 'bleedMedia':
       return { widthPx: s.contentWidthPx, heightPx: s.contentHeightPx };
@@ -4653,7 +4815,8 @@ function boxGeometry(slot, bpIn, params = {}) {
     case 'sideNote': {
 
       const w = isProportional(bp, 'note-w') ? s.contentWidthPx : geom(bp, 'note-w');
-      return inset(w, s.bodyHeightPx, geom(bp, 'note-pad'));
+      const box = inset(w, s.bodyHeightPx, geom(bp, 'note-pad'));
+      return { widthPx: Math.max(0, box.widthPx - (NOTE_RULE_PX - PANEL_BORDER_PX)), heightPx: box.heightPx };
     }
 
     case 'quoteBox': {
@@ -4716,6 +4879,7 @@ const SLOTS = [
 ];
 
 __exports["PANEL_BORDER_PX"] = PANEL_BORDER_PX;
+__exports["NOTE_RULE_PX"] = NOTE_RULE_PX;
 __exports["MAP_DESIGN"] = MAP_DESIGN;
 __exports["stagePadPx"] = stagePadPx;
 __exports["breakpointId"] = breakpointId;
@@ -4788,6 +4952,11 @@ function renderedFamily(brand, role, weight = 400) {
   return resolveFace(face.family, { available, weight }).resolved;
 }
 
+function borderWidthFor(brand) {
+  const w = brand && brand.shape ? Number(brand.shape.borderWidthPx) : NaN;
+  return Number.isFinite(w) && w >= 0 ? w : 1;
+}
+
 function colorFor(brand, role) {
   const colors = (brand && Array.isArray(brand.colors)) ? brand.colors : [];
   const found = colors.find((c) => c && c.role === role && typeof c.hex === 'string');
@@ -4822,6 +4991,7 @@ __exports["DEFAULT_STACKS"] = DEFAULT_STACKS;
 __exports["faceFor"] = faceFor;
 __exports["availableFamilies"] = availableFamilies;
 __exports["renderedFamily"] = renderedFamily;
+__exports["borderWidthFor"] = borderWidthFor;
 __exports["colorFor"] = colorFor;
 __exports["logoFor"] = logoFor;
 __exports["neutralBrand"] = neutralBrand;
@@ -5155,6 +5325,7 @@ __exports["MIN_URL_BUDGET"] = MIN_URL_BUDGET;
 __modules["scene/layouts/quote-card.js"] = function (__exports, __require) {
 
 const { h } = __require("core/vdom.js");
+const { flowAttrs, flowOf } = __require("scene/direction.js");
 const { firstOfType } = __require("scene/blocks.js");
 const { sceneHead, provenanceLabel, emptyState, specimenTitle, renditionLabel, specimenMeta, withProvenanceLedger } = __require("scene/parts.js");
 
@@ -5178,7 +5349,7 @@ function quoteCard(ctx) {
     },
     h('div', { class: 'pp-quote-rule', 'aria-hidden': 'true' }),
     h('blockquote', { class: 'pp-quote-body' },
-      h('p', { class: 'pp-quote-line', 'data-pp-tx': 'quote', 'data-pp-clamp': '8' }, pulled.text)),
+      h('p', { class: 'pp-quote-line', 'data-pp-tx': 'quote', 'data-pp-clamp': '8', ...flowAttrs(flowOf(pulled.rendition)) }, pulled.text)),
     pulled.attribution || pulled.source
       ? h('figcaption', {
         class: 'pp-quote-figcaption',
@@ -5272,7 +5443,8 @@ function contentsIndex(ctx) {
       h('div', { class: 'pp-index-text', 'data-pp-box': 'indexRow', 'data-pp-n': String(entries.length), 'data-pp-container': 'index' },
         h('p', { class: 'pp-index-title', 'data-pp-tx': 'indexTitle', 'data-pp-clamp': '2' }, entry.title),
         entry.blurb
-          ? h('p', { class: 'pp-index-blurb', 'data-pp-tx': 'indexBlurb', 'data-pp-clamp': '2' }, entry.blurb)
+
+          ? h('p', { class: 'pp-index-blurb', 'data-pp-tx': 'indexBlurb', 'data-pp-clamp': '2', 'data-pp-max': 'blurb-max-w' }, entry.blurb)
           : null,
         provenanceLabel(entry.rendition, ctx)))))), ctx);
 }
@@ -5360,9 +5532,9 @@ __modules["scene/measure.js"] = function (__exports, __require) {
 
 const { elementId } = __require("core/ids.js");
 const { boxGeometry, breakpointId, mapScale } = __require("scene/geometry.js");
-const { geom, TYPE_ROLES } = __require("scene/tokens.js");
+const { geom, isProportional, TYPE_ROLES } = __require("scene/tokens.js");
 const { styleForRole } = __require("scene/type-scale.js");
-const { neutralBrand } = __require("scene/brand-access.js");
+const { neutralBrand, borderWidthFor } = __require("scene/brand-access.js");
 const { layoutFunction } = __require("scene/layouts/all.js");
 
 function normalizeContext(scene, ctx = {}) {
@@ -5446,6 +5618,10 @@ function collectTextBoxes(node, env) {
       };
     }
 
+    if (attrs['data-pp-width'] !== undefined && attrs['data-pp-width'] !== null) {
+      const fixed = trackWidth(String(attrs['data-pp-width']), bp, next.widthPx);
+      next = { ...next, widthPx: fixed };
+    }
     if (attrs['data-pp-frac'] !== undefined) {
       const k = Math.max(1, Number(attrs['data-pp-frac']) || 1);
       next = { ...next, widthPx: next.widthPx / k };
@@ -5453,8 +5629,12 @@ function collectTextBoxes(node, env) {
     if (typeof attrs['data-pp-inset'] === 'string') {
       const total = attrs['data-pp-inset'].split(',')
         .map((t) => t.trim()).filter(Boolean)
-        .reduce((sum, token) => sum + geom(bp, token), 0);
+        .reduce((sum, token) => sum + insetLength(token, bp, brand), 0);
       next = { ...next, widthPx: Math.max(0, next.widthPx - total) };
+    }
+    if (attrs['data-pp-max'] !== undefined && attrs['data-pp-max'] !== null) {
+      const cap = trackWidth(String(attrs['data-pp-max']), bp, next.widthPx);
+      next = { ...next, widthPx: Math.min(next.widthPx, cap) };
     }
 
     const role = attrs['data-pp-tx'];
@@ -5509,6 +5689,24 @@ function collectTextBoxes(node, env) {
   return boxes;
 }
 
+function insetLength(token, bp, brand = null) {
+  const literal = Number(token);
+  if (Number.isFinite(literal)) return literal;
+
+  if (token === BRAND_BORDER_INSET) return borderWidthFor(brand) * 2;
+  if (isProportional(bp, token)) return 0;
+  return geom(bp, token);
+}
+
+const BRAND_BORDER_INSET = 'brand-border';
+
+function trackWidth(token, bp, currentPx) {
+  const literal = Number(token);
+  if (Number.isFinite(literal)) return Math.max(0, literal);
+  if (isProportional(bp, token)) return currentPx;
+  return Math.max(0, geom(bp, token));
+}
+
 function textOverflowOf(attrs) {
   const declared = attrs['data-pp-to'];
   if (declared === 'ellipsis' || declared === 'clip') return declared;
@@ -5533,6 +5731,9 @@ __exports["normalizeContext"] = normalizeContext;
 __exports["renderSceneTree"] = renderSceneTree;
 __exports["measureScene"] = measureScene;
 __exports["collectTextBoxes"] = collectTextBoxes;
+__exports["insetLength"] = insetLength;
+__exports["BRAND_BORDER_INSET"] = BRAND_BORDER_INSET;
+__exports["trackWidth"] = trackWidth;
 __exports["textOverflowOf"] = textOverflowOf;
 __exports["plainText"] = plainText;
 };

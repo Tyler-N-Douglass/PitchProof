@@ -194,3 +194,82 @@ export type Provenance =
 ```
 
 with `'client-derived'` still labelled by default, and labelled differently.
+
+---
+
+## DL7-6 — `ContentBlock` cannot say which way its text reads
+
+**Field:** `ContentBlock` (§4, Content), and `Rendition` (§4, Transformation).
+
+**Objection.** §9.1 asks the first seed recipe for "locale-appropriate structure,
+not just translated strings", and names nine markets. Writing direction is the
+single largest structural difference between those markets — larger than date
+order, larger than legal-line placement — and §4's `ContentBlock` has no way to
+express it. Neither does `Rendition`. §8 asks capture to "preserve `lang` and
+locale hints" because "they drive locale scenarios later", and then gives the
+locale scenarios nowhere to put them.
+
+The consequence was concrete and cost a critique cycle. With no field for
+direction, this lane encoded it in the only field that can hold arbitrary
+structure — `raw` — and `raw` means something else. §8 forbids a layout from
+presenting raw source as markup, so L8 correctly flattened the entire ar-SA
+rendition to plain text under a caption reading "Source markup, shown as text".
+The emitted artifact contained no `dir="rtl"` anywhere, and the Arabic-market
+card rendered left to right, labelled as the prospect's own page source. See
+CRITIQUE-2 C8 and `docs/decisions/L7-recipes.md` D-L7-18.
+
+That is not a lane getting it wrong twice. It is what happens when a frozen
+contract cannot express a fact the spec asks a lane to produce: the fact goes
+into whichever field is loose enough to hold it, and the field's real meaning
+wins downstream.
+
+A second, smaller instance: §4 has no code or preformatted variant, so a pasted
+fenced code block also had to be `raw`, with the same result.
+
+**What the lane built.** Optional extensions, per §4's "lanes may extend with
+optional fields only", declared below the FROZEN REGION END marker and requested
+through `API.md` rather than added unilaterally:
+
+```ts
+interface ContentBlock { dir?: 'ltr' | 'rtl' | 'auto'; lang?: string; pre?: boolean }
+interface Rendition    { dir?: 'ltr' | 'rtl' | 'auto'; lang?: string }
+```
+
+A block's `dir`/`lang` wins over its rendition's; the rendition's is the fallback
+for blocks that declare nothing. `locale-fanout` sets `Rendition.dir` and a `dir`
+on every block, sets `lang` per block to the language the text is *actually* in,
+and sets no `Rendition.lang` — see D-L7-18 for why the two fields sit at
+different levels. `buildRendition` validates both, because both reach an emitted
+HTML attribute. No field was renamed, retyped or removed, and a consumer that
+never reads them sees exactly the shape §4 declares.
+
+**What a v2 contract should say.** The same fields, in the frozen region, so that
+"which way does this read" is a question the model answers rather than one a lane
+has to smuggle:
+
+```ts
+export interface Flow {
+  /** Writing direction. Absent means "inherit"; it does not mean 'ltr'. */
+  dir?: 'ltr' | 'rtl' | 'auto';
+  /** BCP-47 tag for the language the text is IN — never the market it is FOR. */
+  lang?: string;
+}
+
+export type ContentBlock =
+  | ({ type: 'heading'; level: 1|2|3|4|5|6; text: string } & Flow)
+  | ({ type: 'paragraph'; text: string; pre?: boolean } & Flow)
+  // …and so on for every variant…
+  | ({ type: 'raw'; html: string } & Flow);
+
+export interface Rendition {
+  // …unchanged…
+  /** Default flow for blocks that declare none. */
+  flow?: Flow;
+}
+```
+
+The comment on `lang` is load-bearing and belongs in the contract, not only here.
+The whole of C8's honesty question is that a rendition *for* the Saudi market of
+a page written *in* English is English text in a right-to-left layout, and a
+contract that lets a lane read `lang` as "the market" invites exactly the
+fabrication §18.2 forbids.

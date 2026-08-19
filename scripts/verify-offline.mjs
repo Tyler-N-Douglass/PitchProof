@@ -496,6 +496,25 @@ async function runOnce(chromium, fileUrl, options, deck, navModule) {
     return entry ? entry.startTime : null;
   });
 
+  // C2. The media table no longer carries the payloads the opening beat paints:
+  // it names the marked element and the artifact reads the picture back out of
+  // its own markup at boot. That is a saving of one full copy per picture on the
+  // opening scene, and it is also one more thing that can be wrong on a real
+  // engine and on no other. A model that still holds `@m7` where a data URI
+  // belongs is the failure, so the model is read out of the booted runtime and
+  // every payload in it is checked.
+  const media = await page.evaluate(() => {
+    const proof = window.__PITCHPROOF__ && window.__PITCHPROOF__.runtime && window.__PITCHPROOF__.runtime.proof;
+    if (!proof) return { total: 0, unresolved: ['the booted runtime exposes no proof'] };
+    const refs = []
+      .concat(...(proof.specimens || []).map((s) => s.media || []))
+      .concat(...(proof.renditions || []).map((r) => r.media || []));
+    const unresolved = refs
+      .filter((m) => typeof m.dataUri !== 'string' || !m.dataUri.startsWith('data:'))
+      .map((m) => `${m.id} -> ${String(m.dataUri).slice(0, 40)}`);
+    return { total: refs.length, unresolved };
+  });
+
   const walk = await keyboardWalk(page, deck, navModule);
 
   const usedFallback = await page.evaluate(() => typeof window.DecompressionStream);
@@ -503,7 +522,7 @@ async function runOnce(chromium, fileUrl, options, deck, navModule) {
   await context.close();
   await browser.close();
 
-  return { requests, consoleErrors, pageErrors, fcp, walk, decompressionStream: usedFallback };
+  return { requests, consoleErrors, pageErrors, fcp, walk, media, decompressionStream: usedFallback };
 }
 
 // ---------------------------------------------------------------------------
@@ -562,6 +581,12 @@ async function main() {
 
       if (variant.dropDecompressionStream && run.decompressionStream !== 'undefined') {
         fail(`${variant.label}: the fallback path was not exercised`, `DecompressionStream was still ${run.decompressionStream}`);
+      }
+
+      if (run.media.unresolved.length === 0) {
+        pass(`${variant.label}: every media payload rebuilt from the file`, `${run.media.total} reference(s), all of them data: URIs`);
+      } else {
+        fail(`${variant.label}: the artifact could not rebuild its own media`, run.media.unresolved.join('\n'));
       }
 
       if (run.walk.mismatches.length === 0) {

@@ -20,7 +20,8 @@ import {
   badge, button, empty, notice, pair, pairs, section, toolbar,
 } from '../components.js';
 import { formatDateTime, plural, severityLabel, severityMeaning, truncate } from '../format.js';
-import { findScene } from '../model.js';
+import { deckPositions, deckScenes, findScene } from '../model.js';
+import { emitBlockers } from '../gate.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
 
 /**
@@ -35,11 +36,14 @@ export function renderRehearsePanel(app) {
     items: findings.filter((f) => f.severity === severity),
   }));
   const fixes = app.services.autoFixes(app.proof, findings);
+  // One gate reading for the whole panel: `emitBlockers` digests the proof, and
+  // the status bar is already paying for that once per render.
+  const gate = emitBlockers(app);
 
   return h('div', { class: 'st-panel' },
     renderSweepHeader(app, sweep, findings),
     renderDryRun(app),
-    ...bySeverity.map((group) => renderSeverityGroup(app, group, fixes)),
+    ...bySeverity.map((group) => renderSeverityGroup(app, group, fixes, gate)),
     renderFixLog(app));
 }
 
@@ -50,6 +54,10 @@ export function renderRehearsePanel(app) {
  */
 function renderSweepHeader(app, sweep, findings) {
   const blocking = findings.filter((f) => f.severity === 1).length;
+  // CRITIQUE-2 C11: a sweep that walked nothing is not clean, it is vacuous, and
+  // this panel already holds the count. "Sweep clean" over "Scenes walked 0" was
+  // printed on the one screen §14 calls "the last pass before you walk in".
+  const vacuous = deckPositions(app.proof) === 0;
   return section({
     title: 'Automated sweep',
     subtitle: 'Every scene, every beat, every branch, at all three breakpoints, after the brand’s type substitution (§14).',
@@ -66,14 +74,17 @@ function renderSweepHeader(app, sweep, findings) {
   sweep.error
     ? notice('bad', sweep.error)
     : sweep.at
-      ? notice(blocking ? 'bad' : 'ok', h('div', null,
+      ? notice(blocking ? 'bad' : vacuous ? 'warn' : 'ok', h('div', null,
         h('p', null, blocking
           ? `${plural(blocking, 'blocking finding')}. The emit is closed until every one is gone — there is no override, here or anywhere.`
-          : 'No blocking findings. The emit is open once nothing else is outstanding.'),
+          : vacuous
+            ? 'Nothing was raised, and nothing was walked: this proof has no scenes yet, so the checks §14 leans on hardest — text overflow after the type substitution, and contrast, at all three breakpoints — had nothing to measure. Add a scene and sweep again.'
+            : 'No blocking findings. The emit is open once nothing else is outstanding.'),
         h('p', { class: 'st-dim' }, `Swept ${formatDateTime(sweep.at)} · ${plural(findings.length, 'finding')} total.`)))
       : notice('info', 'No sweep has been run against this proof yet. The emit stays closed until one has been.'),
   pairs(
-    pair('Scenes walked', h('span', { class: 'st-mono' }, String(countPositions(app)))),
+    pair('Scenes walked', h('span', { class: 'st-mono' }, String(deckScenes(app.proof)))),
+    pair('Beat positions walked', h('span', { class: 'st-mono' }, String(deckPositions(app.proof)))),
     pair('Breakpoints', h('span', { class: 'st-mono' }, 'sm 390 · md 1024 · lg 1600')),
   ),
   app.services.has('validate') ? null : notice('warn', 'The validation lane is not wired into this build. Until it lands, no sweep can run — and a proof that was never validated is not emitted.'),
@@ -97,15 +108,6 @@ function renderRules(app) {
       rule.describe ? h('span', { class: 'st-rule-describe' }, rule.describe) : null))));
 }
 
-/** @param {any} app @returns {number} */
-function countPositions(app) {
-  let n = 0;
-  for (const scene of app.proof.spine || []) n += Math.max(1, (scene.beats || []).length);
-  for (const branch of app.proof.branches || []) {
-    for (const scene of branch.scenes || []) n += Math.max(1, (scene.beats || []).length);
-  }
-  return n;
-}
 
 /**
  * §14's dry-run mode: the full deck with a heads-up issue counter.
@@ -141,8 +143,9 @@ function renderDryRun(app) {
  * @param {any} app
  * @param {{severity: number, items: any[]}} group
  * @param {any[]} fixes
+ * @param {{blockers: any[], canEmit: boolean}} gate
  */
-function renderSeverityGroup(app, group, fixes) {
+function renderSeverityGroup(app, group, fixes, gate) {
   const severity = /** @type {1|2|3} */ (group.severity);
   if (!group.items.length && !app.ui.sweep.at) return null;
   return section({
@@ -153,8 +156,30 @@ function renderSeverityGroup(app, group, fixes) {
     ? h('ul', { class: cx('st-findings', `st-findings--s${severity}`) },
       group.items.map((f) => renderFinding(app, f, fixes)))
     : h('p', { class: 'st-field-hint' }, severity === 1
-      ? 'Nothing blocks the emit.'
+      ? blockingNothingText(gate)
       : `No ${severityLabel(severity).toLowerCase()} findings.`));
+}
+
+/**
+ * What to say when the sweep raised no severity-1 finding.
+ *
+ * "Nothing blocks the emit" is a claim about the *gate*, and a finding list is
+ * only one of the gate's inputs. With zero scenes it was printed beside a status
+ * bar reading "This proof has no spine. Add at least one scene before emitting"
+ * — two sentences about one question, disagreeing, on the same screen
+ * (CRITIQUE-2 C11). So the sentence is now taken from the gate itself: it says
+ * "nothing blocks the emit" exactly when nothing does, and otherwise says which
+ * blocker is still standing, in the gate's own words.
+ * @param {{blockers: any[], canEmit: boolean}} gate
+ * @returns {string}
+ */
+function blockingNothingText(gate) {
+  if (gate.canEmit) return 'Nothing blocks the emit.';
+  const others = gate.blockers.filter((b) => b.kind !== 'NO_PREFLIGHT' && b.kind !== 'STALE_PREFLIGHT');
+  const first = others[0] || gate.blockers[0];
+  return others.length > 1
+    ? `The sweep raised no blocking finding, but ${others.length} other things close the emit. The first: ${first.message}`
+    : `The sweep raised no blocking finding. The emit is still closed: ${first.message}`;
 }
 
 /**

@@ -39,7 +39,9 @@
  *  - `STALE_CAPTURE` — nothing but re-capturing fixes it.
  *  - `SPECIMEN_EMPTY` — same.
  *  - `DUPLICATE_SCENE` — which copy to keep is the seller's call about their
- *    own narrative.
+ *    own narrative, and which of two branches sharing an id should be renamed is
+ *    the same call: every anchor naming that id has to be re-pointed by hand,
+ *    because the model no longer records which branch it meant.
  *
  * @module validate/autofix
  */
@@ -228,6 +230,14 @@ const FIXERS = {
   BRANCH_UNREACHABLE(proof, finding) {
     const d = finding.detail || {};
     if (!d.branchId) return null;
+    // This code now carries two shapes of finding: a branch nothing reaches, and
+    // a scene anchoring a branch that is not in the proof (L11-D25). Only the
+    // first is fixable by anchoring, and anchoring an id no branch carries would
+    // add a second dangling anchor to the deck. The finding for the second says
+    // `autoFixAvailable: false` and never reaches here; this is the invariant
+    // rather than a second statement of it — never anchor an id that is not a
+    // branch.
+    if (!(proof.branches || []).some((b) => b && b.id === d.branchId)) return null;
     const spine = proof.spine || [];
     if (spine.length === 0) return null;
     const anchor = spine[0];

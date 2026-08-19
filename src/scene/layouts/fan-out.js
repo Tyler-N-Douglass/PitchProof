@@ -23,6 +23,7 @@
 
 import { h } from '../../core/vdom.js';
 import { renderBlock, summarize } from '../blocks.js';
+import { flowAttrs } from '../direction.js';
 import {
   sceneHead, panelHead, provenanceLabel, emptyState, waveGroup,
   specimenMeta, specimenTitle, renditionLabel, withProvenanceLedger,
@@ -103,7 +104,10 @@ function renderGrid(ctx, rends) {
   return h('div', { class: 'pp-fan-grid', 'data-pp-n': n },
     rends.map((rendition, index) => {
       const blocks = Array.isArray(rendition.blocks) ? rendition.blocks : [];
-      const { title, blurb } = summarize(blocks);
+      const summary = summarize(blocks);
+      const { title, blurb } = summary;
+      // C8: a card summarising a right-to-left rendition reads right to left.
+      const flow = flowAttrs({ dir: rendition.dir || summary.dir, lang: rendition.lang || summary.lang });
       const group = waveGroup('fan', index, rends.length, WAVE_SIZE);
       return h('article', {
         class: 'pp-fan-card',
@@ -120,8 +124,8 @@ function renderGrid(ctx, rends) {
       h('header', { class: 'pp-fan-card-head' },
         h('p', { class: 'pp-fan-card-label', 'data-pp-tx': 'panelTitle', 'data-pp-clamp': '1' }, renditionLabel(rendition, index))),
       h('div', { class: 'pp-fan-card-body' },
-        title ? h('p', { class: 'pp-fan-card-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '2' }, title) : null,
-        blurb ? h('p', { class: 'pp-fan-card-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2' }, blurb) : null,
+        title ? h('p', { class: 'pp-fan-card-title', 'data-pp-tx': 'bh3', 'data-pp-clamp': '2', ...flow }, title) : null,
+        blurb ? h('p', { class: 'pp-fan-card-blurb', 'data-pp-tx': 'body', 'data-pp-clamp': '2', ...flow }, blurb) : null,
         !title && !blurb
           ? h('p', { class: 'pp-fan-card-empty', 'data-pp-tx': 'caption' }, 'No content blocks on this rendition.')
           : null),

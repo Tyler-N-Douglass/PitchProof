@@ -21,6 +21,7 @@ import {
   stagePadPx, fanColumns, SLOTS, boxGeometry, textOverflowOf,
 } from '../../src/scene/index.js';
 import { buildScene, renderSceneTree, measureScene } from '../../src/scene/index.js';
+import { BRAND_BORDER_INSET, insetLength } from '../../src/scene/measure.js';
 import { layoutCases, contextFor, specimen } from '../fixtures/scene/content.mjs';
 
 const SCENE_DIR = new URL('../../src/scene/', import.meta.url).pathname;
@@ -197,6 +198,8 @@ test('every clamp, white-space and overflow-wrap the layouts stamp has a rule be
   const slots = new Set();
   /** @type {Set<string>} */
   const insets = new Set();
+  /** @type {Set<string>} */
+  const tracks = new Set();
 
   const scan = (node) => {
     if (!node || typeof node !== 'object') return;
@@ -208,6 +211,8 @@ test('every clamp, white-space and overflow-wrap the layouts stamp has a rule be
     if (typeof a['data-pp-ow'] === 'string') wraps.add(a['data-pp-ow']);
     if (typeof a['data-pp-box'] === 'string') slots.add(a['data-pp-box']);
     if (typeof a['data-pp-inset'] === 'string') a['data-pp-inset'].split(',').forEach((t) => insets.add(t.trim()));
+    if (a['data-pp-width'] !== undefined && a['data-pp-width'] !== null) tracks.add(String(a['data-pp-width']));
+    if (a['data-pp-max'] !== undefined && a['data-pp-max'] !== null) tracks.add(String(a['data-pp-max']));
     (node.c || []).forEach(scan);
   };
   for (const testCase of layoutCases()) {
@@ -233,8 +238,33 @@ test('every clamp, white-space and overflow-wrap the layouts stamp has a rule be
       assert.ok(size.widthPx > 0 && size.heightPx > 0, `slot "${slot}" measures ${JSON.stringify(size)} at ${bp}`);
     }
   }
-  for (const token of insets) {
-    assert.ok(GEOM.md[token] !== undefined, `inset token "${token}" is not a geometry token`);
+  // An inset or a declared track is either a geometry token — which must exist in
+  // `GEOM` for every breakpoint — or a literal px count the stylesheet spells out
+  // in place (`.pp-quote`'s rule gutter, `.pp-empty`'s frame, `.pp-provenance`'s
+  // own padding, which runtime.css owns). A literal must at least be a
+  // non-negative finite number; what keeps it equal to the stylesheet is
+  // test/scene/geometry-browser.test.mjs, which measures the real box in
+  // Chromium. Nothing may name a token that does not exist.
+  for (const token of [...insets, ...tracks]) {
+    const literal = Number(token);
+    if (Number.isFinite(literal)) {
+      assert.ok(literal >= 0, `inset literal "${token}" is negative`);
+      continue;
+    }
+    // `brand-border` is the one length whose value is the prospect's rather than
+    // the deck's, so it is resolved from the `BrandSystem` at measure time
+    // instead of from `GEOM`. `.pp-cta` is where the stylesheet spends it.
+    if (token === BRAND_BORDER_INSET) {
+      assert.ok(/var\(--pp-border-width\)/.test(SCENES_CSS),
+        'nothing in the sheet draws with the brand border width, so the inset is stale');
+      for (const width of [0, 1, 4]) {
+        assert.equal(insetLength(token, 'md', { shape: { borderWidthPx: width } }), width * 2);
+      }
+      continue;
+    }
+    for (const bp of ['sm', 'md', 'lg']) {
+      assert.ok(GEOM[bp][token] !== undefined, `token "${token}" is not a geometry token at ${bp}`);
+    }
   }
 });
 

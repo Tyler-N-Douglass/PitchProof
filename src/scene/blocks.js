@@ -26,6 +26,7 @@
  */
 
 import { h } from '../core/vdom.js';
+import { flowAttrs, resolveFlow, firstFlow } from './direction.js';
 
 /** Heading level → text role. Levels below 3 all share the smallest role. */
 export function headingRole(level) {
@@ -44,6 +45,8 @@ export function headingRole(level) {
  * @property {number} [maxTableRows]
  * @property {'full'|'condensed'} [density]
  * @property {boolean} [mediaTall]        media may take the full box height
+ * @property {'ltr'|'rtl'|'auto'|null} [dir]   container direction, when the block declares none (C8)
+ * @property {string|null} [lang]              container language, when the block declares none (C8)
  */
 
 /**
@@ -57,6 +60,7 @@ export function renderBlock(block, options = {}) {
   const attrs = {
     class: `pp-block pp-block--${block && block.type ? block.type : 'unknown'}`,
     'data-pp-block': block && block.type ? block.type : 'unknown',
+    ...directionOf(block, o),
   };
   if (o.id) {
     attrs['data-pp-el'] = o.id;
@@ -64,6 +68,50 @@ export function renderBlock(block, options = {}) {
   }
   return h('div', attrs, blockBody(block, o));
 }
+
+/**
+ * The writing direction and language a block is to be rendered in (C8).
+ *
+ * §9.1 asks `locale-fanout` for "locale-appropriate structure, not just
+ * translated strings", and an ar-SA rendition whose blocks arrive marked
+ * `dir="rtl"` and then render left to right is the deck *describing* the
+ * difference in a table row instead of *showing* it. §4's `ContentBlock` has no
+ * direction, so L7 carries it as an optional extension (`dir`, `lang`) and this
+ * is the half that honours it; the objection to the contract not carrying it is
+ * filed in docs/disputes/L8-scenes.md.
+ *
+ * The block's own value wins over the container's, because a rendition mixes
+ * the source's language with the tool's own structural labels and no single tag
+ * is true of the whole of it. Nothing is invented: a block that declares
+ * nothing, inside a rendition that declares nothing, gets no attribute at all
+ * and inherits the document's direction exactly as before.
+ *
+ * @param {any} block
+ * @param {{dir?: string|null, lang?: string|null}} o
+ * @returns {{dir?: string, lang?: string}}
+ */
+export function directionOf(block, o = {}) {
+  return flowAttrs(resolveFlow(block, o));
+}
+
+/**
+ * `.pp-quote`'s rule gutter, both sides summed, in px: a 2px accent rule plus a
+ * 12px inline-start pad. Stated here because the stylesheet states it in place;
+ * `test/scene/geometry-browser.test.mjs` keeps the two equal.
+ */
+export const QUOTE_RULE_INSET_PX = 14;
+
+/**
+ * `.pp-cta`'s horizontal padding, both sides summed, in px. The rule around it
+ * is the brand's and is measured separately — see `BRAND_BORDER_INSET`.
+ */
+export const CTA_PAD_PX = 28;
+
+/**
+ * `.pp-raw`'s inline-start gutter and dashed rule, in px: `padding-inline-start:
+ * 10px` behind a `2px dashed` rule.
+ */
+export const RAW_RULE_INSET_PX = 12;
 
 /**
  * The block's content, without the revealable wrapper.
@@ -97,17 +145,18 @@ export function blockBody(block, o) {
       const rest = items.length - shown.length;
       return h(block.ordered ? 'ol' : 'ul', { class: 'pp-list', 'data-pp-ordered': block.ordered ? 'true' : 'false' },
         shown.map((item, i) => h('li', { class: 'pp-list-item', 'data-pp-inset': 'list-marker-w' },
-          h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco' }, block.ordered ? `${i + 1}.` : '•'),
+          h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w' }, block.ordered ? `${i + 1}.` : '•'),
           h('span', { class: 'pp-list-text', 'data-pp-tx': 'listItem', 'data-pp-clamp': o.clampParagraph || null }, String(item ?? '')))),
         rest > 0
           ? h('li', { class: 'pp-list-more', 'data-pp-inset': 'list-marker-w' },
-            h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco' }, '·'),
+            h('span', { class: 'pp-list-marker', 'data-pp-tx': 'deco', 'data-pp-width': 'list-marker-w' }, '·'),
             h('span', { class: 'pp-list-text', 'data-pp-tx': 'caption' }, `${rest} more ${rest === 1 ? 'item' : 'items'} in the source`))
           : null);
     }
 
     case 'quote':
-      return h('blockquote', { class: 'pp-quote' },
+      // `.pp-quote` sets `border-inline-start: 2px` and `padding-inline-start: 12px`.
+      return h('blockquote', { class: 'pp-quote', 'data-pp-inset': String(QUOTE_RULE_INSET_PX) },
         h('p', { class: 'pp-quote-text', 'data-pp-tx': 'blockQuote', 'data-pp-clamp': o.clampParagraph || null }, String(block.text ?? '')),
         block.attribution
           ? h('p', { class: 'pp-quote-attr', 'data-pp-tx': 'blockAttribution' }, String(block.attribution))
@@ -148,7 +197,19 @@ export function blockBody(block, o) {
       // The label only. §13's scanner treats any absolute URL in the emitted
       // document as a network reference, and a proof does not need a live link
       // to show what the client's page asks a visitor to do.
-      return h('span', { class: 'pp-cta', 'data-pp-tx': 'cta' }, String(block.label ?? ''));
+      //
+      // The pill is `inline-block` — as wide as its words — so what the model
+      // reports is the room the pill has, not the box it happens to fill, and
+      // it says so with `data-pp-fit`. The room is the column less the pill's
+      // own gutters: `padding: 6px 14px` plus a rule of the *prospect's* border
+      // width on each side, which is why that one is a named token rather than
+      // a number (`BRAND_BORDER_INSET` in measure.js).
+      return h('span', {
+        class: 'pp-cta',
+        'data-pp-tx': 'cta',
+        'data-pp-inset': `${CTA_PAD_PX},brand-border`,
+        'data-pp-fit': 'shrink',
+      }, String(block.label ?? ''));
 
     case 'media': {
       const ref = o.media ? o.media.get(String(block.ref)) : null;
@@ -172,8 +233,9 @@ export function blockBody(block, o) {
 
     case 'raw':
       // §8: raw source is never presented as markup by a layout.
-      return h('div', { class: 'pp-raw' },
-        h('p', { class: 'pp-raw-label', 'data-pp-tx': 'caption' }, 'Source markup, shown as text'),
+      // `.pp-raw` wears a 2px dashed rule and a 10px gutter on its inline start.
+      return h('div', { class: 'pp-raw', 'data-pp-inset': String(RAW_RULE_INSET_PX) },
+        h('p', { class: 'pp-raw-label', 'data-pp-tx': 'caption', dir: 'ltr', lang: 'en' }, 'Source markup, shown as text'),
         h('p', { class: 'pp-raw-text', 'data-pp-tx': 'body', 'data-pp-clamp': o.clampParagraph || null }, stripTags(block.html)));
 
     default:
@@ -228,7 +290,9 @@ export function summarize(blocks) {
     if (title && blurb) break;
   }
   if (!title && blurb) { title = blurb; blurb = null; }
-  return { title, blurb };
+  // The direction of the first block that declared one: a summary lifted out of
+  // a right-to-left rendition is still that rendition's text (C8).
+  return { title, blurb, ...firstFlow(list) };
 }
 
 /** @param {string[]} row @param {number} cols @returns {string[]} */

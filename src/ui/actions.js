@@ -27,7 +27,7 @@
 
 import { ok, err } from '../core/result.js';
 import { QUALITY_STEPS, COLOR_ROLES, SPECIMEN_KINDS, SCENE_LAYOUTS } from '../core/contracts.js';
-import { plural } from './format.js';
+import { formatBytes, plural } from './format.js';
 import { exportProjectJson, importProjectJson, makeRecord } from '../core/storage.js';
 import { downloadText, readFiles, pickFiles, safeFilename } from './io.js';
 import { base64Encode } from '../core/bytes.js';
@@ -101,7 +101,7 @@ export const FONT_ACCEPT = '.woff2,.woff,.ttf,.otf,font/woff2,font/woff,font/ttf
  * The extension decides, not the browser's `type`: hosts disagree about
  * `font/*` and several report an empty string for `.woff2`. A file the studio
  * cannot name is refused rather than embedded as `application/octet-stream`,
- * because an `@font-face` src the client's browser will not parse is a font
+ * because a font-face src the client's browser will not parse is a font
  * that silently does not load — the exact failure C3 was about.
  * @param {string} name
  * @param {string} [declared]
@@ -506,7 +506,7 @@ export const ACTIONS = [
   // What was here before was `brand.setFaceEmbeddable`, a checkbox reading
   // "I have a licence for this font file and may embed it". Ticking it with no
   // file cleared both FONT_UNAVAILABLE warnings, opened the emit, and shipped an
-  // artifact with no `@font-face` in it and the prospect's family still at the
+  // artifact with no embedded face in it and the prospect's family still at the
   // head of the stack — so the client's machine rendered Arial while the studio
   // said the face was embedded. CRITIQUE-2 C3: a control that changes a claim
   // without changing a fact is the thing §18 exists to prevent. The claim is now
@@ -521,7 +521,7 @@ export const ACTIONS = [
       const clear = () => { if (ctx.element) ctx.element.value = ''; };
       if (!face) { clear(); return undefined; }
       if (!String(face.family || '').trim()) {
-        app.notify('warn', 'Name the family before attaching a file — the `@font-face` rule and the CSS stack have to agree on what it is called.');
+        app.notify('warn', 'Name the family before attaching a file — the embedded face and the CSS stack have to agree on what it is called.');
         clear();
         return undefined;
       }
@@ -559,7 +559,7 @@ export const ACTIONS = [
       const next = app.mutate(`Attach ${file.name} to ${face.family}`, (doc) => M.setBrandFace(doc, index, attached.value.face), {
         scope: 'brand',
       });
-      app.notify('ok', `${file.name} (${plural(Math.max(1, Math.round(file.bytes.length / 1024)), 'kB')}) will be embedded as ${face.family}, recorded against ${who}. It is now part of every emit and of the project's size budget.`);
+      app.notify('ok', `${file.name} (${formatBytes(file.bytes.length)}) will be embedded as ${face.family}, recorded against ${who}. It is now part of every emit and of the project's size budget.`);
       return next;
     },
   },
@@ -1377,11 +1377,22 @@ export const ACTIONS = [
         proofHash: proofDigest(app.proof),
       };
       const blocking = result.value.filter((f) => f.severity === 1).length;
+      // A sweep of a proof with no scenes walked no scenes, and "clean" is a
+      // word about what was walked (CRITIQUE-2 C11). The Rehearse panel says the
+      // same thing at length; this is the one line that reaches the seller who
+      // pressed Alt+R and went back to writing.
+      const walked = M.deckPositions(app.proof);
+      const rules = app.services.preflightRules().length;
+      const warnings = result.value.length - blocking;
       app.notify(
-        blocking ? 'bad' : 'ok',
+        blocking ? 'bad' : walked ? 'ok' : 'warn',
         blocking
           ? `${blocking} blocking finding${blocking === 1 ? '' : 's'}. The emit stays closed until every one is gone.`
-          : `Sweep clean across ${result.value.length} check${result.value.length === 1 ? '' : 's'}.`,
+          : walked
+            // "Clean across N checks" counted the findings, not the checks. The
+            // rules are what ran; the findings are what came back.
+            ? `Sweep clean: no blocking findings across ${plural(rules, 'rule')}${warnings ? `, ${plural(warnings, 'finding')} to look at` : ''}.`
+            : 'Nothing was raised, but the sweep walked no scenes — this proof has no spine yet, so the overflow and contrast checks had nothing to measure. Add a scene and sweep again.',
       );
     },
   },

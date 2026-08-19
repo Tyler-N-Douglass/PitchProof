@@ -26,6 +26,7 @@
 import { h } from '../../core/vdom.js';
 import { alignColumns } from '../align.js';
 import { renderBlock } from '../blocks.js';
+import { flowOf } from '../direction.js';
 import {
   sceneHead, panelHead, provenanceLabel, emptyState,
   specimenMeta, specimenTitle, renditionMeta, renditionLabel,
@@ -111,6 +112,7 @@ function renderSplit(ctx, sourceBlocks, rends, columnCount) {
     media: ctx.media,
   }),
   rends.map((rendition, colIndex) => cell(ctx, {
+    ...flowOf(rendition),
     columnClass: 'pp-col--after',
     n,
     index: row.cells[colIndex + 1],
@@ -152,5 +154,5 @@ function cell(ctx, spec) {
     'data-pp-el': ctx.el(spec.path(spec.index)),
     'data-pp-group': spec.group,
     'data-pp-rendition': spec.renditionId || null,
-  }, renderBlock(block, { media: spec.media, density: 'full' }));
+  }, renderBlock(block, { media: spec.media, density: 'full', dir: spec.dir || null, lang: spec.lang || null }));
 }

@@ -225,6 +225,73 @@ and have L10 and L11 import it rather than each carrying a parser.
 
 ---
 
+## 7. §4's fourteen codes cannot name a broken *reference* into the branch graph, or a duplicated id that is not a scene's
+
+**Contract:** §4 — `FindingCode`, fourteen members, frozen. The branch members are
+`BRANCH_UNREACHABLE` and `BRANCH_NO_RETURN`; the duplicate member is
+`DUPLICATE_SCENE`.
+
+**Objection.** Two defects the sweep must report have no member that fits, and
+CRITIQUE-2 found both of them by the same route — a hand-edited or merged project
+file, which §16 makes an expected way for a proof to arrive.
+
+- **A scene anchoring a branch that is not in the proof** (C10). The set has a
+  code for a branch nothing reaches and a code for a branch with no way back, but
+  none for an *anchor that names nothing*. `BRANCH_UNREACHABLE` is about a branch
+  and here there is no branch; `ASSET_MISSING` is about an asset and a branch is
+  not one. The lane has now filed it under `BRANCH_UNREACHABLE` (L11-D25),
+  because a code is the question a consumer filters on and this answers a
+  branch-graph question — but the finding's `locus.branchId` deliberately names an
+  id that is **not** in `proof.branches`, which no consumer can infer from the
+  contract.
+- **Two branches claiming one id** (C5). `buildDeck` keys its sequences by
+  `Branch.id`, so the collision silently drops an authored branch and sends every
+  key that names the id into the survivor. The only duplicate-identity code in the
+  set says `SCENE`. The lane files it there (L11-D26) because the phenomenon,
+  the consequence and the remedy are identical one namespace up, and because the
+  code already carries the severity the defect deserves — but a caller reading
+  the code alone is told a scene is duplicated when what is duplicated is a
+  branch id.
+
+Both placements are approximations, and both are the *best available*
+approximations rather than good ones. Recorded here so the next reader knows they
+were chosen rather than defaulted into.
+
+**What the lane built.** The contract as written: fourteen codes, one rule each,
+and the load-time assertion that `RULES.map(r => r.code)` is exactly
+`FINDING_CODES` in order. No fifteenth code was smuggled in through a `detail`
+discriminator standing in for one. The findings carry
+`detail.kind: 'branch-anchor' | 'branch-id' | 'spine-collision'` so a consumer
+that needs the distinction can have it, which is `detail`'s declared purpose
+(L11-D13) and not a private code set.
+
+**What a v2 should say.** Two additions and one rename:
+
+```ts
+export type FindingCode =
+  | …
+  | 'BRANCH_ANCHOR_MISSING'   // a scene anchors a branch that is not in the proof
+  | 'DUPLICATE_ID'            // one id claimed twice: scene, branch, or the spine sentinel
+  | …
+```
+
+`DUPLICATE_ID` subsuming `DUPLICATE_SCENE` is the cleaner of the two: the defect
+was never about scenes, it was about a namespace the deck indexes by, and §4 does
+not currently say that `Scene.id` and `Branch.id` share that namespace with the
+deck's own `"spine"` sentinel. Failing a rename, adding `DUPLICATE_BRANCH` alone
+would close C5's half.
+
+**One thing a v2 should also settle, because it is not L11's to settle.** §4 puts
+no format or uniqueness constraint on any id, and `validateProofShape` therefore
+accepts `Branch.id === 'spine'`, two branches with one id, and two scenes with
+one id as contract-valid. Every one of those is a proof the runtime cannot
+navigate correctly. Uniqueness of `Scene.id` and `Branch.id` within a `Proof` —
+and the reservation of `"spine"` — belongs in the contract and in
+`validateProofShape`, where it would be refused at the door instead of reported
+fourteen rules later.
+
+---
+
 ## Non-disputes, recorded so the critic does not re-derive them
 
 - **`Finding.autoFixAvailable` is a boolean, and one of L11's fixes is neither a

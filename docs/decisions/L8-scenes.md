@@ -677,3 +677,159 @@ to separate them.
 **Scope.** This applies to the SVG roles and nothing else. L8-6 stands for every
 other layout: CSS breaks its own lines in whatever face it ended up with, so
 reporting the requested family there is still the honest answer.
+
+---
+
+## L8-27 — Every text container is a number the stylesheet declares, and Chromium is what checks it
+
+**From:** CRITIQUE-2 C1 — *"the overflow detector misses a third of the text the
+artifact actually cuts"*, the report's only severity 1, failing §17.4's
+`recall ≥ 0.98` axis.
+
+**Unsettled by:** nothing in the spec. §22.2 says overflow measurement "must
+happen post-substitution, at every breakpoint" and says nothing about how the
+container handed to the measurement is arrived at. §14 calls the check the most
+valuable in the tool.
+
+**What was wrong.** The measurement and the stylesheet agreed with each other
+and neither agreed with a browser. `boxGeometry` matched `GEOM`, `scenes.css`
+matched `GEOM`, `test/scene/css-agreement.test.mjs` asserted the two matched —
+and every one of those checks is a statement about this lane's own arithmetic.
+The stylesheet meanwhile sized several text boxes by their *content*: a flex row
+whose split depends on how long the sibling's words are is not a number any
+table can hold. Measured in Chromium over the emitted corpus artifact, at the
+three viewports `BREAKPOINTS` declares, **980 of 2547 text boxes disagreed with
+the model by more than a pixel**, the worst by 1259px.
+
+**Decision — three rules, in this order.**
+
+1. **A row that holds text in two places declares both tracks.** Not
+   `display: flex` with two shrink-to-fit children; a grid whose second track is
+   a `--pp-sc-*` token, opening at `md` exactly like `.pp-side-row` and `.pp-fan`
+   already did. Applied to the scene header and its source chip
+   (`--pp-sc-head-extra-w`), the stack step's label and meta
+   (`--pp-sc-step-meta-w`) and the provenance ledger's name and label
+   (`--pp-sc-ledger-label-w`). At `sm` each token is `100%`, which is the second
+   item taking a row of its own — the `isProportional()` convention this lane
+   already used for `fan-source-w` and `note-w`.
+2. **A text element that is not sized by its row says how it differs.** Three
+   declarative attributes, read by `collectTextBoxes` and by nothing else:
+   `data-pp-width` (this element *is* a declared track — the list marker, the
+   stack rail badge, the head chip), `data-pp-max` (a `max-width` the stylesheet
+   caps it with — the subhead, the index blurb, the empty state) and
+   `data-pp-inset` extended to accept literal px (`.pp-quote`'s rule gutter,
+   `.pp-raw`'s, `.pp-empty`'s frame, `.pp-provenance`'s own padding and rule).
+   A percentage token contributes zero to an inset and leaves a `data-pp-width`
+   unchanged, so a layout never has to know which breakpoint it is on.
+3. **The check is a browser, not a second table.** `test/scene/geometry-browser.test.mjs`
+   lays every layout out in real Chromium at all three viewports and fails when
+   any `data-pp-box` element or any `data-pp-tx` element is drawn to a width the
+   model does not report. That is what makes rule 2's literals safe: the guard
+   against `14` drifting from `.pp-quote` is no longer a copy of the number, it
+   is the rendered box.
+
+Also fixed, all found by the same measurement: `.pp-side-note`'s asymmetric
+3px accent rule (`NOTE_RULE_PX`), `stackStep` naming the row that holds the rail
+rather than the panel that holds the text, `.pp-panel-head-text` and
+`.pp-stack-head-right` sizing to their content instead of filling their track,
+`.pp-fan-count` splitting a row between a number and a label, and
+`.pp-index-num-text` being an inline box, which has no width for either side to
+talk about.
+
+**Result, measured the same way.** Slot geometry: exact at every breakpoint,
+every slot, within Chromium's integer rounding. Text containers: **75 of 2547
+disagree, and all 75 are the one shape below.** Browser-measured recall over the
+emitted corpus artifact rose from **0.653** (the critic's number; 0.672 on my
+own harness, which matches per box rather than per role) to **0.906**, with
+zero false positives — see L8-D9 for the whole of the remaining gap, which is
+one character in a module this lane does not own.
+
+**Why the assertion is the geometry and not the recall.** A recall number is a
+fact about one corpus's sentences: rewrite a headline and it moves. "Every
+container the model reports is the container the browser draws" is a fact about
+the code, it implies the recall, and it fails on the next run rather than in
+front of a client.
+
+---
+
+## L8-28 — One shape is a bound rather than an equality, and it is enumerated
+
+**From:** CRITIQUE-2 C1, and §22.2's question of which way a measurement error
+should fall.
+
+**Unsettled by:** §14 and §22.2 both assume a text box has *a* container.
+
+**Decision.** Two elements in the deck are sized by their own words and cannot
+be otherwise: the provenance pill (`inline-flex`, §18.1's label, which must read
+as a label rather than a full-width band) and the CTA (`inline-block`, a button
+shape carrying the prospect's own radius and border weight). For both,
+`measureScene` reports **the room the element has** — its parent's box less its
+own gutters — not the box it happens to fill.
+
+That is the right number for the detector: it is what a longer label, or the
+same label in another brand's face, would need. It is also the number that errs
+the way §22.2 wants, because the *rendered* box is never wider than it.
+
+Both carry `data-pp-fit`, and `test/scene/geometry-browser.test.mjs` asserts the
+set of elements carrying it is exactly those two. Growing it is a decision:
+every entry is a container the model can only bound, and each one has to be
+argued rather than tolerated.
+
+The CTA's gutters include `var(--pp-border-width)` — the *prospect's* border
+width, twice. That is the only length in the stylesheet whose value is not
+knowable until a brand is in hand, so it is a named inset (`brand-border`)
+resolved from the `BrandSystem` at measure time rather than from `GEOM`.
+`PANEL_BORDER_PX` deliberately keeps brand border weight off panel chrome for
+the reason geometry.js states; this is the one place it genuinely reaches a text
+box, and the measurement now follows it there.
+
+---
+
+## L8-29 — A right-to-left rendition renders right to left
+
+**From:** CRITIQUE-2 C8 — *"the ar-SA locale rendition is thrown away by the
+renderer"*.
+
+**Unsettled by:** §9.1 asks `locale-fanout` for "locale-appropriate structure,
+not just translated strings" and §4's `ContentBlock` has no way to say which way
+a block reads.
+
+**What was wrong, and which rule won.** §8's "raw source is never presented as
+markup by a layout" is about *captured* source — the prospect's HTML, which a
+layout must not execute or trust. L7's locale renditions arrived as `raw` blocks
+carrying `dir="rtl" lang="ar-SA"`, `blocks.js` flattened every one of them to
+plain text under the caption "Source markup, shown as text", and the
+Arabic-market rendition rendered left to right, labelled as if it were the
+prospect's own page source. Two rules collided and the wrong one won: a
+rendition produced from a seed recipe is not captured source, and direction is
+not markup.
+
+**Decision.** `dir` and `lang` are read wherever a block or a rendition declares
+them (`src/scene/direction.js`), and emitted as HTML attributes on the element
+that carries that content. Three rules:
+
+- **The block wins over the rendition.** A rendition mixes the source's language
+  with the tool's own structural labels, so no single `lang` is true of the whole
+  of it — the same asymmetry L7 records as D-L7-18, read from this side.
+- **Nothing is guessed.** A block that declares nothing gets no attribute, and
+  the rendered markup for a deck that declares nothing is byte-identical to what
+  it was. Inferring a market's reading direction from the text would be a claim
+  about the client's market that §18.2 does not let this tool make.
+- **A label is not prose.** `contentsIndex` and `systemMap` render a rendition's
+  `label` ("ar-SA") and `renditionMeta`'s English sentence about how it was
+  produced, and neither is the rendition's copy — so neither carries the
+  direction. `test/scene/direction.test.mjs` pins that down by asserting no text
+  from the rendition's blocks reaches either layout, so the claim is checked
+  rather than asserted in a comment.
+
+The stylesheet was made logical where it dresses *content* — `.pp-quote`'s rule,
+`.pp-raw`'s rule, the table's `text-align: start` — because a `dir` attribute
+every rule then overrides with a physical side is direction honoured on paper.
+Scene chrome that belongs to the seller rather than the market (`.pp-side-note`'s
+accent rule) stays physical, deliberately.
+
+**§8 still holds.** A `raw` block is still flattened to text under its caption,
+because that rule is about what a layout may execute. What changed is that the
+direction survives the flattening, and that the caption is itself marked
+`dir="ltr" lang="en"` — it is the tool's English sentence about the block, not
+the block.

@@ -16,7 +16,24 @@
  *
  *   data-pp-box="<slot>"    the named geometry slot (see geometry.js)
  *   data-pp-frac="<k>"      this element is one of k equal columns of its box
- *   data-pp-inset="a,b"     subtract these geometry tokens from the width
+ *   data-pp-inset="a,b"     subtract these geometry tokens (or literal px) from the width
+ *   data-pp-width="<t>"     this element's inner width *is* this token (or px)
+ *   data-pp-max="<t>"       a `max-width` the stylesheet caps this element with
+ *
+ * The last two exist because the first three could only ever *narrow* a box by
+ * a declared amount, and two shapes in the stylesheet are not that: a fixed
+ * grid track (the list marker column, the source chip beside a scene headline)
+ * and a `max-width` cap on prose. Both were previously invisible to the model,
+ * which then handed the detector a container two to ten times wider than the
+ * one Chromium draws — CRITIQUE-2's C1, and the single largest source of the
+ * missed truncations it measured.
+ *
+ * A token whose value is a percentage (`'100%'`, the stacked-at-`sm` form used
+ * throughout `GEOM`) contributes **zero** to an inset and leaves a
+ * `data-pp-width` unchanged: it is the stylesheet saying "at this breakpoint
+ * this track is the whole row and its siblings stack below it", which is
+ * exactly what `isProportional()` already means for `fan-source-w` and
+ * `note-w`. One rule, so a layout never has to ask which breakpoint it is on.
  *
  * and three describe the CSS the run is subject to, read straight back off the
  * element the stylesheet matched on:
@@ -39,9 +56,9 @@
 
 import { elementId } from '../core/ids.js';
 import { boxGeometry, breakpointId, mapScale } from './geometry.js';
-import { geom, TYPE_ROLES } from './tokens.js';
+import { geom, isProportional, TYPE_ROLES } from './tokens.js';
 import { styleForRole } from './type-scale.js';
-import { neutralBrand } from './brand-access.js';
+import { neutralBrand, borderWidthFor } from './brand-access.js';
 import { layoutFunction } from './layouts/all.js';
 
 /**
@@ -187,6 +204,10 @@ export function collectTextBoxes(node, env) {
       };
     }
 
+    if (attrs['data-pp-width'] !== undefined && attrs['data-pp-width'] !== null) {
+      const fixed = trackWidth(String(attrs['data-pp-width']), bp, next.widthPx);
+      next = { ...next, widthPx: fixed };
+    }
     if (attrs['data-pp-frac'] !== undefined) {
       const k = Math.max(1, Number(attrs['data-pp-frac']) || 1);
       next = { ...next, widthPx: next.widthPx / k };
@@ -194,8 +215,12 @@ export function collectTextBoxes(node, env) {
     if (typeof attrs['data-pp-inset'] === 'string') {
       const total = attrs['data-pp-inset'].split(',')
         .map((t) => t.trim()).filter(Boolean)
-        .reduce((sum, token) => sum + geom(bp, token), 0);
+        .reduce((sum, token) => sum + insetLength(token, bp, brand), 0);
       next = { ...next, widthPx: Math.max(0, next.widthPx - total) };
+    }
+    if (attrs['data-pp-max'] !== undefined && attrs['data-pp-max'] !== null) {
+      const cap = trackWidth(String(attrs['data-pp-max']), bp, next.widthPx);
+      next = { ...next, widthPx: Math.min(next.widthPx, cap) };
     }
 
     const role = attrs['data-pp-tx'];
@@ -253,6 +278,56 @@ export function collectTextBoxes(node, env) {
     ledger: false,
   });
   return boxes;
+}
+
+/**
+ * One entry of a `data-pp-inset` list, in px.
+ *
+ * A geometry token resolves through `GEOM`; a bare number is a literal the
+ * stylesheet spells out in place (`.pp-quote`'s 12px rule gutter plus its 2px
+ * rule, `.pp-empty`'s 24px padding inside its 1px dashed frame). Literals are
+ * allowed because the guard against them drifting is no longer the token table
+ * — it is `test/scene/geometry-browser.test.mjs`, which lays the emitted
+ * artifact out in Chromium and fails when any measured container disagrees with
+ * the box the browser draws. That check is strictly stronger than a copy of the
+ * number in two files, and it catches the padding a token table never saw.
+ *
+ * A percentage token contributes nothing: see the module note.
+ * @param {string} token
+ * @param {'sm'|'md'|'lg'} bp
+ * @returns {number}
+ */
+export function insetLength(token, bp, brand = null) {
+  const literal = Number(token);
+  if (Number.isFinite(literal)) return literal;
+  // The one length in the stylesheet that is the *prospect's* rather than the
+  // deck's: `.pp-cta { border: var(--pp-border-width) }`, one on each side.
+  if (token === BRAND_BORDER_INSET) return borderWidthFor(brand) * 2;
+  if (isProportional(bp, token)) return 0;
+  return geom(bp, token);
+}
+
+/**
+ * The `data-pp-inset` token that resolves to twice the brand's border width.
+ * Named rather than numeric because its value is not knowable until a brand is
+ * in hand, which is the property that distinguishes it from every other inset.
+ */
+export const BRAND_BORDER_INSET = 'brand-border';
+
+/**
+ * A declared track width, in px: a geometry token, a literal, or — for a
+ * percentage token — the width the element already had, because at that
+ * breakpoint the track is the whole row.
+ * @param {string} token
+ * @param {'sm'|'md'|'lg'} bp
+ * @param {number} currentPx
+ * @returns {number}
+ */
+export function trackWidth(token, bp, currentPx) {
+  const literal = Number(token);
+  if (Number.isFinite(literal)) return Math.max(0, literal);
+  if (isProportional(bp, token)) return currentPx;
+  return Math.max(0, geom(bp, token));
 }
 
 /**

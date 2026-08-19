@@ -18,6 +18,7 @@
 import { h } from '../../core/vdom.js';
 import { alignPair } from '../align.js';
 import { renderBlock } from '../blocks.js';
+import { flowOf } from '../direction.js';
 import { blockText } from '../../core/contracts.js';
 import {
   sceneHead, provenanceLabel, emptyState, waveGroup, presentableNotes,
@@ -152,7 +153,7 @@ function renderNote(ctx, note, rowCount) {
   },
   h('p', { class: 'pp-side-note-label', 'data-pp-tx': 'noteLabel', 'data-pp-clamp': '1' }, note.label),
   note.kind === 'note'
-    ? h('p', { class: 'pp-side-note-text', 'data-pp-tx': 'note', 'data-pp-clamp': '6' }, note.text)
-    : renderBlock(note.block, { media: ctx.media, density: 'condensed', clampParagraph: 6, clampHeading: 2, maxListItems: 4, maxTableRows: 3 }),
+    ? h('p', { class: 'pp-side-note-text', 'data-pp-tx': 'note', 'data-pp-clamp': '6' }, note.text)   // the note is the seller's own annotation, not the rendition's copy
+    : renderBlock(note.block, { media: ctx.media, density: 'condensed', clampParagraph: 6, clampHeading: 2, maxListItems: 4, maxTableRows: 3, ...flowOf(note.rendition) }),
   provenanceLabel(note.rendition, ctx));
 }

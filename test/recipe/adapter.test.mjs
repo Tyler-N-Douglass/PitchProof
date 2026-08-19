@@ -44,6 +44,27 @@ function stubHttp(plan = {}) {
 
 test.afterEach(() => forgetAdapterSecrets());
 
+test('C8: an adapter rendition for an RTL market declares the market direction', async () => {
+  const specimen = retailSpecimen();
+  const { http } = stubHttp();
+  const ar = await runAdapter(RECIPE, specimen, { endpoint: ENDPOINT, key: KEY, http, label: 'ar-SA' });
+  assert.equal(ar.ok, true);
+  assert.equal(ar.value.dir, 'rtl');
+  // The direction is a fact about the market the caller named. The language the
+  // endpoint answered in is not something this module read, so nothing claims one.
+  assert.equal(ar.value.lang, undefined);
+  assert.equal(ar.value.blocks.some((b) => b.type === 'raw'), false);
+
+  const de = await runAdapter(RECIPE, specimen, { endpoint: ENDPOINT, key: KEY, http, label: 'de-DE' });
+  assert.equal(de.value.dir, 'ltr');
+
+  // A recipe whose labels are not markets claims no direction at all.
+  const channel = await runAdapter(recipeById('channel-variants'), specimen, {
+    endpoint: ENDPOINT, key: KEY, http, label: 'Email',
+  });
+  assert.equal(channel.value.dir, undefined);
+});
+
 test('success stamps illustrative, whatever the endpoint or the caller wants', async () => {
   const specimen = retailSpecimen();
   const { http, calls } = stubHttp({

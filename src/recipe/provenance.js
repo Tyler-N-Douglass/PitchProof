@@ -173,6 +173,14 @@ export const PROMOTION_RECORD_RE =
 const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 
 /**
+ * The three values HTML's `dir` attribute takes, and the only ones this lane
+ * will put on a rendition. Matches `src/scene/direction.js`'s `DIRECTIONS`, so
+ * a value L7 emits is a value L8 honours and a value L8 honours is a value L7
+ * accepts (finding C8).
+ */
+export const DIRECTIONS = ['ltr', 'rtl', 'auto'];
+
+/**
  * A BCP-47 language tag, conservatively: a 2–3 letter primary subtag followed by
  * alphanumeric subtags. Anything else is refused rather than coerced, because a
  * `lang` value reaches an emitted attribute and an unvalidated one is a way to
@@ -450,9 +458,9 @@ export function buildRendition({ specimen, recipe, label, blocks, media = [], pr
   // that out. An absent or unusable value is left absent, never defaulted:
   // `undefined` means "this recipe made no claim about direction", which is a
   // different thing from "left to right".
-  const cleanDir = dir === 'ltr' || dir === 'rtl' ? dir : undefined;
+  const cleanDir = DIRECTIONS.includes(/** @type {any} */(dir)) ? dir : undefined;
   if (dir !== undefined && cleanDir === undefined) {
-    throw new Error(`buildRendition: dir must be ltr|rtl, got ${String(dir)}`);
+    throw new Error(`buildRendition: dir must be ${DIRECTIONS.join('|')}, got ${String(dir)}`);
   }
   const cleanLang = typeof lang === 'string' && LANG_TAG_RE.test(lang.trim()) ? lang.trim() : undefined;
   if (lang !== undefined && lang !== null && cleanLang === undefined) {

@@ -48,20 +48,26 @@
 :root {
   --pp-sc-bleed-max-w: 350px;
   --pp-sc-bleed-pad: 16px;
+  --pp-sc-blurb-max-w: 320px;
   --pp-sc-card-pad: 10px;
   --pp-sc-cell-pad: 6px;
+  --pp-sc-empty-max-w: 300px;
   --pp-sc-fan-card-min-h: 140px;
   --pp-sc-fan-cols: 2;
   --pp-sc-fan-gap: 12px;
   --pp-sc-fan-source-gap: 16px;
   --pp-sc-fan-source-h: 140px;
   --pp-sc-fan-source-w: 100%;
+  --pp-sc-head-col-gap: 0px;
+  --pp-sc-head-extra-w: 100%;
   --pp-sc-head-gap: 16px;
   --pp-sc-head-h: 84px;
   --pp-sc-index-gap: 12px;
   --pp-sc-index-num-w: 32px;
   --pp-sc-index-row-gap: 10px;
   --pp-sc-ledger-h: 48px;
+  --pp-sc-ledger-label-gap: 0px;
+  --pp-sc-ledger-label-w: 100%;
   --pp-sc-list-marker-w: 14px;
   --pp-sc-map-canvas-min-h: 180px;
   --pp-sc-map-legend-cols: 1;
@@ -78,7 +84,10 @@
   --pp-sc-stack-rail-gap: 12px;
   --pp-sc-stack-rail-w: 28px;
   --pp-sc-stack-step-gap: 10px;
+  --pp-sc-step-meta-gap: 0px;
+  --pp-sc-step-meta-w: 100%;
   --pp-sc-step-pad: 12px;
+  --pp-sc-subhead-max-w: 340px;
   --pp-sc-fs-attribution: 12px;
   --pp-sc-fs-badge-label: 10px;
   --pp-sc-fs-badge-number: 28px;
@@ -116,20 +125,26 @@
   :root {
     --pp-sc-bleed-max-w: 640px;
     --pp-sc-bleed-pad: 22px;
+    --pp-sc-blurb-max-w: 640px;
     --pp-sc-card-pad: 12px;
     --pp-sc-cell-pad: 8px;
+    --pp-sc-empty-max-w: 440px;
     --pp-sc-fan-card-min-h: 150px;
     --pp-sc-fan-cols: 3;
     --pp-sc-fan-gap: 18px;
     --pp-sc-fan-source-gap: 24px;
     --pp-sc-fan-source-h: 140px;
     --pp-sc-fan-source-w: 280px;
+    --pp-sc-head-col-gap: 16px;
+    --pp-sc-head-extra-w: 260px;
     --pp-sc-head-gap: 24px;
     --pp-sc-head-h: 104px;
     --pp-sc-index-gap: 14px;
     --pp-sc-index-num-w: 44px;
     --pp-sc-index-row-gap: 12px;
     --pp-sc-ledger-h: 52px;
+    --pp-sc-ledger-label-gap: 10px;
+    --pp-sc-ledger-label-w: 320px;
     --pp-sc-list-marker-w: 16px;
     --pp-sc-map-canvas-min-h: 240px;
     --pp-sc-map-legend-cols: 3;
@@ -146,7 +161,10 @@
     --pp-sc-stack-rail-gap: 16px;
     --pp-sc-stack-rail-w: 36px;
     --pp-sc-stack-step-gap: 12px;
+    --pp-sc-step-meta-gap: 12px;
+    --pp-sc-step-meta-w: 200px;
     --pp-sc-step-pad: 16px;
+    --pp-sc-subhead-max-w: 620px;
     --pp-sc-fs-attribution: 14px;
     --pp-sc-fs-badge-label: 11px;
     --pp-sc-fs-badge-number: 40px;
@@ -185,20 +203,26 @@
   :root {
     --pp-sc-bleed-max-w: 820px;
     --pp-sc-bleed-pad: 28px;
+    --pp-sc-blurb-max-w: 820px;
     --pp-sc-card-pad: 14px;
     --pp-sc-cell-pad: 9px;
+    --pp-sc-empty-max-w: 520px;
     --pp-sc-fan-card-min-h: 160px;
     --pp-sc-fan-cols: 4;
     --pp-sc-fan-gap: 24px;
     --pp-sc-fan-source-gap: 32px;
     --pp-sc-fan-source-h: 140px;
     --pp-sc-fan-source-w: 360px;
+    --pp-sc-head-col-gap: 20px;
+    --pp-sc-head-extra-w: 320px;
     --pp-sc-head-gap: 28px;
     --pp-sc-head-h: 120px;
     --pp-sc-index-gap: 16px;
     --pp-sc-index-num-w: 52px;
     --pp-sc-index-row-gap: 14px;
     --pp-sc-ledger-h: 56px;
+    --pp-sc-ledger-label-gap: 12px;
+    --pp-sc-ledger-label-w: 340px;
     --pp-sc-list-marker-w: 18px;
     --pp-sc-map-canvas-min-h: 280px;
     --pp-sc-map-legend-cols: 5;
@@ -215,7 +239,10 @@
     --pp-sc-stack-rail-gap: 20px;
     --pp-sc-stack-rail-w: 40px;
     --pp-sc-stack-step-gap: 16px;
+    --pp-sc-step-meta-gap: 14px;
+    --pp-sc-step-meta-w: 240px;
     --pp-sc-step-pad: 18px;
+    --pp-sc-subhead-max-w: 760px;
     --pp-sc-fs-attribution: 15px;
     --pp-sc-fs-badge-label: 12px;
     --pp-sc-fs-badge-number: 52px;
@@ -538,11 +565,21 @@
 
 .pp-layout .pp-entering { will-change: opacity, transform; }
 
+/* Two declared tracks rather than two shrink-to-fit flex items.
+ *
+ * The header used to be `display: flex` with the text column at `flex: 0 1 auto`
+ * beside an undeclared source chip, so how much room the headline actually had
+ * depended on how long the chip's text was — a number no measurement can state.
+ * `measureScene` handed the detector the whole stage (350px at `sm`) where
+ * Chromium handed the headline 131, and six scene headlines were cut with the
+ * overflow detector silent (CRITIQUE-2 C1). The chip is now a track whose width
+ * is `--pp-sc-head-extra-w`, and at `sm` that token is `100%`: the chip drops to
+ * its own row and the text column keeps the full width. */
 .pp-scene-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: end;
+  gap: 6px var(--pp-sc-head-col-gap);
   flex: 0 0 auto;
   min-height: var(--pp-sc-head-h);
   padding-bottom: 4px;
@@ -550,9 +587,10 @@
 }
 
 .pp-scene-head-text { min-width: 0; }
+.pp-scene-head-extra { min-width: 0; }
 .pp-kicker { margin: 0 0 6px; color: var(--pp-accent); }
 .pp-headline { margin: 0; color: var(--pp-on-surface); }
-.pp-subhead { margin: 6px 0 0; color: var(--pp-on-surface); opacity: 0.72; max-width: 72ch; }
+.pp-subhead { margin: 6px 0 0; color: var(--pp-on-surface); opacity: 0.72; max-width: var(--pp-sc-subhead-max-w); }
 
 .pp-empty {
   display: flex;
@@ -563,7 +601,15 @@
   padding: 24px;
   min-height: 0;
 }
-.pp-empty-text { margin: 0; opacity: 0.72; text-align: center; max-width: 52ch; }
+/* `width: 100%` so the cap is the only thing that narrows it: a flex child that
+   shrank to its own content would have a width no measurement could state. */
+.pp-empty-text {
+  margin: 0;
+  opacity: 0.72;
+  text-align: center;
+  width: 100%;
+  max-width: var(--pp-sc-empty-max-w);
+}
 
 /* --------------------------------------------------------- content blocks */
 
@@ -581,7 +627,9 @@
 .pp-list-text { min-width: 0; }
 .pp-list-more .pp-list-text { opacity: 0.7; font-style: italic; }
 
-.pp-quote { margin: 0; padding-left: 12px; border-left: 2px solid var(--pp-accent); }
+/* Logical, not physical: a right-to-left rendition's pulled quote wears its
+   rule on the right, which is what `dir="rtl"` on the block means (C8). */
+.pp-quote { margin: 0; padding-inline-start: 12px; border-inline-start: 2px solid var(--pp-accent); }
 .pp-quote-text { margin: 0; }
 .pp-quote-attr { margin: 4px 0 0; opacity: 0.72; }
 
@@ -594,7 +642,9 @@
 .pp-table th,
 .pp-table td {
   padding: 4px var(--pp-sc-cell-pad);
-  text-align: left;
+  /* `start`, not `left`: a table inside a `dir="rtl"` rendition reads from the
+     right, and L7 mirrors the row order to match (C8, §9.1). */
+  text-align: start;
   vertical-align: top;
   border-bottom: var(--pp-border-width) solid var(--pp-border);
   overflow-wrap: break-word;
@@ -639,7 +689,7 @@
 .pp-img-missing-text { margin: 0; opacity: 0.75; }
 .pp-figcaption { margin: 0; opacity: 0.75; }
 
-.pp-raw { border-left: 2px dashed var(--pp-border); padding-left: 10px; }
+.pp-raw { border-inline-start: 2px dashed var(--pp-border); padding-inline-start: 10px; }
 .pp-raw-label { margin: 0 0 4px; opacity: 0.65; text-transform: uppercase; }
 .pp-raw-text { margin: 0; }
 
@@ -652,7 +702,9 @@
   gap: 10px;
   min-width: 0;
 }
-.pp-panel-head-text { min-width: 0; }
+/* `1 1 0`, not `0 1 auto`: the column is what the row gives it, so the width the
+   model reports is the width Chromium draws whatever the title happens to say. */
+.pp-panel-head-text { flex: 1 1 0; min-width: 0; }
 .pp-panel-title { margin: 0; }
 .pp-panel-meta { margin: 2px 0 0; opacity: 0.66; }
 
@@ -679,9 +731,12 @@
  * runtime.css's, because §18.1 makes them a law the emitter checks against the
  * final cascade. All that is set below is where the row sits.
  */
+/* A grid of full-width rows, not a wrapping flex of content-sized ones: a row
+   whose width depends on the label inside it is a row no measurement can state,
+   and the name in it was being crushed to five pixels at `sm` (CRITIQUE-2 C1). */
 .pp-provenance-ledger {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--pp-sc-row-gap);
   margin: 0;
   padding: 0;
@@ -691,16 +746,17 @@
 }
 
 .pp-provenance-ledger-row {
-  display: flex;
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: var(--pp-sc-card-pad);
+  gap: 4px var(--pp-sc-ledger-label-gap);
   min-width: 0;
   max-width: 100%;
   padding: calc(var(--pp-sc-card-pad) / 2) var(--pp-sc-card-pad);
   border: 1px solid var(--pp-border);
   border-radius: var(--pp-radius);
 }
+.pp-provenance-ledger-label { min-width: 0; }
 
 .pp-provenance-ledger-name {
   margin: 0;
@@ -708,7 +764,7 @@
   opacity: 0.72;
 }
 
-.pp-provenance-ledger .pp-provenance { margin: 0; flex: 0 0 auto; }
+.pp-provenance-ledger .pp-provenance { margin: 0; }
 
 /* `fullBleed` is a positioned frame with no flow of its own, so the strip is
    placed against the foot of the frame rather than appended below it. */
@@ -785,7 +841,9 @@
 }
 .pp-fan-source-body { flex: 1 1 auto; min-height: 0; overflow: hidden; display: grid; gap: 8px; align-content: start; }
 .pp-fan-source-empty { margin: 0; opacity: 0.7; }
-.pp-fan-count { display: flex; align-items: baseline; gap: 8px; }
+/* Stacked, not a baseline flex row: side by side, neither the number's width nor
+   the label's is a number this stylesheet declares or the measurement can state. */
+.pp-fan-count { display: block; }
 .pp-fan-count-number { margin: 0; color: var(--pp-accent); }
 .pp-fan-count-label { margin: 0; opacity: 0.7; }
 
@@ -895,8 +953,21 @@
   color: var(--pp-on-surface);
 }
 .pp-stack-step--source .pp-stack-body { background: var(--pp-surface-alt); color: var(--pp-on-surface-alt); }
-.pp-stack-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; }
-.pp-stack-head-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+/* Declared tracks again: the meta column is `--pp-sc-step-meta-w` and the label
+   is the rest. As a flex row with the right-hand side at `flex: 0 0 auto`, the
+   label was crushed to a zero-width box at `sm` — Chromium reported `clientWidth
+   0` on text the model believed had 284px (CRITIQUE-2 C1). */
+.pp-stack-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 6px var(--pp-sc-step-meta-gap);
+  min-width: 0;
+}
+/* Stretched, not `justify-items: start`: a content-sized grid item is a box no
+   measurement can state, and a meta line wider than its track was being clipped
+   by the step body with no ellipsis anywhere to show for it. */
+.pp-stack-head-right { display: grid; gap: 4px; min-width: 0; }
 .pp-stack-head-right .pp-provenance { margin: 0; }
 .pp-stack-label { margin: 0; min-width: 0; }
 .pp-stack-meta { margin: 0; opacity: 0.62; }
@@ -1094,10 +1165,13 @@
 }
 .pp-index-row:last-child { border-bottom: 0; }
 .pp-index-num { color: var(--pp-accent); }
-.pp-index-num-text { margin: 0; }
+/* Block, not the inline default: an inline box has no width of its own, so
+   there is no container for the model to report and none for a browser to
+   check. */
+.pp-index-num-text { margin: 0; display: block; }
 .pp-index-text { min-width: 0; }
 .pp-index-title { margin: 0; }
-.pp-index-blurb { margin: 4px 0 0; opacity: 0.74; max-width: 90ch; }
+.pp-index-blurb { margin: 4px 0 0; opacity: 0.74; max-width: var(--pp-sc-blurb-max-w); }
 
 /* ------------------------------------------------------- md: 768px and wider
  *
@@ -1115,6 +1189,15 @@
   .pp-fan-grid[data-pp-n="2"] { --pp-sc-fan-cols: 2; }
 
   .pp-side-row { grid-template-columns: minmax(0, 1fr) var(--pp-sc-note-w); }
+
+  /* The three rows whose second track is a declared width above `sm`. Each token
+     is `100%` at `sm`, which is this rule not applying: the second item takes a
+     row of its own and the first keeps the full width. `measureScene` reads the
+     same tokens through `data-pp-inset` / `data-pp-width`, and treats a
+     percentage token as "no track to subtract" — one rule, both sides. */
+  .pp-scene-head--extra { grid-template-columns: minmax(0, 1fr) var(--pp-sc-head-extra-w); }
+  .pp-stack-head { grid-template-columns: minmax(0, 1fr) var(--pp-sc-step-meta-w); }
+  .pp-provenance-ledger-row { grid-template-columns: minmax(0, 1fr) var(--pp-sc-ledger-label-w); }
 }
 
 /* ------------------------------------------------------ lg: 1400px and wider */

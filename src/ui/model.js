@@ -654,6 +654,88 @@ export function pruneReviews(brand) {
 }
 
 /**
+ * The scenes a rehearsal sweep walks: the spine plus every branch's scenes.
+ * @param {any} proof
+ * @returns {number}
+ */
+export function deckScenes(proof) {
+  let n = ((proof && proof.spine) || []).length;
+  for (const branch of (proof && proof.branches) || []) n += ((branch && branch.scenes) || []).length;
+  return n;
+}
+
+/**
+ * The positions a rehearsal sweep walks: every beat of every scene, spine and
+ * branch, with a scene that declares no beats counting as one position.
+ *
+ * Zero is the number that makes a sweep vacuous rather than clean, so it is
+ * computed once and read by the Rehearse panel and by the sweep action's own
+ * notification — two places that were free to disagree, and did (CRITIQUE-2
+ * C11).
+ * @param {any} proof
+ * @returns {number}
+ */
+export function deckPositions(proof) {
+  let n = 0;
+  for (const scene of (proof && proof.spine) || []) n += Math.max(1, (scene.beats || []).length);
+  for (const branch of (proof && proof.branches) || []) {
+    for (const scene of (branch && branch.scenes) || []) n += Math.max(1, (scene.beats || []).length);
+  }
+  return n;
+}
+
+/**
+ * The font file a face actually carries, or null.
+ *
+ * One definition, read by the panel that shows the licence, by the adapter that
+ * hands fonts to the emitter, and by the load path that clears a claim nothing
+ * backs. §7 makes the file the whole of the licence, so "does this face have a
+ * file" must not be answered three slightly different ways.
+ * @param {any} face
+ * @returns {any|null}
+ */
+export function embeddedFontFile(face) {
+  const file = face && face.fontFile;
+  if (!file || typeof file.dataUri !== 'string' || !file.dataUri.startsWith('data:')) return null;
+  return file;
+}
+
+/**
+ * Faces claiming `embeddable` with no file behind the claim.
+ *
+ * No control in this build can make one — the checkbox that could was
+ * CRITIQUE-2 C3 and is gone — but a project saved by an older build carries
+ * them, and an imported `.pitchproof.json` can carry one from anywhere. The
+ * claim matters because L11 reads `embeddable` as "this family is available",
+ * so an unfounded one silences FONT_UNAVAILABLE for a face the artifact will
+ * substitute anyway.
+ * @param {any} brand
+ * @returns {any[]}
+ */
+export function unfoundedFontClaims(brand) {
+  return ((brand && brand.faces) || []).filter((face) => face && face.embeddable === true && !embeddedFontFile(face));
+}
+
+/**
+ * Clear those claims. §7 says `embeddable` is false unless the user supplied a
+ * file; a record that says otherwise is corrected on the way in rather than
+ * believed, and the caller is told which faces changed so it can say so.
+ * @param {any} proof
+ * @returns {{proof: any, cleared: string[]}}
+ */
+export function clearUnfoundedFontClaims(proof) {
+  const unfounded = unfoundedFontClaims(proof && proof.brand);
+  if (!unfounded.length) return { proof, cleared: [] };
+  const faces = proof.brand.faces.map((face) => (unfounded.includes(face)
+    ? { ...face, embeddable: false, fontFile: null, rightsAssertion: null }
+    : face));
+  return {
+    proof: { ...proof, brand: { ...proof.brand, faces } },
+    cleared: unfounded.map((f) => String(f.family || 'an unnamed face')),
+  };
+}
+
+/**
  * Replace the whole brand system. Any review that no longer covers anything is
  * dropped with it: a re-extraction that found less than the last one must not
  * inherit the sign-off the last one earned.

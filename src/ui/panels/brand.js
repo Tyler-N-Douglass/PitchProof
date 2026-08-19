@@ -28,7 +28,7 @@ import { FONT_ACCEPT } from '../actions.js';
 import { formatBytes, formatDateTime, formatMetric, formatPercent, formatRatio, humanize } from '../format.js';
 import {
   BRAND_GROUPS, LOW_CONFIDENCE, brandGroupEvidence, brandGroupIsStarterDefault, brandIsUntouched,
-  pairedRole, reviewedGroups, unreviewedBrandGroups,
+  embeddedFontFile, pairedRole, reviewedGroups, unreviewedBrandGroups,
 } from '../model.js';
 import { COLOR_ROLES, CONTRAST_AA_BODY, FOREGROUND_ROLES } from '../../core/contracts.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
@@ -385,7 +385,7 @@ function renderFaces(app, brand) {
  * §7: "`embeddable` is false unless the user explicitly supplies a font file
  * they assert they have rights to." What stood here was a checkbox that set the
  * flag on its own — CRITIQUE-2 C3 — so the two FONT_UNAVAILABLE warnings
- * vanished, the emit opened, and the artifact went out with no `@font-face` and
+ * vanished, the emit opened, and the artifact went out with no embedded face and
  * the family still at the head of its stack: the client's machine rendered
  * Arial while the studio claimed the face was embedded.
  *
@@ -398,9 +398,7 @@ function renderFaces(app, brand) {
  * @returns {import('../../core/vdom.js').VNode}
  */
 function renderFaceLicence(app, face, i) {
-  const file = face.fontFile && typeof face.fontFile.dataUri === 'string' && face.fontFile.dataUri.startsWith('data:')
-    ? face.fontFile
-    : null;
+  const file = embeddedFontFile(face);
   const assertion = face.rightsAssertion || null;
 
   if (face.embeddable && file) {
@@ -411,7 +409,7 @@ function renderFaceLicence(app, face, i) {
         pair('Licence asserted by', assertion ? assertion.assertedBy : '—'),
         pair('Asserted', assertion && assertion.assertedAt ? formatDateTime(assertion.assertedAt) : '—'),
       ),
-      h('p', { class: 'st-field-hint' }, `The artifact carries this file as an @font-face rule, so ${face.family} renders on a machine that has never had it installed — and it counts against the emit's byte budget like any other asset.`),
+      h('p', { class: 'st-field-hint' }, `The artifact carries this file itself, so ${face.family} renders on a machine that has never had it installed — and it counts against the emit's byte budget like any other asset.`),
       toolbar(button({
         act: 'brand.detachFont', arg: String(i), variant: 'quiet',
         title: 'Remove the file and withdraw the assertion',

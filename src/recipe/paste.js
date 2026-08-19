@@ -344,7 +344,7 @@ export function blocksFromFragment(root) {
 
       if (tag === 'pre') {
         const text = nodeText(child).replace(/\n+$/, '');
-        if (text.trim()) out.push({ type: 'raw', html: `<pre><code>${escapeHtml(text)}</code></pre>` });
+        if (text.trim()) out.push(preformatted(text));
         continue;
       }
 
@@ -529,11 +529,25 @@ function padRow(cells, width) {
 }
 
 /**
- * @param {string} s
- * @returns {string}
+ * A run of preformatted text — a fenced code block, or a `<pre>` in pasted HTML.
+ *
+ * §4's `ContentBlock` has no code variant and the union is frozen, so this was a
+ * `raw` block wrapping `<pre><code>…</code></pre>`. Finding C8 is why it is not
+ * any more: `raw` means "the prospect's captured source", a layout is right to
+ * flatten it to plain text under a caption saying so, and a code sample the user
+ * pasted into *their own rendition* is neither the prospect's nor source. The
+ * markup around it was this parser's, not the paste's — which is the same
+ * mistake `locale-fanout` was making with `dir="rtl"`.
+ *
+ * `pre` is an optional §4 extension. A layout that has never heard of it renders
+ * a paragraph, which is exactly what the old `raw` block rendered as once its
+ * tags were stripped — minus the caption that was not true. See D-L7-19.
+ *
+ * @param {string} text
+ * @returns {import('../core/contracts.d.ts').ContentBlock}
  */
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function preformatted(text) {
+  return /** @type {any} */({ type: 'paragraph', text: String(text), pre: true });
 }
 
 /**
@@ -641,7 +655,7 @@ export function blocksFromText(text) {
         if (new RegExp(`^\\s*${marker[0]}{3,}\\s*$`).test(lines[i])) break;
         body.push(lines[i]);
       }
-      if (body.length) out.push({ type: 'raw', html: `<pre><code>${escapeHtml(body.join('\n'))}</code></pre>` });
+      if (body.length) out.push(preformatted(body.join('\n')));
       continue;
     }
 

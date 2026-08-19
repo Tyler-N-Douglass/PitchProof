@@ -38,6 +38,13 @@ import { geom, isProportional, BP_IDS } from './tokens.js';
  */
 export const PANEL_BORDER_PX = 1;
 
+/**
+ * `.pp-side-note`'s accent rule, in px — `border-left: 3px solid var(--pp-accent)`.
+ * The one place a scene panel's borders are asymmetric, and therefore the one
+ * place `inset()`'s symmetric allowance is two pixels short.
+ */
+export const NOTE_RULE_PX = 3;
+
 /** The `systemMap` drawing's design space. The SVG scales; these do not. */
 export const MAP_DESIGN = { width: 960, height: 540 };
 
@@ -321,7 +328,12 @@ export function boxGeometry(slot, bpIn, params = {}) {
       return inset(w, h, geom(bp, 'step-pad'));
     }
     case 'stackRail':
-      return { widthPx: geom(bp, 'stack-rail-w'), heightPx: s.bodyHeightPx };
+      // The numbered spine beside the steps. One rail per step, so its height is
+      // the step's, not the column's — the same `1 1 0` share `stackStep` takes.
+      return {
+        widthPx: geom(bp, 'stack-rail-w'),
+        heightPx: trackWidth(s.bodyHeightPx, n, geom(bp, 'stack-step-gap')),
+      };
 
     // -------------------------------------------------------------- fullBleed
     // `fullBleed` has no header band — the visual takes the whole content box,
@@ -345,8 +357,15 @@ export function boxGeometry(slot, bpIn, params = {}) {
       // Notes are auto-height and the margin scrolls with the scene, so a note
       // is bounded by the frame rather than by a share of it. The notes of one
       // scene share a `containerId` for the cumulative check.
+      //
+      // `.pp-side-note` is the one panel in the deck whose four borders are not
+      // equal: `border-left: 3px solid var(--pp-accent)` is the accent rule that
+      // marks a margin note as ours rather than the prospect's. That is two more
+      // pixels than `PANEL_BORDER_PX` on the horizontal axis, and it stayed
+      // missing from this number until Chromium was asked (CRITIQUE-2 C1).
       const w = isProportional(bp, 'note-w') ? s.contentWidthPx : geom(bp, 'note-w');
-      return inset(w, s.bodyHeightPx, geom(bp, 'note-pad'));
+      const box = inset(w, s.bodyHeightPx, geom(bp, 'note-pad'));
+      return { widthPx: Math.max(0, box.widthPx - (NOTE_RULE_PX - PANEL_BORDER_PX)), heightPx: box.heightPx };
     }
 
     // -------------------------------------------------------------- quoteCard

@@ -27,6 +27,7 @@
  */
 
 import { h } from '../../core/vdom.js';
+import { flowAttrs, flowOf } from '../direction.js';
 import { firstOfType } from '../blocks.js';
 import {
   sceneHead, provenanceLabel, emptyState, specimenTitle, renditionLabel, specimenMeta,
@@ -63,7 +64,7 @@ export function quoteCard(ctx) {
     },
     h('div', { class: 'pp-quote-rule', 'aria-hidden': 'true' }),
     h('blockquote', { class: 'pp-quote-body' },
-      h('p', { class: 'pp-quote-line', 'data-pp-tx': 'quote', 'data-pp-clamp': '8' }, pulled.text)),
+      h('p', { class: 'pp-quote-line', 'data-pp-tx': 'quote', 'data-pp-clamp': '8', ...flowAttrs(flowOf(pulled.rendition)) }, pulled.text)),
     pulled.attribution || pulled.source
       ? h('figcaption', {
         class: 'pp-quote-figcaption',

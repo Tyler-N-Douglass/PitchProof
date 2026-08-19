@@ -32,6 +32,10 @@ export const SPINE = 'spine';
  * @property {Map<string, string[]>} anchorsByScene   sceneId → branch ids offered there
  * @property {Map<string, import('../core/contracts.d.ts').Scene>} sceneById
  * @property {import('../core/contracts.d.ts').Proof} proof
+ * @property {string[]} duplicateBranchIds  branch ids the proof declared more
+ *   than once, or which collided with the spine's reserved id. The deck kept
+ *   the first and dropped the rest, so it is **not** the proof; L11 reports each
+ *   as a severity-1 `DUPLICATE_SCENE` and the emit is refused
  * @property {string} fingerprint   content hash of the navigable structure
  */
 
@@ -53,7 +57,27 @@ export function buildDeck(proof) {
   };
   sequences.set(SPINE, spine);
 
+  // One collision policy, applied once. Scene ids keep the *first* occurrence
+  // below, so branch ids do too — before this they did the opposite: the last
+  // `set` won, silently, and a whole objection branch vanished from the deck
+  // while the presenter's key opened the branch that shadowed it (CRITIQUE-2
+  // C5). The seller was told a scene anchored a branch "not in the proof",
+  // naming an id sitting in front of them.
+  //
+  // Worse than losing a branch: every deck-driven rule reads the deck, so the
+  // shadowed branch's scenes were never measured at all. A sweep reporting
+  // "nothing blocks the emit" about scenes it never looked at is unsound.
+  //
+  // Recorded rather than thrown. `runPreflight` builds the deck *before* running
+  // the rules, so a throwing `buildDeck` would replace L11's severity-1 finding
+  // — which names both branches to rename — with an exception, and the seller
+  // would get a crash where they now get a sentence. `duplicateBranchIds` is how
+  // the studio preview, the rehearse walk and the branch panel find out that the
+  // deck is not the proof.
+  /** @type {string[]} */
+  const duplicateBranchIds = [];
   for (const branch of proof.branches || []) {
+    if (sequences.has(branch.id)) { duplicateBranchIds.push(branch.id); continue; }
     sequences.set(branch.id, {
       id: branch.id,
       kind: 'branch',
@@ -91,7 +115,7 @@ export function buildDeck(proof) {
     })),
   });
 
-  return { sequences, spine, sceneLocator, anchorsByScene, sceneById, proof, fingerprint };
+  return { sequences, spine, sceneLocator, anchorsByScene, sceneById, proof, duplicateBranchIds, fingerprint };
 }
 
 /**

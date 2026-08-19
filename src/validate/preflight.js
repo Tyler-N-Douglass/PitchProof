@@ -135,6 +135,49 @@ export function layoutContextFor(proof, scene, specimenById, renditionById, medi
 }
 
 /**
+ * Every scene the sweep walks, in deck order, each id once.
+ *
+ * §14 says the sweep walks "every scene, every beat, and every branch", and the
+ * subject of that sentence is the **model**, not the deck. The two are the same
+ * list for every valid proof — and they part company in exactly one case, which
+ * is why this function exists rather than a loop over `deck.sceneById`:
+ * `buildDeck` keys its sequences by branch id, so two branches sharing an id
+ * leave one of them out of the deck entirely (CRITIQUE-2's C5). Walking the deck
+ * alone would then measure none of the shadowed branch's scenes, and the sweep
+ * would report "nothing else is wrong" about scenes it never looked at — a
+ * silence far worse than the collision itself. `DUPLICATE_SCENE` blocks that
+ * emit either way (L11-D26); this makes the rest of the pass honest while the
+ * finding is outstanding.
+ *
+ * Deck order first, so a valid proof is walked exactly as before and the
+ * measurement list is byte-identical; then anything the model declares that the
+ * deck dropped, in declaration order. A repeated scene id is measured once (the
+ * repetition is itself a `DUPLICATE_SCENE` finding).
+ *
+ * @param {import('../core/contracts.d.ts').Proof} proof
+ * @param {any} deck
+ * @returns {import('../core/contracts.d.ts').Scene[]}
+ */
+export function sweepScenes(proof, deck) {
+  /** @type {any[]} */
+  const out = [];
+  /** @type {Set<string>} */
+  const seen = new Set();
+  const push = (scene) => {
+    if (!scene || typeof scene.id !== 'string' || seen.has(scene.id)) return;
+    seen.add(scene.id);
+    out.push(scene);
+  };
+  if (deck) {
+    const sequences = [deck.spine, ...[...deck.sequences.values()].filter((s) => s.kind === 'branch')];
+    for (const sequence of sequences) for (const scene of sequence.scenes || []) push(scene);
+  }
+  for (const scene of proof.spine || []) push(scene);
+  for (const branch of proof.branches || []) for (const scene of branch.scenes || []) push(scene);
+  return out;
+}
+
+/**
  * Measure every scene in the deck at every breakpoint.
  *
  * Scenes are visited in deck order — spine first, then each branch — and a scene
@@ -152,23 +195,16 @@ export function measureDeck(proof, deck, breakpoints, deps) {
 
   /** @type {any[]} */
   const out = [];
-  /** @type {Set<string>} */
-  const seen = new Set();
-  const sequences = [deck.spine, ...[...deck.sequences.values()].filter((s) => s.kind === 'branch')];
-  for (const sequence of sequences) {
-    for (const scene of sequence.scenes) {
-      if (seen.has(scene.id)) continue;
-      seen.add(scene.id);
-      const ctx = layoutContextFor(proof, scene, specimenById, renditionById, mediaById);
-      for (const breakpoint of breakpoints) {
-        const measurement = deps.measureScene(scene, ctx, breakpoint.id);
-        if (!measurement) continue;
-        out.push({
-          sceneId: measurement.sceneId || scene.id,
-          breakpoint: measurement.breakpoint || breakpoint.id,
-          boxes: measurement.boxes || [],
-        });
-      }
+  for (const scene of sweepScenes(proof, deck)) {
+    const ctx = layoutContextFor(proof, scene, specimenById, renditionById, mediaById);
+    for (const breakpoint of breakpoints) {
+      const measurement = deps.measureScene(scene, ctx, breakpoint.id);
+      if (!measurement) continue;
+      out.push({
+        sceneId: measurement.sceneId || scene.id,
+        breakpoint: measurement.breakpoint || breakpoint.id,
+        boxes: measurement.boxes || [],
+      });
     }
   }
   return out;
@@ -214,7 +250,7 @@ export function renderedElementIds(proof, deck, render) {
   /** @type {Map<string, Set<string>>} */
   const out = new Map();
   if (typeof render !== 'function') return out;
-  for (const scene of deck.sceneById.values()) {
+  for (const scene of sweepScenes(proof, deck)) {
     let ids;
     try {
       const tree = render(scene);
@@ -270,7 +306,7 @@ export function revealPathIndex(proof, deck) {
   const out = new Map();
   const { specimenById, renditionById, mediaById } = assetMaps(proof);
   if (missingLayouts().length > 0) registerAllLayouts();
-  for (const scene of deck.sceneById.values()) {
+  for (const scene of sweepScenes(proof, deck)) {
     /** @type {string[]} */
     let paths;
     try {

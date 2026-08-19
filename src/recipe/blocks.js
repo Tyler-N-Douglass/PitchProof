@@ -16,7 +16,7 @@
 
 import { blockText } from '../core/contracts.js';
 import { flatten } from './text.js';
-import { buildRendition } from './provenance.js';
+import { buildRendition, DIRECTIONS } from './provenance.js';
 import { enforceNoFabricatedFacts } from './facts.js';
 
 /**
@@ -145,7 +145,7 @@ export const TOOL_LANG = 'en';
  * @returns {T}
  */
 export function carryDirection(from, onto) {
-  if (from && (from.dir === 'ltr' || from.dir === 'rtl')) /** @type {any} */(onto).dir = from.dir;
+  if (from && DIRECTIONS.includes(from.dir)) /** @type {any} */(onto).dir = from.dir;
   if (from && typeof from.lang === 'string' && from.lang) /** @type {any} */(onto).lang = from.lang;
   return onto;
 }
@@ -167,12 +167,12 @@ export function carryDirection(from, onto) {
  *
  * @template {import('../core/contracts.d.ts').ContentBlock} T
  * @param {T} block
- * @param {{dir?: 'ltr'|'rtl'|null, lang?: string|null}} attrs
+ * @param {{dir?: 'ltr'|'rtl'|'auto'|null, lang?: string|null}} attrs
  * @returns {T}
  */
 export function withDirection(block, attrs = {}) {
   const out = /** @type {any} */(cloneBlock(block));
-  if (attrs.dir === 'ltr' || attrs.dir === 'rtl') out.dir = attrs.dir;
+  if (DIRECTIONS.includes(/** @type {any} */(attrs.dir))) out.dir = attrs.dir;
   if (typeof attrs.lang === 'string' && attrs.lang) out.lang = attrs.lang;
   else if (attrs.lang === null) delete out.lang;
   return out;

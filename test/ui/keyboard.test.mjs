@@ -20,7 +20,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { toHtml } from '../../src/core/vdom.js';
 import { StudioApp } from '../../src/ui/app.js';
-import { ACTIONS, actionIndex, routeOf } from '../../src/ui/actions.js';
+import { ACTIONS, actionIndex, routeOf, fakeFontInput } from '../../src/ui/actions.js';
 import { renderStudio } from '../../src/ui/layout.js';
 import { renderAllPanels } from '../../src/ui/panels/index.js';
 import { renderInspector } from '../../src/ui/inspector.js';
@@ -107,6 +107,10 @@ async function makeFullApp() {
     branchId: doc.proof.branches[0].id,
     beatIndex: 0,
   });
+  // One face carrying a licensed file, so both halves of §7's font route render:
+  // the attach control on the face without one, and the withdrawal beside the
+  // file on the face with one (CRITIQUE-2 C3).
+  await app.dispatch('brand.attachFont', '0', { element: fakeFontInput('Inter-Regular.woff2') });
   app.setDraft('branch.jumpQuery', 'app');
   app.setDraft('rendition.paste', 'A pasted block.\n\nAnother one.');
   app.setDraft('rendition.label', 'SMS');

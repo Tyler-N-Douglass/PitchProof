@@ -522,6 +522,8 @@ html, body {
 .st-faces { display: flex; flex-direction: column; gap: 12px; }
 .st-face { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--st-border); border-radius: var(--st-radius-sm); background: var(--st-ground); }
 .st-face-head { display: grid; grid-template-columns: 1fr 160px auto; gap: 8px; align-items: end; }
+/* The licence is the file (§7): the attach control, or the attached file's record. */
+.st-face-licence { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px dashed var(--st-border); }
 
 .st-logos { display: flex; flex-wrap: wrap; gap: 12px; }
 .st-logo { display: flex; gap: 10px; padding: 10px; border: 1px solid var(--st-border); border-radius: var(--st-radius-sm); background: var(--st-ground); min-width: 280px; }

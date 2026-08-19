@@ -730,7 +730,15 @@ and asserts silence, then runs four empty payloads and asserts one finding each.
 
 ---
 
-## L11-D22 — A scene anchoring a branch that does not exist is `ASSET_MISSING`, at severity 2
+## L11-D22 — ~~A scene anchoring a branch that does not exist is `ASSET_MISSING`~~, at severity 2 (code superseded by L11-D25)
+
+> **Superseded in part.** The severity, the message and the reasoning below all
+> stand. The **code** does not: it is `BRANCH_UNREACHABLE` from L11-D25 on,
+> because a consumer filters on a code and this one answers a branch-graph
+> question, not an asset question. The paragraph headed *"Why this code"* is the
+> argument the §20 critic accepted and CRITIQUE-2's C10 overturned; it is kept
+> as written so the reversal can be read against it.
+
 
 **Defect:** F20, from the §20 critique's severity-3 tail.
 
@@ -879,3 +887,169 @@ inlined falls back to the declaration while `NETWORK_REFERENCE` blocks it.
 `test/validate/rules.test.mjs` computes the expected megabyte figure in the
 oversize message from the fixture's own payload.
 
+
+---
+
+## L11-D25 — A ghost branch anchor is `BRANCH_UNREACHABLE`, not `ASSET_MISSING`
+
+**Defect:** CRITIQUE-2 C10. Supersedes the code chosen in L11-D22.
+
+**Unsettled by:** §4 freezes fourteen codes and none of them is "a reference to a
+branch that does not exist". Two are candidates and both are imperfect, which is
+why this was decided twice.
+
+**The two readings, and why the second wins.**
+
+*The reading that produced L11-D22.* `ASSET_MISSING` already owns "a scene
+references something that is not in the proof": it reports exactly that for
+`scene.specimenId` and for each of `scene.renditionIds`, and a branch anchor is
+the third member of that set. `BRANCH_UNREACHABLE` is about a branch, and in a
+ghost anchor there is no branch — so the code would be naming a thing that does
+not exist.
+
+*The reading that wins.* A finding code is not a description of the defect; it is
+**the question a consumer asks by filtering on it**. §4 froze the set precisely so
+that a rehearse panel, an emit gate or a future caller can partition findings
+without parsing prose. There are only two such questions here — *what is wrong
+with my media?* and *what is wrong with my branch graph?* — and a ghost anchor is
+an answer to the second one. Filing it under `ASSET_MISSING` puts branch topology
+in the bucket a caller filters to find broken images; filing it under
+`BRANCH_UNREACHABLE` puts it beside the finding for the same edge seen from the
+other end. The "there is no branch" objection is about the code's *name* under a
+literal reading, and a name is the weaker consideration: `ASSET_MISSING` is
+equally literally wrong, because a branch is not an asset either.
+
+**Decision.** The finding moves from the `ASSET_MISSING` rule to the
+`BRANCH_UNREACHABLE` rule, which now inspects §11 coverage from both ends: a
+branch nothing reaches, and an anchor that reaches nothing. Message unchanged —
+the critic called it correct and well-worded and it closes CRITIQUE-1's F20.
+**Severity 2, unchanged**, which is also `BRANCH_UNREACHABLE`'s declared value, so
+the move needs no narrowing and no change to the severity table. L11-D22's
+justification for that severity is untouched: `buildDeck` filters an anchor that
+names nothing, so no key is offered and nobody is stranded.
+
+**Two details the move forced.**
+
+- **The locus names the ghost.** `locus.branchId` was the branch the *scene lived
+  in*; it is now the branch the anchor *names*, with the containing branch moved
+  to `detail.inBranchId`. Every `BRANCH_UNREACHABLE` finding now means the same
+  thing by `locus.branchId` — "the branch that cannot be reached" — which is the
+  consistency C10 is about. A consumer that joins it against `proof.branches` and
+  finds nothing has been told the finding's whole point.
+- **The auto-fixer had to be guarded.** `FIXERS.BRANCH_UNREACHABLE` anchors
+  `detail.branchId` to the opening scene. Pointed at a ghost it would have added a
+  *second* dangling anchor and left the finding standing. The ghost finding
+  declares `autoFixAvailable: false` — the two remedies are deleting an anchor the
+  seller authored and restoring a branch that is not in the file, and a fix may
+  not choose between them — and the fixer additionally refuses any id no branch
+  carries, so the invariant lives in the fixer rather than in the flag alone.
+
+**The gap this leaves, recorded.** Neither code is exactly right, and that is a
+contract fact rather than a lane preference: §4 has no code for a dangling
+reference into the branch graph. Filed as dispute 7 in
+`docs/disputes/L11-validate.md`, and built against the contract as written.
+
+**Regression.** `test/validate/branch.test.mjs` asserts the code, the severity,
+both halves of the locus, `detail.inBranchId` for an anchor inside a branch, and
+— the assertion that would have caught C10 — that a caller filtering
+`ASSET_MISSING` gets nothing at all from a ghost anchor. A separate test forces
+`autoFixAvailable` true on the finding and asserts the fixer still offers nothing.
+
+---
+
+## L11-D26 — Two branches sharing an id is `DUPLICATE_SCENE`, at severity 1
+
+**Defect:** CRITIQUE-2 C5.
+
+**Unsettled by:** §4 freezes fourteen codes, `DUPLICATE_SCENE` is the only one
+about a duplicated identity, and nothing in §11 or §14 says what happens when two
+branches claim one id.
+
+**What was wrong.** `buildDeck` builds `sequences` with `sequences.set(branch.id,
+…)` in a loop over `proof.branches`. A `Map` holds one value per key, so the
+second write wins and one whole authored branch is in the file, in the studio's
+branch list, and in no deck: its scenes never enter `sceneLocator` or
+`sceneById`, `branchCoverage` walks the deck and cannot see it, and every anchor
+and jump-index entry naming that id opens the survivor. No rule said anything.
+What the seller got instead was the ghost-anchor finding of L11-D25 pointing at
+an id they could see in front of them.
+
+**Decision — severity 1.** The same argument that blocks a duplicated scene id,
+and then two more.
+
+1. *Wrong destination.* `DUPLICATE_SCENE`'s own message for the scene case is
+   "the navigation locator keeps only the first occurrence, so a jump to this
+   scene lands in one place and the other copies are unreachable". That is
+   exactly the branch case: the presenter takes the objection the lost branch was
+   written for, presses the key, and the client sees the other answer. §14
+   reserves severity 1 for a proof that would misrepresent the client or break in
+   the room, and this breaks in the room.
+2. *Lost content.* A whole objection branch is dropped from the artifact. The
+   scene case loses a copy; this loses an original.
+3. *The sweep goes blind.* This is the one that settles it. Every deck-driven
+   rule — overflow, contrast, empty beats, coverage — reads the deck, so before
+   this fix none of them looked at the shadowed branch's scenes at all. A sweep
+   that reports "nothing blocks the emit" about scenes it never measured is not
+   reporting; §14 calls rehearsal "the last pass before you walk in". A finding
+   that merely warned would leave that unsoundness shipping.
+
+**Decision — the code.** `DUPLICATE_SCENE`, which is §4's only
+duplicate-identity code and is already severity 1, so nothing in the severity
+table moves and `BRANCH_UNREACHABLE` keeps its honest answer to "does this code
+block an emit?" — no. The alternative was `BRANCH_UNREACHABLE`, on the same
+consumer argument that decided L11-D25, and it was rejected for two reasons: the
+primary harm here is **misdirection**, not unreachability (the key works, it
+opens the wrong branch), and hosting it there would have meant declaring
+`BRANCH_UNREACHABLE` at severity 1 with a narrowing band down to 2 for its
+canonical case — a code whose usual finding warns, badged "blocking" in the
+studio's rules list. The rule that owns the code is now titled *Duplicate id in
+the deck* and inspects both id namespaces: scene ids, and the branch ids
+`buildDeck` keys its sequences by.
+
+*The spine sentinel is in that namespace too.* `buildDeck` stores the spine under
+the id `"spine"`, and §4 puts no format constraint on `Branch.id`, so a branch
+that claims `"spine"` replaces the entire spine sequence — the same silent
+overwrite, one worse. Reported by the same rule, at the same severity, with its
+own message.
+
+**No auto-fix.** Renaming one of the two means re-pointing every anchor and
+every jump the seller wrote, and the model no longer records which branch each
+one meant. That is the same call `DUPLICATE_SCENE` already leaves to the seller.
+
+**The sweep is now walked from the model, not the deck.** `sweepScenes(proof,
+deck)` walks the deck first — so a valid proof is measured exactly as before,
+in the same order, byte for byte — and then any scene the model declares that the
+deck dropped. `measureDeck`, `renderedElementIds` and `revealPathIndex` all use
+it. §14's sweep "walks every scene, every beat, and every branch", and the
+subject of that sentence is the model. The two lists differ only when a branch id
+collides, and in that one case the rest of the pass now tells the truth while the
+blocking finding is outstanding.
+
+**What is still wrong in `src/runtime/deck.js`, reported rather than reached
+into.** Detecting the collision here is sufficient to close the defect as
+reported — the emit is refused at severity 1 with no override, so no artifact can
+ship with a duplicated branch id, and the sweep is sound in the meantime. The
+deck is still wrong in two smaller ways that are L2's to fix:
+
+- **It is inconsistent with itself.** For scene ids it keeps the *first*
+  occurrence and says why in a comment — "the locator keeps the first occurrence
+  so navigation stays deterministic while that finding is outstanding". For
+  branch ids, six lines above, the *last* write wins, silently. One collision
+  policy, applied twice, is the least the deck owes a reader.
+- **It is silent.** Nothing on the built `Deck` records that a sequence was
+  dropped, so every consumer — the studio preview, the rehearse walk, the branch
+  panel, the runtime — sees a proof that quietly lost a branch. The recommendation
+  is a `duplicateBranchIds` list on the deck rather than a throw:
+  `runPreflight` builds the deck *before* it runs the rules, so a `buildDeck` that
+  threw would replace this finding with an exception, and the seller would get a
+  crash where they now get a sentence telling them which two branches to rename.
+
+**Regression.** `test/validate/branch.test.mjs`: the deck is asserted to have
+lost `sc_ap0` before preflight is called, so the test states the defect rather
+than only the fix; the finding's code, severity, locus, `detail.occurrences`,
+objections and scene ids are pinned; `summarize().canEmit` is false; the
+collision is found in both declaration orders and the finding list is
+byte-identical across runs; three branches under one id produce one finding
+counted at three; a defect planted inside the shadowed branch's scene is still
+reported, which is the sweep-soundness half; the spine collision has its own
+test; and distinct ids raise nothing.

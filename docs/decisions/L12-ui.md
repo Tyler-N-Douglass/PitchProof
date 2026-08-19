@@ -460,3 +460,168 @@ status bar say "reading the quota"; after one that returned no quota they say
 report a quota" — on first paint, before the browser had been asked. It happens
 to be a small lie, and it is the same lie as F22: a state the tool has not
 reached yet, reported as a capability the tool does not have.
+
+---
+
+## L12-21 — One compile of the brand, read from both ends
+
+**Names:** CRITIQUE-2 C7.
+
+**Unsettled by:** §15 asks for "live preview at true aspect" and §13 for an
+emitter that inlines the stylesheet. Nothing says the two must be the *same*
+stylesheet, because it did not occur to anyone that they could differ.
+
+**Decision.** `services.artifactThemeCss(brand)` is the only way anything in
+`src/ui/**` obtains the artifact's stylesheet. `preview.js` installs its return
+value into the frame; `services.emit` passes the same call's result to L10 as
+`deps.themeCss`. `compileTheme` survives beside it for the inspector, which
+counts the custom properties rather than rendering them.
+
+**Why.** The emit passed no `themeCss` at all, so every artifact ever emitted by
+this studio fell through to `compileFallbackTheme` — the path L10 documents as
+the one for a build where L5 has not landed. L5 has landed since the first pass.
+Nineteen of twenty-three properties agreed, which is exactly what made it
+survive: the artifact looked right, and the stage padding, the transition
+duration and the shadow — the three the preview is *for* — were not the ones the
+seller shipped.
+
+The fix is one argument. What is worth keeping is the shape of the test:
+`test/ui/critique-2.test.mjs` asserts the emitted document contains the preview's
+stylesheet **byte for byte**, and separately that every property the two
+compilers disagree about arrives the preview's way. A test that checked the
+artifact merely *had* a theme passed for a whole pass while this was broken.
+
+---
+
+## L12-22 — The licence is the file
+
+**Names:** CRITIQUE-2 C3.
+
+**Unsettled by:** §7 says `embeddable` is false "unless the user explicitly
+supplies a font file they assert they have rights to" and §13 inlines
+"fonts (only user-supplied, license-asserted)". Neither says what the control
+looks like, and the previous pass built the assertion without the supply.
+
+**Decision.** Four changes, and they only work together:
+
+1. `brand.attachFont` — a per-face `<input type=file>` accepting `.woff2`,
+   `.woff`, `.ttf`, `.otf`. It routes through L5's `attachUserFont` with the
+   file's bytes, a `data:` URI, the face's observed weights, and a rights
+   assertion naming the operator, and stores the face L5 returns.
+2. `services.emit` passes `fonts: artifactFonts(proof.brand)`, so the rules L10
+   was already able to write reach the artifact.
+3. `brand.setFaceEmbeddable` **is deleted**. §7 permits one route to `true` and
+   L5 already enforces that; a second control that set the flag directly could
+   only ever be a claim with no fact under it. Withdrawal is
+   `brand.detachFont`, which removes the file, the assertion and the flag in one
+   mutation — withdrawing a claim *does* change what ships, so it is allowed.
+4. `loadRecord` clears an `embeddable` claim carrying no file and says so.
+   Nothing in this build can create one; an older project or an imported
+   `.pitchproof.json` can, and L11 reads the flag as "this family is available",
+   so an unfounded claim silences FONT_UNAVAILABLE for a face the client's
+   machine will substitute anyway.
+
+**Why.** The measured behaviour of the old checkbox: two FONT_UNAVAILABLE
+warnings cleared, emit opened, no embedded face in the artifact, the prospect's
+family still at the head of the CSS stack — so the client rendered Arial while
+the studio said the face was embedded. That is §18 turned exactly inside out,
+and the specific sentence FONT_UNAVAILABLE prints ("supply a licensed font file
+to embed") named a remedy the product did not offer.
+
+**The judgment call is (3).** A gentler option existed: keep the checkbox and
+disable it until a file is attached. It was rejected because a disabled control
+still teaches that the flag is the thing being set, and the flag is not the
+thing — the file is. The panel now shows either the attach control, or the
+file's record with its size, who asserted the licence and when.
+
+**What is deliberately not done.** The studio does not parse the font file: it
+does not verify the family inside it, its weights, or that it is a font at all
+beyond the extension. Nothing in the product reads a font — §13 inlines it and
+the client's browser is what parses it — and a parser here would be a second,
+worse copy of the browser's. The refusal that *is* enforced is the MIME: a file
+the studio cannot name is refused rather than embedded as
+`application/octet-stream`, because a src the browser will not parse is a font
+that silently does not load, which is the failure this whole finding is about.
+
+---
+
+## L12-23 — A save says which project is in hand
+
+**Names:** CRITIQUE-2 C6.
+
+**Unsettled by:** §16 requires autosave and a migration path. It does not say
+what the studio opens on start.
+
+**Decision.** `saveNow` writes `studio.lastProject` on every successful save.
+`loadRecord` still writes it too, so an open and an import are unchanged.
+
+**Why.** The setting was written only by `loadRecord`, which runs on open and on
+import — never on create. So the studio restored every project except the one
+being built right now, and only on the reload nobody planned. Nothing was lost;
+the record was in IndexedDB and one more open restored it, which is precisely why
+it survived a pass of testing.
+
+Choosing the *save* rather than the create is the judgment. A create writes
+nothing durable until the first save, so binding the setting to `project.new`
+would point the next start at a record that may not exist. A save is the
+strongest statement the studio can make about which project is in hand, and it
+is already the one choke point every route runs through: new, duplicate, import,
+autosave and `Ctrl+S` all end in `saveNow`.
+
+---
+
+## L12-24 — A sweep that walked nothing is vacuous, not clean
+
+**Names:** CRITIQUE-2 C11.
+
+**Unsettled by:** §14 makes rehearsal "the last pass before you walk in" and
+requires severity-1 findings to block the emit. It says nothing about what the
+panel should say when the sweep had nothing to walk.
+
+**Decision.** Three strings, one count, one gate:
+
+- `model.deckPositions(proof)` is computed once and read by both the Rehearse
+  panel and the sweep action's notification. Zero positions makes the banner a
+  warning that names what was not measured (overflow and contrast, at all three
+  breakpoints) and what to do about it.
+- The blocking-findings empty state no longer asserts anything about the gate on
+  its own. It asks `emitBlockers` and either says "Nothing blocks the emit." —
+  when nothing does — or names the blocker still standing, in the gate's words.
+- The sweep's own notification stops calling a walk of nothing "clean", and
+  stops reporting the number of *findings* as the number of *checks*; the rule
+  count is what ran.
+
+**Why.** The panel printed "Sweep clean across 2 checks", "Nothing blocks the
+emit" and "Scenes walked 0" together, above a status bar reading "This proof has
+no spine". Each sentence was derived from something the studio knew; two of them
+were false where they stood. This is the same category as the last pass's F22 —
+a true-sounding sentence about a state it does not describe — so the guard has
+the same shape: the false strings are banned in
+`test/ui/empty-state-honesty.test.mjs` **and** the true ones are pinned, in that
+file and in `test/ui/critique-2.test.mjs`, so the finding cannot be closed by
+deleting the reassurance a rehearsal panel exists to give.
+
+---
+
+## L12-25 — Two test-scaffold repairs, recorded because they touched shared files
+
+**Names:** CRITIQUE-2 C3 and C15.
+
+**Decision and why.**
+
+`test/fixtures/ui/studio-fixture.mjs` gains `artifactThemeCss` and
+`attachUserFont` on the fake adapter. The fake refuses on the same two
+conditions L5 does — no file, or no rights assertion — so a caller that skips
+either fails in the fixture rather than only in the shipped studio. The file
+lives outside `test/ui/**` by path but is imported by nothing else in the
+repository; it is this lane's scaffolding.
+
+`test/ui/storage-pressure.test.mjs`'s `RiggedBackend` extended `MemoryBackend`
+with `super(estimate.quota)`, passing a *ratio numerator* (100) as a byte
+capacity. That was harmless until L1 landed C15's fix and `MemoryBackend` began
+refusing writes past the quota it reports — at which point four tests about the
+pressure *reading* started failing on the enforcement path instead. The rig now
+reports the ratio through `estimate()` and enforces a real capacity, which
+separates the two axes it had been conflating. No assertion was weakened; the
+refusal path is still tested, deliberately, through `failWith`.
+

@@ -195,6 +195,76 @@ test('attack 11: collapse the label to zero size', async () => {
   assertBlocked(zeroScale, /collapses it/, 'transform:scale(0)');
 });
 
+test('attack 11b: a box too short for one line of the label (C9)', async () => {
+  // The attack the first version of the size floor walked past: `height:0` was
+  // refused because the check compared the declaration against the string "0",
+  // and `height:1px` is the same attack with a different spelling. The floor is
+  // now the label's own line box, in pixels.
+  const oneLine = await attempt({ userCss: '.pp-provenance{height:1px!important;overflow:hidden!important}' });
+  assertBlocked(oneLine, /line box/, 'height:1px with overflow:hidden');
+
+  const emHeight = await attempt({ userCss: '.pp-provenance{max-height:0.2em!important;overflow:hidden!important}' });
+  assertBlocked(emHeight, /line box/, 'max-height:0.2em with overflow:hidden');
+
+  const narrow = await attempt({ userCss: '.pp-provenance{width:8px!important;overflow:hidden!important}' });
+  assertBlocked(narrow, /not room to read it/, 'width:8px with overflow:hidden');
+
+  // Through the theme channel as well as the user channel — both reach the
+  // final stylesheet and the law is about the stylesheet, not about who wrote it.
+  registerTestLayouts();
+  const viaTheme = await emit(emitProof(), {}, {
+    runtimeJs, runtimeCss, clock: FIXED_CLOCK,
+    themeCss: '.pp-provenance{height:2px!important;overflow:hidden!important}',
+  });
+  assertBlocked(viaTheme, /line box/, 'height:2px through deps.themeCss');
+});
+
+test('attack 11c: crush the label with negative tracking (C9)', async () => {
+  const crushed = await attempt({ userCss: '.pp-provenance{letter-spacing:-1em!important}' });
+  assertBlocked(crushed, /letter-spacing/, 'letter-spacing:-1em');
+
+  const px = await attempt({ userCss: '.pp-provenance{letter-spacing:-4px!important}' });
+  assertBlocked(px, /letter-spacing/, 'letter-spacing:-4px on 12px type');
+
+  // Inherited from an ancestor rather than declared on the label itself.
+  const inherited = await attempt({ userCss: 'body{letter-spacing:-2em!important}' });
+  assertBlocked(inherited, /letter-spacing/, 'letter-spacing:-2em inherited from <body>');
+
+  const words = await attempt({ userCss: '.pp-provenance{word-spacing:-3em!important}' });
+  assertBlocked(words, /word-spacing/, 'word-spacing:-3em');
+});
+
+test('attack 11d: scale the label down without scaling it to nothing (C9)', async () => {
+  const fifth = await attempt({ userCss: '.pp-provenance{transform:scale(0.2)!important}' });
+  assertBlocked(fifth, /renders at/, 'transform:scale(0.2)');
+
+  const prop = await attempt({ userCss: '.pp-provenance{scale:0.3!important}' });
+  assertBlocked(prop, /renders at/, 'scale:0.3');
+
+  const zoomed = await attempt({ userCss: '.pp-provenance{zoom:0.25!important}' });
+  assertBlocked(zoomed, /renders at/, 'zoom:0.25');
+});
+
+test('the room floors do not fire on legitimate styling (C9)', async () => {
+  // Every one of these is something a real stylesheet does, and none of them
+  // hides the label. A law that refuses these is a law nobody can ship under.
+  const cases = [
+    ['a roomy fixed height', '.pp-provenance{height:24px;overflow:hidden}'],
+    ['a short box that lets its content spill', '.pp-provenance{height:1px}'],
+    ['a scroll container', '.pp-provenance{height:4px;overflow:auto}'],
+    ['a percentage height inside a clipping ancestor', '.pp-provenance{height:10%;overflow:hidden}'],
+    ['tight but readable tracking', '.pp-provenance{letter-spacing:-0.02em}'],
+    ['generous tracking', '.pp-provenance{letter-spacing:0.08em}'],
+    ['a slight scale', '.pp-provenance{transform:scale(0.98)}'],
+    ['a scale that keeps it above the floor', '.pp-provenance{font-size:24px;transform:scale(0.6)}'],
+    ['a clipping ancestor with an auto height', '.pp-scene{overflow:hidden;height:auto}'],
+  ];
+  for (const [what, css] of cases) {
+    const result = await attempt({ userCss: css });
+    assert.equal(result.ok, true, `${what} (${css}) was refused: ${result.ok ? '' : result.error}`);
+  }
+});
+
 test('attack 12: an empty label', async () => {
   const result = await attempt({ layout: { labelEmptyText: true } });
   assertBlocked(result, /renders no text/, 'a label with no text');

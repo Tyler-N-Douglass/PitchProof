@@ -225,7 +225,7 @@ function renderBrand(app) {
       )),
     section({ title: 'Theme output', subtitle: 'The `--pp-*` custom properties the artifact reads. The studio never wears them.' },
       h('p', { class: 'st-field-hint' }, app.services.has('theme')
-        ? `${plural(Object.keys(app.services.compileTheme(brand).vars || {}).length, 'variable')} compiled for the artifact stylesheet.`
+        ? `${plural(Object.keys(app.services.compileTheme(brand).vars || {}).length, 'variable')} compiled for the artifact stylesheet — the ones the preview is wearing, and the ones the emit passes to the file (L12-21).`
         : 'The theme compiler is not wired into this build, so the preview shows the runtime defaults.')));
 }
 
