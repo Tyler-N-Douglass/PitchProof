@@ -150,6 +150,58 @@ export function resolveBlockMedia(blocks, media) {
   return { blocks: out, resolved, unresolved };
 }
 
+/**
+ * Split a block list into the blocks a proof can show and the `media` blocks
+ * whose bytes were never captured.
+ *
+ * A `media` block whose `ref` names no `MediaRef` is a broken image in front of
+ * the client and a severity-1 `ASSET_MISSING` at emit — and on §6's paste route
+ * it is a *certainty*, because pasted markup carries no bytes at all. Such a
+ * block is therefore held back out of the block stream rather than emitted as a
+ * reference to nothing; the caller records what was held back so the loss is
+ * visible and restorable (D-L6-21).
+ *
+ * `positions` is the original position of each block in the unstripped stream;
+ * it is carried through so a held-back block can be put back exactly where it
+ * came from once its bytes arrive.
+ *
+ * @param {any[]} blocks
+ * @param {{media?: any, positions?: number[], reason?: string}} [options]
+ * @returns {{blocks: any[], positions: number[], omitted: {ref: string, caption: string|null, position: number, reason: string}[]}}
+ */
+export function omitUnresolvedMedia(blocks, options = {}) {
+  const list = Array.isArray(blocks) ? blocks : [];
+  const index = mediaIndex(options.media);
+  /** @type {Set<string>} */
+  const known = new Set();
+  for (const [, id] of index) known.add(id);
+  const source = Array.isArray(options.positions) && options.positions.length === list.length
+    ? options.positions
+    : list.map((_, i) => i);
+  const reason = options.reason || 'bytes-not-captured';
+
+  /** @type {any[]} */
+  const kept = [];
+  /** @type {number[]} */
+  const keptPositions = [];
+  /** @type {any[]} */
+  const omitted = [];
+  list.forEach((block, i) => {
+    if (block && block.type === 'media' && !known.has(block.ref)) {
+      omitted.push({
+        ref: String(block.ref),
+        caption: block.caption === undefined || block.caption === null ? null : String(block.caption),
+        position: source[i],
+        reason,
+      });
+      return;
+    }
+    kept.push(block);
+    keptPositions.push(source[i]);
+  });
+  return { blocks: kept, positions: keptPositions, omitted };
+}
+
 /** @param {any} node @returns {boolean} */
 function isInline(node) {
   if (isText(node)) return true;

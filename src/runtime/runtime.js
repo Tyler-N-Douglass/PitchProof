@@ -304,8 +304,26 @@ export class Runtime extends Emitter {
    */
   renderBranchBadge() {
     const seq = sequenceOf(this.deck, this.nav.sequenceId);
+    // `data-pp-tx` is what puts a run of text into §22.2's measured population.
+    // Without it no `SceneMeasurement` box exists for this element and
+    // `TEXT_OVERFLOW` cannot fire on it at any severity, at any breakpoint,
+    // ever — which is what it did: at 390px the badge cut the client's own
+    // objection by 195px, 119% of the box, and the detector was structurally
+    // unable to see it (CRITIQUE-3 P3). The blind spot is the point: **the
+    // detector's population is defined by the thing being measured**, so
+    // runtime chrome that renders client copy has to be in it.
+    //
+    // §11 requires this to be "the objection in the client's words", and a
+    // branch with no objection has none — so it says what is true rather than
+    // printing an internal id to the room (P12).
+    const objection = typeof seq.objection === 'string' ? seq.objection.trim() : '';
     return h('div', { class: 'pp-branch-badge', 'data-pp-branch': seq.id },
-      h('span', { class: 'pp-branch-badge-label' }, seq.objection || 'Branch'),
+      h('span', {
+        class: 'pp-branch-badge-label',
+        'data-pp-tx': 'branchBadge',
+        'data-pp-clamp': '2',
+        ...(objection ? {} : { 'data-pp-unnamed': 'true' }),
+      }, objection || 'Unnamed branch'),
       h('span', { class: 'pp-branch-badge-key' }, 'R to return'));
   }
 

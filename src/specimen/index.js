@@ -23,7 +23,7 @@ export {
 
 export {
   toBlocks, blocksWithTrace, mediaIndex, resolveMediaRef, resolveBlockMedia,
-  splitOnBreaks, isEmptyBlock, repairHeadingLevels, unrepairHeadingLevels,
+  omitUnresolvedMedia, splitOnBreaks, isEmptyBlock, repairHeadingLevels, unrepairHeadingLevels,
 } from './blocks.js';
 
 export {
@@ -42,7 +42,7 @@ export { inferKind, inferKindWithEvidence, schemaTypes } from './kind.js';
 export {
   buildSpecimen, restoreBlock, restoreAllBlocks, extractMeta,
   setRawHtmlOptIn, rawFallbackBlocks, markEdited,
-  repairHeadings, unrepairHeadings, unresolvedMediaRefs,
+  repairHeadings, unrepairHeadings, unresolvedMediaRefs, restoreOmittedMedia,
 } from './specimen.js';
 
 export {

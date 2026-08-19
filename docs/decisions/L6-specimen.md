@@ -581,3 +581,126 @@ each asserted to zero; column alignment surviving capture byte for byte; and
 the end-to-end path from `docs.html` through `buildSpecimen` and L8's
 `renderBlocks` to rendered HTML, asserted verbatim, uncaptioned, and clean
 under L10's `scanForNetworkReferences`.
+
+---
+
+## D-L6-21 — Media whose bytes the capture never carried is held out of the block stream and recorded, not emitted as a reference to nothing (finding P6)
+
+**Supersedes D-L6-15**, which decided the opposite and gave the reason that is
+still the constraint: *"Dropping the image silently would change the shape of
+the prospect's page without saying so."* The operative word turned out to be
+**silently**. What changed is not the honesty requirement but where it is
+discharged.
+
+**Unsettled by:** §6 requires ingest to "degrade gracefully and never dead-end"
+and lists paste as strategy 4 — the route a seller takes when a fetch is
+blocked. §8 requires media to be inlined at capture. Neither says what a
+`media` block should be when the two meet: markup that references an image, and
+no bytes anywhere to inline.
+
+**The defect (CRITIQUE-3 P6, severity 2).** A pasted page has markup and no
+assets, so `captureMedia` mints nothing — correct, and never in dispute. But
+the `media` **block** survived carrying the source path as its `ref`, and a
+`media` block whose ref names no `MediaRef` is L11's `ASSET_MISSING` at
+**severity 1**. So §6's own listed fallback produced, by construction, a proof
+that could not be emitted: one blocking finding per image per rendition, on a
+clean three-page paste. Reproduced from a real paste before the change:
+
+```
+mediaRefs 0  mediaBlocks 1  dangling ["/assets/product-hx400.png"]
+                            (plus "/assets/logo.svg" inside the stripped header)
+```
+
+**Decision.** `buildSpecimen` resolves media refs exactly as before (D-L6-17 —
+the F4 rewrite from importer part names to minted ids is untouched, and runs
+first). What changes is what happens to a ref that still resolves to nothing:
+the block is held **out of** the block stream, and the loss is recorded on
+`specimen.mediaOmitted` as
+
+```js
+{ id, ref, caption, position, origin: 'blocks'|'stripped', strippedId, reason }
+```
+
+with four consequences:
+
+- `unresolvedMediaRefs(specimen)` still names every one of them, so the surface
+  the studio and API.md's L6→L11 row already point at did not change shape or
+  go quiet — it is now the *complete* answer to "what did not come with this
+  page", covering both held-back blocks and any dangling ref left in a stream;
+- `specimen.meta['capture.mediaOmitted']` carries the count. `meta` is a
+  **frozen** field, so a consumer that has never heard of this lane's optional
+  extensions still sees that something was left out;
+- `restoreOmittedMedia(specimen, target, supply, options)` is the way back: hand
+  it a `MediaRef` or a raw `{name, bytes, mime}` and the block returns to the
+  exact position it was taken from, with the caption it was omitted with;
+- blocks inside a **stripped** chrome region are treated the same way, because
+  `restoreBlock` puts those back into the stream — a logo in a pasted `<nav>`
+  would otherwise reintroduce the blocking finding the moment a reviewer opened
+  "show everything".
+
+The §8 `raw` copy is untouched and still holds the `<img>`, so the loss is
+recoverable from the capture itself even without the record.
+
+**Why the same rule for the importer route, when D-L6-17's case is different.**
+It is a fair question and the answer is that the *cases* differ while the
+*defect* does not. F4's case was a ref that failed to match bytes that were
+present — there, keeping the ref visible was right, because the repair was a
+lookup and the bytes were three lines away. P6's case is bytes that were never
+captured and, on the paste route, never will be from this capture. But a `.docx`
+whose image the extractor could not reach is in P6's case too, not F4's, and it
+produced the same un-emittable proof. Splitting the behaviour by *route* would
+mean paste emits and `.docx` does not, for one defect with one shape; splitting
+it by *whether bytes exist* is the same test in both routes, and it is the test
+that runs: resolve first (F4), hold back what still resolves to nothing (P6).
+D-L6-15's promise — visible, never silently dropped — is kept in full, and moved
+off the one carrier that blocks the emit.
+
+**Why not keep the block and let L11 handle it.** Three reasons, in order of
+weight. It makes §6's documented fallback unusable, which is the finding. Its
+only offered remedy deletes the prospect's own content (see below). And the
+finding is not *information*: on a paste, `ASSET_MISSING` fires for every image
+on the page, every time, and says only what the seller already knows — they
+pasted markup. A severity-1 refusal that is a certainty of the route is not a
+check, it is a wall.
+
+**Why not lower the severity.** `ASSET_MISSING` is L11's rule and its severity
+is right: a block pointing at nothing *is* a broken image in front of the
+client. `test/specimen/paste-media.test.mjs` asserts that the rule still fires,
+still at severity 1, on a proof that really does carry such a block —
+reconstructing the pre-D-L6-21 shape by hand. If that assertion ever passes for
+the wrong reason, the finding was weakened rather than the defect fixed.
+
+**Why this does not set `edited`, and what does.** §18.3's `edited` /
+`editNotes` mean *the prospect's content was changed*. An image whose bytes were
+never captured was never in what we captured: holding it back is the honest
+shape of a degraded capture, not an edit to the page, and claiming otherwise
+would put a false statement in the artifact. Restoring one is the content coming
+*back*, so that does not set `edited` either. What **is** an edit is the auto-fix
+for the finding this removes: L11's `ASSET_MISSING` fixer (`src/validate/autofix.js:141`)
+splices a block out of `specimen.blocks` and sets neither field, so a proof
+whose hero the seller deleted at the tool's suggestion says nothing about it.
+That is a §18.3 violation independent of P6 and it survives this change for
+every other route to a dangling ref — reported to the integrator as L11's, with
+`markEdited` as the existing route to compliance.
+
+**What the seller sees.** Per image: the source path it was referenced by, the
+caption or alt the page gave it, where in the page it stood, and the reason.
+Plus a count in `meta`, the untouched `raw` source, and a one-call route to
+supply the bytes. What is **not** yet built is the studio surface for it:
+`src/ui/services.js` has never called `unresolvedMediaRefs`, so today the record
+sits on the specimen and no screen reads it. That is L12's wiring and one
+`services.js` passthrough for `restoreOmittedMedia`; reported to the integrator
+as a coupled ask, because "visible" is only half-true until a screen shows it.
+
+**Testing.** `test/specimen/paste-media.test.mjs` drives the real paste route —
+`importHtmlText` on view-source markup with two `<img>`s and no assets, through
+`buildSpecimen` with L3's parser, into a `Proof`, through the real `emit()` with
+the built runtime — and asserts: the words and the CTA survive; no media block
+is left; both images are named with caption, position and origin (one in
+content, one in the stripped header); the count reaches `meta`; `edited` is
+false; `raw` still holds the `<img>`; the artifact emits with **no** blocking
+finding and no `ASSET_MISSING` of any severity; the hand-reconstructed dangling
+block is still refused at severity 1; and a supplied PNG puts the block back
+between the heading and the first paragraph, pointing at the bytes, with the
+outstanding logo still on the record and the emit still clean.
+`test/specimen/media-refs.test.mjs` carries the importer half.

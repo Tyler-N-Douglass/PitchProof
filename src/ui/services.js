@@ -23,8 +23,9 @@
 
 import { ok, err } from '../core/result.js';
 import { contentId } from '../core/ids.js';
+import { shortHash } from '../core/hash.js';
 import { normalizeEmitOptions } from '../core/contracts.js';
-import { embeddedFontFile } from './model.js';
+import { embeddedFontFile, usedIds } from './model.js';
 
 // ---------------------------------------------------------------------------
 // LANE IMPORTS — the integrator's block.
@@ -146,6 +147,32 @@ export function unavailable(key) {
 
 /** @param {string} key @returns {{ok: false, error: string}} */
 function laneErr(key) { return err(unavailable(key)); }
+
+/**
+ * The sentence for a lane call that was made without the proof its new ids have
+ * to be free in. It is a wiring fault rather than anything the user did, and it
+ * says so: CRITIQUE-3 P1 was exactly this argument being absent, and the way it
+ * stayed absent for a whole build was that nothing refused the call.
+ * @param {string} method
+ * @returns {string}
+ */
+function missingProof(method) {
+  return `${method} was called without the project's proof, so the ids it mints could collide with ids the project already uses. Nothing was changed. This is a wiring fault in the studio (CRITIQUE-3 P1), not something you did.`;
+}
+
+/**
+ * Every id the proof uses except the brand's own, for a call that replaces the
+ * brand. @param {any} proof @returns {Set<string>}
+ */
+function freeOfBrand(proof) {
+  const taken = usedIds(proof);
+  const brand = proof ? proof.brand : null;
+  if (brand) {
+    taken.delete(brand.id);
+    for (const logo of brand.logos || []) taken.delete(logo.id);
+  }
+  return taken;
+}
 
 /**
  * Build the HTTP function L3 takes by injection. The studio is allowed to reach
@@ -322,14 +349,28 @@ export function makeServices(env) {
 
     /**
      * Extract a whole brand system from captures.
+     *
+     * `proof` is required, and it is required for the reason CRITIQUE-3 P1
+     * names: the logo ids L5 mints have to be free in *this* project, and the
+     * only thing that knows which ids are free is the project. The ids of the
+     * brand being replaced are excluded from that set — a brand is replaced,
+     * not appended, so its ids are about to be released, and holding them back
+     * would make a second extraction of the same site produce a different brand
+     * from the first. L5's own comment on the brand id says the same thing: "a
+     * recapture that found the same brand is the same brand."
+     *
      * @param {any[]} captures
-     * @param {{seed: string}} options
+     * @param {{seed: string, proof: any}} options
      * @returns {any}
      */
     buildBrand(captures, options) {
       if (!themeLane || !colorLane) return laneErr(themeLane ? 'color' : 'theme');
+      if (!options || !options.proof) return err(missingProof('buildBrand'));
       try {
-        const idMinter = minterFor(options.seed);
+        const idMinter = minterFor(options.seed, {
+          taken: freeOfBrand(options.proof),
+          salt: { brandFrom: (captures || []).map((c) => (c && typeof c.sourceUrl === 'string' ? c.sourceUrl : null)) },
+        });
         return ok(themeLane.buildBrandSystem(brandParts(captures, { seed: options.seed }), { clock, idMinter }));
       } catch (e) { return err(`Brand extraction failed: ${message(e)}`, e); }
     },
@@ -395,18 +436,27 @@ export function makeServices(env) {
     // -- specimen -----------------------------------------------------------
 
     /**
+     * Turn a capture into a specimen.
+     *
+     * `proof` is required. CRITIQUE-3 P1: the specimen and media ids L6 mints
+     * must not collide with anything the project already holds, and a minter
+     * that is handed only the seed cannot know. Every capture route goes
+     * through here, so there is one place that can get this wrong and it is
+     * this one.
+     *
      * @param {any} capture
-     * @param {{kind?: string, imageQuality: number, seed: string}} options
+     * @param {{kind?: string, imageQuality: number, seed: string, proof: any}} options
      * @returns {any}
      */
     buildSpecimen(capture, options) {
       if (!specimenLane) return laneErr('specimen');
+      if (!options || !options.proof) return err(missingProof('buildSpecimen'));
       try {
         return ok(specimenLane.buildSpecimen(capture, {
           kind: options.kind,
           imageQuality: options.imageQuality,
           clock,
-          idMinter: minterFor(options.seed),
+          idMinter: minterFor(options.seed, { taken: usedIds(options.proof), salt: captureSalt(capture) }),
           // §8/D8: L6 needs a parser when a capture arrived as HTML text with
           // no tree. The parser is L3's, and this is the seam that joins them.
           parseHtml: ingestLane ? ingestLane.parseHtml : undefined,
@@ -851,6 +901,29 @@ export function makeServices(env) {
     },
 
     /**
+     * Thread a proof through several auto-fixes in one pass (§14; CRITIQUE-3
+     * P11). L11 publishes `applyAll` for exactly this and the studio had never
+     * called it, so clearing N findings cost N clicks and N full sweeps at the
+     * one moment §14 calls "the last pass before you walk in".
+     *
+     * The lane's function is the one that threads, deliberately: each fix
+     * re-finds its own target in the proof it is handed, so what an earlier fix
+     * did to the shape of the proof is the fix's problem to survive, and there
+     * is one implementation of that rather than two. A fix that cannot find its
+     * target returns the proof unchanged, which is why the caller compares
+     * digests instead of trusting the count.
+     *
+     * @param {any} proof
+     * @param {{apply: (p: any) => any}[]} fixes
+     * @returns {any} a `Result` carrying the new proof
+     */
+    applyAllFixes(proof, fixes) {
+      if (!validateLane) return laneErr('validate');
+      try { return ok(validateLane.applyAll(proof, fixes || [])); }
+      catch (e) { return err(`Those fixes could not be applied: ${message(e)}`, e); }
+    },
+
+    /**
      * @param {any} proof
      * @param {(pos: any) => void} onPosition
      * @returns {Promise<any>}
@@ -978,17 +1051,95 @@ export function artifactFonts(brand) {
 }
 
 /**
- * A minimal id minter shaped like L1's `IdMinter` but seeded per call, so two
- * captures in the same session do not collide and a re-run reproduces the same
- * ids. Lanes take `{idMinter}` and only ever call `next(kind)`.
+ * The id minter the lanes are given, over the ids the project has already used.
+ *
+ * **CRITIQUE-3 P1.** This function used to take the seed alone and count from
+ * zero: `contentId(kind, {seed, n})`, with `n` restarting at 1 on every
+ * construction and `seed` constant for the life of the project. It was
+ * constructed fresh for each capture, so the first id every capture minted was
+ * the same string — three pasted pages all came back `sp_004ebe5c150e`, the
+ * runtime's `specimenById` map held one entry for three specimens, and six
+ * scenes built across three of the prospect's pages all resolved to the same
+ * page. `validateProofShape` has no uniqueness check, so the artifact shipped.
+ * Its own doc comment claimed the property it did not have.
+ *
+ * The repair is not a longer-lived counter. A counter is state with a lifetime,
+ * and every lifetime a counter could have is wrong somewhere: per call collides
+ * on the second call, per session collides after a reload, per project collides
+ * after an import of a project built elsewhere. **The state that has to survive
+ * all four is the set of ids the document already carries**, and the document
+ * is the one thing that survives a reload, an import, an undo and a redo,
+ * because it *is* what is persisted. So the minter is handed that set and walks
+ * past anything in it, exactly the way `ui/model.mintId` has always done for the
+ * ids the studio mints itself.
+ *
+ * `salt` is what makes the walk rare rather than routine: seeded with the
+ * capture's own identity, two different pages mint different ids on the first
+ * try and only a genuine re-capture of the same page has to step. Both are
+ * deterministic — no clock, no counter that a reload resets, nothing that
+ * depends on how many ids some other subsystem drew.
+ *
+ * `taken` is required and is copied, never adopted: a minter that cannot see
+ * what the project has used is the defect above, so there is no way to
+ * construct one that cannot see.
+ *
  * @param {string} seed
- * @returns {{next: (kind: string) => string, reset: () => void}}
+ * @param {{taken: Iterable<string>, salt?: unknown}} options
+ * @returns {{next: (kind: string) => string, reset: () => void, minted: () => string[]}}
  */
-export function minterFor(seed) {
+export function minterFor(seed, options) {
+  if (!options || options.taken === undefined || options.taken === null) {
+    throw new Error('minterFor: the ids the project has already used are required (CRITIQUE-3 P1) — a minter that cannot see them mints a collision.');
+  }
+  const taken = new Set(options.taken);
+  const salt = options.salt === undefined ? null : options.salt;
+  /** @type {string[]} */
+  const minted = [];
   let n = 0;
   return {
-    next(kind) { n += 1; return contentId(/** @type {any} */ (kind), { seed, n }); },
+    next(kind) {
+      n += 1;
+      for (let i = 0; i < 100000; i++) {
+        const id = contentId(/** @type {any} */ (kind), { seed, salt, n, i });
+        if (taken.has(id)) continue;
+        taken.add(id);
+        minted.push(id);
+        return id;
+      }
+      throw new Error(`minterFor: could not mint a free ${String(kind)} id`);
+    },
+    // Kept for parity with L1's `IdMinter`, which the lanes are typed against.
+    // It rewinds the sequence but never the `taken` set: an id already handed
+    // out stays spoken for, so a reset cannot reissue one.
     reset() { n = 0; },
+    /** @returns {string[]} every id this minter handed out, in order */
+    minted() { return minted.slice(); },
+  };
+}
+
+/**
+ * The identity of a capture, as a minting salt.
+ *
+ * Small on purpose — it is hashed once per id — and made of the fields that
+ * differ between two pages of the same site: where it came from, when it was
+ * taken, what it is called, and how big it was. Two genuinely different pages
+ * differ in at least one; two captures of the same page at the same instant
+ * differ in none, and the `taken` walk is what separates those.
+ * @param {any} capture
+ * @returns {Record<string, unknown>}
+ */
+export function captureSalt(capture) {
+  const c = capture || {};
+  const meta = c.meta && typeof c.meta === 'object' ? c.meta : {};
+  return {
+    url: typeof c.sourceUrl === 'string' ? c.sourceUrl : null,
+    at: typeof c.capturedAt === 'string' ? c.capturedAt : null,
+    title: typeof meta.title === 'string' ? meta.title : null,
+    kind: typeof c.kind === 'string' ? c.kind : null,
+    htmlLength: typeof c.html === 'string' ? c.html.length : 0,
+    blocks: Array.isArray(c.blocks) ? c.blocks.length : 0,
+    assets: Array.isArray(c.assets) ? c.assets.length : 0,
+    digest: shortHash(typeof c.html === 'string' ? c.html : String(c.text || ''), 16),
   };
 }
 

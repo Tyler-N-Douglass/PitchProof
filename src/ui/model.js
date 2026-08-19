@@ -130,18 +130,31 @@ export function emptyBrand(seed, at) {
  * a fixed, spec-mandated set, not user content, and a library nobody knows to
  * load is a library nobody uses (CRITIQUE-1 F14).
  *
+ * `taken` is the ids the studio already holds — the other projects in the
+ * store. §5 makes the project seed a project-level constant, so `project.new`
+ * hands every project made on the same day the same seed and the id falls to
+ * `at` alone to separate. Two projects created inside one clock tick would then
+ * share an id, and a project id is the storage key: the second would overwrite
+ * the first. It is the same shape as CRITIQUE-3 P1 — an id minted without
+ * looking at what is already spoken for — so it is closed the same way, by
+ * walking past what is taken rather than by trusting a value to be distinct.
+ *
  * @param {object} args
  * @param {string} args.seed
  * @param {string} args.at            ISO, from the injected clock
  * @param {string} [args.name]
  * @param {string} [args.prospectName]
  * @param {import('../core/contracts.d.ts').Recipe[]} [args.recipes]
+ * @param {Iterable<string>} [args.taken]  ids already in use, e.g. the project list
  * @returns {Doc}
  */
-export function newDoc({ seed, at, name = 'Untitled proof', prospectName = '', recipes = [] }) {
+export function newDoc({ seed, at, name = 'Untitled proof', prospectName = '', recipes = [], taken = [] }) {
+  const spoken = new Set(taken);
+  const id = mintId('project', seed, spoken, { at });
+  spoken.add(id);
   const proof = {
     schemaVersion: /** @type {1} */ (1),
-    id: contentId('proof', { seed, at }),
+    id: mintId('proof', seed, spoken, { at, of: id }),
     prospectName,
     createdAt: at,
     brand: emptyBrand(seed, at),
@@ -152,7 +165,7 @@ export function newDoc({ seed, at, name = 'Untitled proof', prospectName = '', r
     branches: [],
     emitOptions: defaultEmitOptions(),
   };
-  return { id: contentId('project', { seed, at }), name, seed, proof };
+  return { id, name, seed, proof };
 }
 
 /**

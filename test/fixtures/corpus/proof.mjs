@@ -55,7 +55,7 @@ export const CORPUS_SEED = 'northwind-industrial';
 const RECIPE_FOR_PAGE = {
   home: 'system-assembly',
   product: 'channel-variants',
-  article: 'brief-to-asset',
+  article: 'governed-iteration',
   'article-de': 'locale-fanout',
 };
 
@@ -64,13 +64,53 @@ const RECIPE_FOR_DOCUMENT = {
   'design-note-pdf': 'dam-round-trip',
 };
 
-const RECIPE_FALLBACK = 'brief-to-asset';
+// `volume-view` takes every kind §4 declares, so it is the only safe fallback.
+// The assignments above are asserted against each recipe's own `inputKinds`
+// before it runs, so a mismatch is an error rather than a silent demotion to
+// this one — an earlier version fell back quietly and ran five of six specimens
+// through whichever recipe happened to be first.
+const RECIPE_FALLBACK = 'volume-view';
 
 /**
  * Layouts assigned in a fixed rotation over the spine, so a corpus proof
  * exercises more than one of L8's eight rather than repeating the first.
  */
 const SPINE_LAYOUTS = ['splitBeforeAfter', 'stack', 'sideNote', 'quoteCard', 'fanOut', 'systemMap'];
+
+/**
+ * The layouts that render a rendition's **prose**, as opposed to its label.
+ *
+ * `systemMap` and `contentsIndex` render a rendition's name and a sentence
+ * about it — deliberately, and L8 asserts it rather than leaving it to a
+ * comment. So a rendition whose writing direction is the thing under test must
+ * not land on one, or the direction has nowhere to appear.
+ *
+ * A blind rotation put the corpus's single `ar-SA` rendition on `systemMap`,
+ * and the artifact came out with no `dir="rtl"` in it anywhere — which would
+ * have read as L8's C8 fix failing, when what had actually happened was that
+ * this fixture handed the one right-to-left rendition to the one layout that
+ * cannot show a direction. The same class of hole as the recipes: coverage lost
+ * to an arbitrary assignment, in a way no test names.
+ */
+const PROSE_LAYOUTS = SPINE_LAYOUTS.filter((l) => l !== 'systemMap' && l !== 'contentsIndex');
+
+/**
+ * The layout a rendition is shown in.
+ *
+ * The rotation is the default, so the deck exercises more than one of L8's
+ * eight. A rendition that declares a writing direction overrides it onto the
+ * next prose layout in the same rotation, so the choice stays deterministic and
+ * position-derived rather than becoming a special case with a name.
+ *
+ * @param {any} rendition
+ * @param {number} index  position in the spine
+ * @returns {string}
+ */
+function layoutFor(rendition, index) {
+  const rotated = SPINE_LAYOUTS[index % SPINE_LAYOUTS.length];
+  if (!rendition || !rendition.dir || PROSE_LAYOUTS.includes(rotated)) return rotated;
+  return PROSE_LAYOUTS[index % PROSE_LAYOUTS.length];
+}
 
 /** Text decoded once. */
 const DECODER = new TextDecoder();
@@ -298,12 +338,26 @@ const SECTION_HEADING_LEVEL = 2;
 const MAX_SECTION_BLOCKS = 5;
 
 /**
- * One rendition per specimen, through L7.
+ * Run each specimen through its recipe — through `renderRecipe`, which is the
+ * whole point.
  *
- * Provenance is left to `buildRendition`, which stamps `'illustrative'` unless
- * the caller says otherwise. Nothing here promotes anything: a fixture that
- * quietly marked its own content `verified-by-user` would emit a proof carrying
- * no provenance labels at all, and §18.1's enforcement would never run.
+ * An earlier version called `buildRendition` directly with the specimen's own
+ * blocks, and the §20 critic caught what that cost:
+ *
+ *   "It never calls `renderRecipe`. All 31 renditions are copies of their own
+ *   source, labelled with recipe *names*. Overflow recall, budget honesty,
+ *   provenance and layout coverage have all been measured on a proof whose
+ *   'after' side is its own 'before' side."
+ *
+ * Every critic pass so far therefore judged a pipeline with L7's whole stage
+ * skipped, and pass 2's C8 fix — `dir="rtl"` reaching the artifact — could not
+ * regress-test itself here, because nothing in the proof carried a `dir` to
+ * lose. §9's recipes are the product's middle; a fixture that steps over them
+ * measures six sevenths of a pipeline and calls it the pipeline.
+ *
+ * `renderRecipe` returns a `Result`, and a failure is thrown rather than
+ * skipped. A corpus proof that quietly dropped a recipe would walk straight
+ * back into the same hole, one recipe at a time.
  *
  * @param {any[]} specimens
  * @param {{idMinter: any, clock: () => string}} deps
@@ -319,31 +373,59 @@ export function buildCorpusRenditions(specimens, deps) {
     // a drift between the two, and swallowing it would leave every specimen
     // running through whichever recipe happened to be first.
     if (!recipe) throw new Error(`corpus: L7 publishes no recipe ${recipeId}`);
+    if (!recipeLane.recipeAccepts(recipe, specimen)) {
+      throw new Error(
+        `corpus: recipe ${recipeId} does not accept a ${specimen.kind} specimen `
+        + `(it takes ${recipe.inputKinds.join(', ')})`);
+    }
 
-    const sections = sectionBlocks(specimen.blocks);
-    if (sections.length === 0) return;
-
-    sections.forEach((blocks, section) => {
-      // Only the media this section actually references travels with it. A
-      // rendition carrying every image on the page would put the emitter's
-      // budgeter back in front of a payload the deck does not show.
-      const refs = new Set(blocks.filter((b) => b.type === 'media').map((b) => b.ref));
-      const media = (specimen.media || []).filter((m) => refs.has(m.id));
-      renditions.push(recipeLane.buildRendition({
-        specimen,
-        recipe,
-        label: sections.length > 1
-          ? `${recipe.name || recipe.id} ${section + 1}/${sections.length}`
-          : (recipe.name || recipe.id),
-        blocks,
-        media,
-        producedBy: 'manual-paste',
-        idMinter: deps.idMinter,
-        clock: deps.clock,
-      }));
+    const result = recipeLane.renderRecipe(recipe, specimen, {
+      idMinter: deps.idMinter,
+      clock: deps.clock,
     });
+    if (!result.ok) throw new Error(`corpus: ${recipeId} failed on ${specimen.kind} — ${result.error}`);
+    if (result.value.length === 0) throw new Error(`corpus: ${recipeId} produced nothing`);
+
+    for (const rendition of capFanOut(result.value)) renditions.push(rendition);
   });
   return renditions;
+}
+
+/** No specimen contributes more than this many renditions to the deck. */
+const MAX_RENDITIONS_PER_RECIPE = 5;
+
+/**
+ * Trim a recipe's fan-out to a deck-sized number, without dropping a behaviour.
+ *
+ * `locale-fanout` produces nine renditions and `governed-iteration` five; a deck
+ * carrying every one is a stress test of the emitter rather than a proof a
+ * seller would build, and this fixture is meant to look like the latter.
+ *
+ * But a plain `slice(0, 5)` drops **`ar-SA`, which is ninth and is the only
+ * right-to-left market in the library** — so the corpus would carry no `dir:
+ * 'rtl'` anywhere, and pass 2's C8 fix (getting `dir="rtl"` into the artifact at
+ * all) could not regress-test itself on the very proof every critic pass judges.
+ * That is the same shape of hole the critic found in this file: coverage lost
+ * quietly, in a way no test names.
+ *
+ * So the cap is by *distinct behaviour*, not by position: take the first N in
+ * the recipe's own order, then make sure every writing direction the recipe
+ * produced is represented. Direction is the one property of a rendition the
+ * artifact lays out differently, which is why it is what the cap protects.
+ *
+ * @param {any[]} produced  renditions in the recipe's own order
+ * @returns {any[]}
+ */
+function capFanOut(produced) {
+  const kept = produced.slice(0, MAX_RENDITIONS_PER_RECIPE);
+  const keptDirs = new Set(kept.map((r) => r.dir || 'ltr'));
+  for (const rendition of produced.slice(MAX_RENDITIONS_PER_RECIPE)) {
+    const dir = rendition.dir || 'ltr';
+    if (keptDirs.has(dir)) continue;
+    keptDirs.add(dir);
+    kept.push(rendition);
+  }
+  return kept;
 }
 
 /**
@@ -363,7 +445,7 @@ export function buildCorpusSpine(specimens, renditions, deps) {
     // one — the client's words, not a label this fixture wrote.
     const lead = rendition.blocks.find((b) => b.type === 'heading');
     return sceneLane.buildScene({
-      layout: SPINE_LAYOUTS[i % SPINE_LAYOUTS.length],
+      layout: layoutFor(rendition, i),
       specimen,
       renditions: [rendition],
       headline: (lead && lead.text) || (specimen && specimen.title) || null,

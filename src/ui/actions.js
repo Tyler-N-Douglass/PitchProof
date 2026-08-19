@@ -31,7 +31,7 @@ import { formatBytes, plural } from './format.js';
 import { exportProjectJson, importProjectJson, makeRecord } from '../core/storage.js';
 import { downloadText, readFiles, pickFiles, safeFilename } from './io.js';
 import { base64Encode } from '../core/bytes.js';
-import { emitBlockers, proofDigest } from './gate.js';
+import { emitBlockers, fixExhausted, proofDigest, recordFixAttempt, reconcileFixAttempts } from './gate.js';
 import { brandYield } from './services.js';
 import { SETTING_KEYS } from './constants.js';
 import * as M from './model.js';
@@ -53,6 +53,24 @@ const sel = (app) => app.ui.selection;
  */
 function mint(app, kind, salt) {
   return M.mintId(/** @type {any} */ (kind), app.doc.seed, M.usedIds(app.proof), salt);
+}
+
+/**
+ * What an auto-fix's declared effect means for the finding that provoked it.
+ *
+ * Two of L11's fixes do not make their finding go away, and say so: a `plan`
+ * fix instructs the emitter and clears when the emitter acts, a `mitigates` fix
+ * leaves a true finding standing and reduces what it costs. A seller who is not
+ * told that reads the survivor as a failed repair — which, after CRITIQUE-3 P2,
+ * is exactly the reading the studio has to stop inviting.
+ * @param {any} fix
+ * @returns {string}
+ */
+function effectNote(fix) {
+  if (!fix) return '';
+  if (fix.effect === 'plan') return 'The finding clears when the emitter acts on it, not now.';
+  if (fix.effect === 'mitigates') return 'The finding stands, because it is true; what this changes is what it costs.';
+  return '';
 }
 
 /** @param {any} app @returns {any|null} */
@@ -248,6 +266,10 @@ export const ACTIONS = [
         seed: `pitchproof-${app.clock().slice(0, 10)}`,
         at: app.clock(),
         recipes: app.services.seedRecipes(),
+        // The project id is the storage key, and every project made today has
+        // the same seed: without the list, two made in one clock tick would
+        // share it and the second would overwrite the first.
+        taken: app.ui.projects.map((p) => p.id),
       });
       app.stack.reset(doc);
       app.setUi({ section: 'project' });
@@ -394,7 +416,7 @@ export const ACTIONS = [
       if (!url) { app.notify('warn', 'Type the prospect’s URL first.'); return; }
       const capture = await app.services.ingestUrl(url, { proxyBase: app.ui.settings.proxyBase });
       if (!capture.ok) { app.notify('bad', capture.error, { sticky: true }); return; }
-      const brand = app.services.buildBrand([capture.value], { seed: app.doc.seed });
+      const brand = app.services.buildBrand([capture.value], { seed: app.doc.seed, proof: app.proof });
       if (!brand.ok) { app.notify('bad', brand.error, { sticky: true }); return; }
       app.mutate('Extract brand system', (doc) => M.replaceBrand(doc, brand.value), { scope: 'brand' });
       reportExtraction(app, brand.value, capture.value);
@@ -410,7 +432,7 @@ export const ACTIONS = [
       if (!files.length) return;
       const captured = await app.services.importFiles(files);
       if (!captured.ok) { app.notify('bad', captured.error, { sticky: true }); return; }
-      const brand = app.services.buildBrand(captured.value.captures, { seed: app.doc.seed });
+      const brand = app.services.buildBrand(captured.value.captures, { seed: app.doc.seed, proof: app.proof });
       if (!brand.ok) { app.notify('bad', brand.error, { sticky: true }); return; }
       app.mutate('Extract brand system from files', (doc) => M.replaceBrand(doc, brand.value), { scope: 'brand' });
       reportExtraction(app, brand.value, captured.value.captures[0]);
@@ -1376,7 +1398,15 @@ export const ACTIONS = [
         error: null,
         proofHash: proofDigest(app.proof),
       };
+      // CRITIQUE-3 P2: the sweep is the only thing that can tell whether an
+      // auto-fix worked. One that said it would resolve its finding, and whose
+      // finding is standing here again, did not — and the panel stops offering
+      // it rather than inviting a fortieth click.
+      const returned = reconcileFixAttempts(app, result.value);
       const blocking = result.value.filter((f) => f.severity === 1).length;
+      if (returned) {
+        app.notify('warn', `${plural(returned, 'auto-fix')} ran and the finding came back. Those are not offered again — the Rehearse panel names them, and they need a hand edit.`);
+      }
       // A sweep of a proof with no scenes walked no scenes, and "clean" is a
       // word about what was walked (CRITIQUE-2 C11). The Rehearse panel says the
       // same thing at length; this is the one line that reaches the seller who
@@ -1435,12 +1465,96 @@ export const ACTIONS = [
       const fixes = app.services.autoFixes(app.proof, app.ui.sweep.findings);
       const fix = fixes[Number(arg) || 0];
       if (!fix) { app.notify('warn', 'That fix is no longer available — re-run the sweep.'); return undefined; }
-      const next = app.mutate(`Auto-fix: ${fix.label}`, (doc) => ({ ...doc, proof: fix.apply(doc.proof) }), {
+
+      // CRITIQUE-3 P2. A fix is a pure `(proof) => Proof`, so what it did is
+      // knowable before anything is committed: run it, and compare. A fix that
+      // returns the proof it was given cannot help, and clicking it again
+      // cannot help either. Nothing goes on the undo stack — an entry whose
+      // undo does nothing is how an undo stack stops being trustworthy — and
+      // the button is withdrawn in favour of a sentence saying why.
+      const applied = fix.apply(app.proof);
+      if (proofDigest(applied) === proofDigest(app.proof)) {
+        recordFixAttempt(app, fix, 'no-change');
+        app.notify('warn', `“${fix.label}” ran and changed nothing, so nothing was committed and nothing was put on the undo stack. Applying it again would change nothing again, so it is no longer offered for this finding: ${fix.finding ? fix.finding.code : 'this finding'} here needs a hand edit.`, { sticky: true });
+        return undefined;
+      }
+
+      const next = app.mutate(`Auto-fix: ${fix.label}`, (doc) => ({ ...doc, proof: doc.proof === app.proof ? applied : fix.apply(doc.proof) }), {
         scope: 'rehearse',
         meta: { autoFix: true, code: fix.finding ? fix.finding.code : null, label: fix.label },
       });
+      recordFixAttempt(app, fix, 'applied');
       app.ui.fixes = [...app.ui.fixes, fix.label];
-      app.notify('ok', `Applied: ${fix.label}. It is on the undo stack like any other edit.`);
+      app.notify('ok', effectNote(fix)
+        ? `Applied: ${fix.label}. ${effectNote(fix)} It is on the undo stack like any other edit.`
+        : `Applied: ${fix.label}. It is on the undo stack like any other edit.`);
+      return next;
+    },
+  },
+  {
+    id: 'rehearse.autoFixAll', label: 'Apply every auto-fix', group: 'Rehearse',
+    mutates: true,
+    keywords: 'autofix fix all sweep findings clear blocking',
+    sample: (app) => {
+      if (!(app.ui.sweep.findings || []).length) {
+        app.ui.sweep = {
+          ...app.ui.sweep,
+          findings: [{ id: 'fd_sample', severity: 2, code: 'BEAT_EMPTY', message: 'A beat reveals nothing.', locus: {}, autoFixAvailable: true }],
+          at: app.clock(),
+        };
+      }
+      return {};
+    },
+    run: (app) => {
+      const findings = app.ui.sweep.findings || [];
+      if (!app.ui.sweep.at) { app.notify('warn', 'No sweep has been run, so there are no findings to fix. Run the sweep first (Alt R).'); return undefined; }
+      const fixes = app.services.autoFixes(app.proof, findings);
+      if (!fixes.length) {
+        app.notify('warn', findings.length
+          ? `None of the ${plural(findings.length, 'finding')} this sweep raised has an auto-fix. Every one of them is an edit only you can make.`
+          : 'The sweep raised nothing, so there is nothing to fix.');
+        return undefined;
+      }
+      // A fix already shown not to work is not offered again, here either:
+      // apply-all exists to save clicks, not to re-run what has been proven
+      // inert (CRITIQUE-3 P2).
+      const live = fixes.filter((fx) => fx.finding && !fixExhausted(app, fx.finding.id));
+      if (!live.length) {
+        app.notify('warn', `Every auto-fix on offer has already been applied and none of them changed anything. Auto-fix has done what it can here; the ${plural(fixes.length, 'finding')} left need a hand edit.`, { sticky: true });
+        return undefined;
+      }
+
+      // §14 asks for auto-fix "where safe and reversible", and L11's `applyAll`
+      // is the lane's own way of threading one proof through several of them —
+      // each fix re-finds its target in the proof it is handed, so the order is
+      // its problem and not the studio's (CRITIQUE-3 P11).
+      const result = app.services.applyAllFixes(app.proof, live);
+      if (!result.ok) { app.notify('bad', result.error, { sticky: true }); return undefined; }
+
+      if (proofDigest(result.value) === proofDigest(app.proof)) {
+        // The terminating condition, said out loud. Every one of these ran
+        // against this exact proof and left it as it was, so no number of
+        // further clicks will move it.
+        for (const fx of live) recordFixAttempt(app, fx, 'no-change');
+        app.notify('warn', `All ${plural(live.length, 'auto-fix')} ran and the proof is unchanged, so nothing was committed. This is as far as auto-fix goes on this proof: the ${plural(findings.filter((f) => f.severity === 1).length, 'blocking finding')} left need a hand edit, and none of these buttons is offered again.`, { sticky: true });
+        return undefined;
+      }
+
+      const proof = result.value;
+      const next = app.mutate(`Auto-fix: ${plural(live.length, 'finding')} in one pass`, (doc) => ({ ...doc, proof }), {
+        scope: 'rehearse',
+        meta: {
+          autoFix: true,
+          batch: true,
+          code: live.length === 1 && live[0].finding ? live[0].finding.code : null,
+          codes: [...new Set(live.map((fx) => (fx.finding ? fx.finding.code : null)).filter(Boolean))],
+          labels: live.map((fx) => fx.label),
+          label: `${plural(live.length, 'finding')} in one pass`,
+        },
+      });
+      for (const fx of live) recordFixAttempt(app, fx, 'applied');
+      app.ui.fixes = [...app.ui.fixes, ...live.map((fx) => fx.label)];
+      app.notify('ok', `Applied ${plural(live.length, 'auto-fix')} in one pass, as one undo entry. Run the sweep again (Alt R): anything that comes back will say so rather than offer the same button.`);
       return next;
     },
   },
@@ -1452,6 +1566,9 @@ export const ACTIONS = [
       if (!hasFix) { app.notify('warn', 'No auto-fixes have been applied.'); return; }
       app.stack.undoUntil((entry) => !(entry.meta && /** @type {any} */ (entry.meta).autoFix));
       app.ui.fixes = [];
+      // The ledger describes attempts against a proof that no longer exists.
+      // Keeping it would go on withholding buttons for fixes that were undone.
+      app.ui.fixAttempts = [];
       app.scheduleSave();
       app.notify('ok', 'Every auto-fix has been undone.');
     },
@@ -1733,6 +1850,10 @@ function addCapture(app, capture, label) {
   const built = app.services.buildSpecimen(capture, {
     imageQuality: app.proof.emitOptions.imageQuality,
     seed: app.doc.seed,
+    // CRITIQUE-3 P1: the proof, so the ids this capture mints are free in it.
+    // `addCapture` commits before it returns, so the next capture in an import
+    // loop sees this one's ids and cannot reuse them.
+    proof: app.proof,
   });
   if (!built.ok) { app.notify('bad', built.error, { sticky: true }); return; }
   app.select({ specimenId: built.value.id });

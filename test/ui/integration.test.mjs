@@ -76,7 +76,7 @@ function assemble(app) {
   app.dispatch('specimen.importPaste');
 
   const capture = app.services.importHtmlText(PAGE, 'https://www.northwind.example/coatings');
-  const brand = app.services.buildBrand([capture.value], { seed: app.doc.seed });
+  const brand = app.services.buildBrand([capture.value], { seed: app.doc.seed, proof: app.proof });
   if (brand.ok) app.mutate('Extract brand', (doc) => ({ ...doc, proof: { ...doc.proof, brand: brand.value } }));
 
   app.dispatch('recipe.loadSeed');
@@ -129,7 +129,7 @@ test('a page pasted into the studio becomes a specimen with its chrome stripped 
 test('the brand extracted from that page carries a solved palette and computed confidence', async () => {
   const app = await realApp();
   const capture = app.services.importHtmlText(PAGE, 'https://www.northwind.example');
-  const brand = app.services.buildBrand([capture.value], { seed: app.doc.seed });
+  const brand = app.services.buildBrand([capture.value], { seed: app.doc.seed, proof: app.proof });
   assert.ok(brand.ok, brand.ok ? '' : brand.error);
 
   const roles = new Set(brand.value.colors.map((c) => c.role));

@@ -21,7 +21,7 @@ import {
 } from '../components.js';
 import { formatDateTime, plural, severityLabel, severityMeaning, truncate } from '../format.js';
 import { deckPositions, deckScenes, findScene } from '../model.js';
-import { emitBlockers } from '../gate.js';
+import { emitBlockers, fixAttempt, fixCoverage } from '../gate.js';
 import { ACT_ATTR, ARG_ATTR, KEY_ATTR } from '../render.js';
 
 /**
@@ -39,12 +39,39 @@ export function renderRehearsePanel(app) {
   // One gate reading for the whole panel: `emitBlockers` digests the proof, and
   // the status bar is already paying for that once per render.
   const gate = emitBlockers(app);
+  // CRITIQUE-3 P2: how much of this list a button could ever clear, computed
+  // once and said before the first click rather than discovered on the fortieth.
+  const coverage = fixCoverage(app, findings, fixes);
 
   return h('div', { class: 'st-panel' },
-    renderSweepHeader(app, sweep, findings),
+    renderSweepHeader(app, sweep, findings, fixes, coverage),
     renderDryRun(app),
-    ...bySeverity.map((group) => renderSeverityGroup(app, group, fixes, gate)),
+    ...bySeverity.map((group) => renderSeverityGroup(app, group, fixes, gate, coverage)),
     renderFixLog(app));
+}
+
+/**
+ * What auto-fix can and cannot do to the findings in hand.
+ *
+ * §14 asks for auto-fix "where safe and reversible", which means some findings
+ * have one and some never will. Before CRITIQUE-3 P2 the panel said neither:
+ * every finding either carried a button or carried nothing, so the only way to
+ * learn that the buttons had run out was to keep clicking. The measured cost of
+ * that was forty clicks and 232 seconds with the count stuck at three.
+ *
+ * @param {{offered: number, exhausted: number, manual: number}} coverage
+ * @param {number} total
+ * @returns {string}
+ */
+function coverageSentence(coverage, total) {
+  if (!total) return '';
+  const parts = [];
+  if (coverage.offered) parts.push(`${coverage.offered} ${coverage.offered === 1 ? 'has an auto-fix on offer' : 'have an auto-fix on offer'}`);
+  if (coverage.exhausted) parts.push(`${coverage.exhausted} ${coverage.exhausted === 1 ? 'has had its auto-fix applied without effect' : 'have had their auto-fix applied without effect'}`);
+  if (coverage.manual) parts.push(`${coverage.manual} ${coverage.manual === 1 ? 'has none and needs a hand edit' : 'have none and need a hand edit'}`);
+  if (!parts.length) return '';
+  const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+  return `Of ${plural(total, 'finding')}, ${list}.`;
 }
 
 /**
@@ -52,7 +79,7 @@ export function renderRehearsePanel(app) {
  * @param {any} sweep
  * @param {any[]} findings
  */
-function renderSweepHeader(app, sweep, findings) {
+function renderSweepHeader(app, sweep, findings, fixes, coverage) {
   const blocking = findings.filter((f) => f.severity === 1).length;
   // CRITIQUE-2 C11: a sweep that walked nothing is not clean, it is vacuous, and
   // this panel already holds the count. "Sweep clean" over "Scenes walked 0" was
@@ -69,6 +96,14 @@ function renderSweepHeader(app, sweep, findings) {
       }, sweep.running ? 'Sweeping…' : 'Run the sweep'),
       button({ act: 'rehearse.dryRun', variant: 'ghost', keyHint: 'Alt D' },
         app.ui.dryRun.active ? 'End the dry run' : 'Dry run'),
+      // §14 makes rehearsal the last pass before the room, and clearing
+      // findings one click and one five-second sweep at a time is the wrong
+      // shape for that moment (CRITIQUE-3 P11). The per-finding buttons stay:
+      // this is the second route, not the replacement.
+      coverage.offered
+        ? button({ act: 'rehearse.autoFixAll', variant: 'ghost' },
+          `Apply every auto-fix · ${coverage.offered}`)
+        : null,
     ),
   },
   sweep.error
@@ -87,6 +122,14 @@ function renderSweepHeader(app, sweep, findings) {
     pair('Beat positions walked', h('span', { class: 'st-mono' }, String(deckPositions(app.proof)))),
     pair('Breakpoints', h('span', { class: 'st-mono' }, 'sm 390 · md 1024 · lg 1600')),
   ),
+  sweep.at && findings.length
+    ? h('p', { class: 'st-field-hint' }, coverageSentence(coverage, findings.length))
+    : null,
+  sweep.at && findings.length && !coverage.offered
+    ? notice('warn', coverage.exhausted
+      ? 'Every auto-fix on offer has been applied and none of them cleared its finding. This is as far as auto-fix goes on this proof — what is left is an edit only you can make, and no button here will do it.'
+      : 'Nothing here has an auto-fix. Every one of these is an edit only you can make; the message on each says what it is.')
+    : null,
   app.services.has('validate') ? null : notice('warn', 'The validation lane is not wired into this build. Until it lands, no sweep can run — and a proof that was never validated is not emitted.'),
   sweep.at ? null : renderRules(app));
 }

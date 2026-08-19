@@ -66,6 +66,136 @@ export function blockingFindings(findings) {
  */
 export function proofDigest(proof) { return contentHash(proof); }
 
+// ---------------------------------------------------------------------------
+// The auto-fix ledger
+//
+// The gate says what stands between the seller and an emitted file. The ledger
+// says what has already been tried against it and what that did — which is a
+// different question, and until CRITIQUE-3 P2 nothing in the studio was asking
+// it.
+//
+// P2's measured symptom was forty auto-fix clicks over 232 seconds with the
+// blocking count stuck at three from the seventeenth, the same button offered
+// every time. The cause was P1, and P1 is fixed; but a repair loop that cannot
+// make progress has to be able to say so, because the next cause will not be
+// P1. So every application records what it actually did, keyed by the finding's
+// id — which is content-derived from its code, locus and key, and therefore the
+// same string when the same finding comes back at the next sweep.
+//
+// Three outcomes, and each one is a fact the panel can act on:
+//
+//   'applied'   — the proof changed. Provisional: the next sweep decides.
+//   'no-change' — the fix ran against this exact proof and produced the same
+//                 proof. Clicking it again produces the same proof again, so
+//                 the button is withdrawn and the finding is named as one for
+//                 a person.
+//   'returned'  — the proof changed and the finding came back anyway. Only ever
+//                 set for a fix that declared `effect: 'resolves'`; a 'plan' or
+//                 'mitigates' fix leaving its finding standing is the contract,
+//                 not a failure.
+//
+// The ledger lives on `app.ui` beside the sweep, because it describes one
+// session's attempts against one sweep's findings and means nothing without it.
+// ---------------------------------------------------------------------------
+
+/**
+ * @typedef {object} FixAttempt
+ * @property {string} findingId
+ * @property {string|null} code
+ * @property {string} label
+ * @property {string} effect      'resolves' | 'plan' | 'mitigates'
+ * @property {'applied'|'no-change'|'returned'} outcome
+ * @property {string} at
+ */
+
+/**
+ * The attempt standing against a finding, or null.
+ * @param {any} app
+ * @param {string} findingId
+ * @returns {FixAttempt|null}
+ */
+export function fixAttempt(app, findingId) {
+  const log = (app && app.ui && app.ui.fixAttempts) || [];
+  return log.find((a) => a && a.findingId === findingId) || null;
+}
+
+/**
+ * True when an auto-fix has been tried against this finding and did not clear
+ * it, so offering the same button again would be inviting a click that cannot
+ * help.
+ * @param {any} app
+ * @param {string} findingId
+ * @returns {boolean}
+ */
+export function fixExhausted(app, findingId) {
+  const attempt = fixAttempt(app, findingId);
+  return !!attempt && (attempt.outcome === 'no-change' || attempt.outcome === 'returned');
+}
+
+/**
+ * Record what an application of one fix did. One entry per finding: a second
+ * attempt replaces the first, because what matters is the current answer to
+ * "would clicking this help".
+ * @param {any} app
+ * @param {any} fix                    an entry from `services.autoFixes`
+ * @param {'applied'|'no-change'|'returned'} outcome
+ * @returns {void}
+ */
+export function recordFixAttempt(app, fix, outcome) {
+  const finding = (fix && fix.finding) || {};
+  if (!finding.id) return;
+  const rest = (app.ui.fixAttempts || []).filter((a) => a.findingId !== finding.id);
+  app.ui.fixAttempts = [...rest, {
+    findingId: finding.id,
+    code: finding.code || null,
+    label: fix.label,
+    effect: fix.effect === 'plan' || fix.effect === 'mitigates' ? fix.effect : 'resolves',
+    outcome,
+    at: app.clock(),
+  }];
+}
+
+/**
+ * Re-read the ledger against a fresh sweep. A fix that declared it would
+ * resolve its finding, and whose finding is still here, did not.
+ * @param {any} app
+ * @param {any[]} findings   the findings the new sweep raised
+ * @returns {number}         how many attempts turned out not to have worked
+ */
+export function reconcileFixAttempts(app, findings) {
+  const present = new Set((findings || []).map((f) => f && f.id));
+  let returned = 0;
+  app.ui.fixAttempts = (app.ui.fixAttempts || []).map((attempt) => {
+    if (attempt.outcome !== 'applied' || attempt.effect !== 'resolves') return attempt;
+    if (!present.has(attempt.findingId)) return attempt;
+    returned += 1;
+    return { ...attempt, outcome: /** @type {'returned'} */ ('returned') };
+  });
+  return returned;
+}
+
+/**
+ * How much of a finding list an auto-fix could still clear, for the sentence
+ * that has to be true before the first click rather than after the fortieth.
+ * @param {any} app
+ * @param {any[]} findings
+ * @param {any[]} fixes     `services.autoFixes(proof, findings)`
+ * @returns {{offered: number, exhausted: number, manual: number}}
+ */
+export function fixCoverage(app, findings, fixes) {
+  const byFinding = new Map((fixes || []).map((fx) => [fx.finding && fx.finding.id, fx]));
+  let offered = 0;
+  let exhausted = 0;
+  let manual = 0;
+  for (const finding of findings || []) {
+    if (!finding) continue;
+    if (!byFinding.has(finding.id)) { manual += 1; continue; }
+    if (fixExhausted(app, finding.id)) { exhausted += 1; continue; }
+    offered += 1;
+  }
+  return { offered, exhausted, manual };
+}
+
 /**
  * Everything standing between the user and an emitted file.
  * @param {any} app

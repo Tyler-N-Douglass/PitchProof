@@ -138,13 +138,37 @@ html, body {
   color: var(--pp-on-surface-alt);
   border: var(--pp-border-width) solid var(--pp-border);
   font-size: 13px;
-  max-width: min(60ch, 70vw);
+  max-width: calc(100% - (2 * var(--pp-stage-pad)));
 }
 
+/*
+ * The objection, in the client's words (§11).
+ *
+ * It used to be one `nowrap` line with `text-overflow: ellipsis` and a
+ * `max-width: min(60ch, 70vw)` — which cut a real corpus objection by 34px at
+ * 1600 and by 195px at 390, 119% of the box, leaving the room reading
+ * "Your fouling margin assumptions are more optimistic t…" with the rest of the
+ * stage empty (CRITIQUE-3 P3).
+ *
+ * Two lines with a clamp, and the badge free to be as wide as the stage allows.
+ * `-webkit-line-clamp` keeps the ellipsis, so a genuinely long objection still
+ * says it was cut rather than stopping — and the label now carries
+ * `data-pp-tx`, so §22.2 measures it and a cut is a finding instead of being
+ * invisible to the detector by construction.
+ */
 .pp-branch-badge-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+/* A branch nobody named. Said plainly rather than shown as an internal id. */
+.pp-branch-badge-label[data-pp-unnamed] {
+  opacity: 0.7;
+  font-style: italic;
 }
 
 .pp-branch-badge-key {

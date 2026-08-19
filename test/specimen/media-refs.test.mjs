@@ -28,7 +28,7 @@ import { importImage, importOoxml, importPdf, parseHtml } from '../../src/ingest
 import { resolveBlockMedia, resolveMediaRef, mediaIndex } from '../../src/specimen/blocks.js';
 import { captureMedia, dedupeMedia, MediaLedger } from '../../src/specimen/media.js';
 import { encodePng } from '../../src/specimen/png.js';
-import { buildSpecimen, unresolvedMediaRefs } from '../../src/specimen/specimen.js';
+import { buildSpecimen, restoreOmittedMedia, unresolvedMediaRefs } from '../../src/specimen/specimen.js';
 import {
   CORPUS_ASSETS, CORPUS_DOCUMENTS, CORPUS_PAGES, assetBytes, corpusClock, documentBytes, pageHtml,
 } from '../fixtures/corpus/index.mjs';
@@ -141,7 +141,14 @@ test('importer refs resolve by part name, basename, relative form and percent-en
   assert.deepEqual(unresolved, ['nowhere.png']);
 });
 
-test('an importer block whose bytes were never captured stays visible and is reported, not silently dropped', () => {
+/**
+ * P6 (severity 2) — the same rule for the importer route as for the paste
+ * route. A ref whose bytes the capture never carried is held out of the block
+ * stream and recorded, so a `.docx` whose image the extractor could not reach
+ * does not become a blocking `ASSET_MISSING` either (D-L6-21, reversing
+ * D-L6-15's "keep the block").
+ */
+test('an importer block whose bytes were never captured is held back, recorded and restorable', () => {
   const specimen = buildSpecimen({
     kind: 'document',
     sourceUrl: null,
@@ -156,10 +163,31 @@ test('an importer block whose bytes were never captured stays visible and is rep
     meta: {},
   }, { clock, imageQuality: 0.85 });
 
-  assert.equal(specimen.blocks[1].ref, 'word/media/image9.png');
-  assert.equal(specimen.blocks[1].unresolved, true);
+  assert.deepEqual(specimen.blocks.filter((b) => b.type === 'media'), [],
+    'a block that references nothing is not left in the stream to block the emit');
+  assert.equal(specimen.mediaOmitted.length, 1);
+  assert.deepEqual(
+    specimen.mediaOmitted.map((o) => [o.ref, o.caption, o.position, o.origin]),
+    [['word/media/image9.png', 'Never extracted', 1, 'blocks']],
+    'what was held back, what it said, and where it stood',
+  );
+  assert.equal(specimen.meta['capture.mediaOmitted'], '1',
+    'a consumer that reads only the frozen fields still sees that something was left out');
   assert.deepEqual(specimen.mediaUnresolved, ['word/media/image9.png']);
   assert.deepEqual(unresolvedMediaRefs(specimen), ['word/media/image9.png']);
+
+  const png = encodePng(new Uint8Array([1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]), 2, 2);
+  const back = restoreOmittedMedia(specimen, 'word/media/image9.png',
+    { name: 'word/media/image9.png', bytes: png, mime: 'image/png' }, { imageQuality: 0.85 });
+  assert.equal(back.blocks.length, 2, 'the block returns');
+  assert.equal(back.blocks[1].type, 'media');
+  assert.equal(back.blocks[1].caption, 'Never extracted', 'with the caption it was omitted with');
+  assert.equal(back.blocks[1].ref, back.media[0].id, 'and pointing at the bytes that arrived');
+  assert.deepEqual(back.mediaOmitted, []);
+  assert.deepEqual(unresolvedMediaRefs(back), []);
+  assert.equal(back.meta['capture.mediaOmitted'], undefined);
+  assert.equal(back.edited, false, 'the prospect\'s own content coming back is not an edit (§18.3)');
+  assert.equal(specimen.blocks.length, 1, 'the input specimen is untouched');
 });
 
 test('F12 — a shared ledger inlines an asset once across the specimens of one project', () => {

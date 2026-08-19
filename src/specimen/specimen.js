@@ -23,7 +23,9 @@
 import { countWords, validateSpecimen } from '../core/contracts.js';
 import { contentId } from '../core/ids.js';
 import { parseHtml } from '../ingest/index.js';
-import { blocksWithTrace, repairHeadingLevels, resolveBlockMedia, unrepairHeadingLevels } from './blocks.js';
+import {
+  blocksWithTrace, omitUnresolvedMedia, repairHeadingLevels, resolveBlockMedia, unrepairHeadingLevels,
+} from './blocks.js';
 import { classifyChrome, dropNonRendered } from './chrome.js';
 import {
   attrOf, bodyOf, byTag, childrenOf, cloneTree, elements, firstElement, isText,
@@ -170,7 +172,6 @@ export function buildSpecimen(capture, options = {}) {
     // contains a picture.
     const resolved = resolveBlockMedia(capture.blocks, media);
     blocks = resolved.blocks;
-    mediaUnresolved = resolved.unresolved;
     blockPositions = blocks.map((_, i) => i);
     locator = 'importer';
   } else if (doc) {
@@ -236,10 +237,51 @@ export function buildSpecimen(capture, options = {}) {
     }));
   }
 
+  // --- media the page referenced but the capture never brought bytes for --
+  //
+  // §6's paste and manual routes carry markup and no assets, so every `<img>`
+  // on a pasted page resolves to nothing. A `media` block pointing at nothing
+  // is a broken image in front of the client and a severity-1 `ASSET_MISSING`
+  // at emit, one per image per rendition — so §6's own documented fallback
+  // would produce a proof that cannot be emitted. Such blocks are held back
+  // here instead, and every one of them is recorded on `mediaOmitted` with the
+  // position it came from, so the loss is visible, countable and reversible
+  // the moment its bytes arrive (D-L6-21).
+  /** @type {any[]} */
+  const mediaOmitted = [];
+  /** @param {any} o @param {string} origin @param {string|null} strippedId */
+  const omission = (o, origin, strippedId) => ({
+    id: contentId('block', { omitted: o.ref, position: o.position, origin, strippedId }),
+    ref: o.ref,
+    caption: o.caption,
+    position: o.position,
+    origin,
+    strippedId,
+    reason: o.reason,
+  });
+  const kept = omitUnresolvedMedia(blocks, { media, positions: blockPositions });
+  blocks = kept.blocks;
+  blockPositions = kept.positions;
+  for (const o of kept.omitted) mediaOmitted.push(omission(o, 'blocks', null));
+  stripped = stripped.map((entry) => {
+    const inner = omitUnresolvedMedia(entry.blocks, { media, positions: entry.positions });
+    if (inner.omitted.length === 0) return entry;
+    // A stripped region's blocks are not in the stream, but `restoreBlock` puts
+    // them back — so an unresolved ref left in one is the same defect, deferred
+    // until the studio's "show everything" toggle.
+    for (const o of inner.omitted) mediaOmitted.push(omission(o, 'stripped', entry.id));
+    return { ...entry, blocks: inner.blocks, positions: inner.positions };
+  });
+  mediaOmitted.sort((a, b) => (a.position - b.position) || (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0));
+  mediaUnresolved = [...new Set(mediaOmitted.map((o) => o.ref))].sort();
+
   if (options.repairHeadings) repairHeadingLevels(blocks);
 
   // --- identity ----------------------------------------------------------
   const meta = extractMeta(doc, capture.meta || {});
+  // `meta` is a frozen field, so a consumer that has never heard of this lane's
+  // optional extensions still sees that something was left out.
+  if (mediaOmitted.length) meta['capture.mediaOmitted'] = String(mediaOmitted.length);
   const locale = doc ? detectLocale(doc, sourceUrl) : (meta.lang || null);
   const inferred = inferKindWithEvidence(doc, sourceUrl, { captureKind: capture.kind, blocks });
   const kind = options.kind || inferred.kind;
@@ -284,6 +326,11 @@ export function buildSpecimen(capture, options = {}) {
     },
     headingsRepaired: Boolean(options.repairHeadings),
     mediaUnresolved,
+    /**
+     * Media the page referenced and the capture never brought bytes for, held
+     * out of `blocks` and restorable through `restoreOmittedMedia` (D-L6-21).
+     */
+    mediaOmitted,
     kindConfidence: inferred.confidence,
     kindEvidence: inferred.evidence,
     localeSignals: doc ? localeSignals(doc, sourceUrl) : [],
@@ -476,9 +523,13 @@ export function repairHeadings(specimen) {
 }
 
 /**
- * Every distinct element the capture referenced but that no `MediaRef` covers.
- * L11 turns these into `ASSET_MISSING`; surfacing them here means the studio
- * can offer to fetch or upload them before that becomes a finding.
+ * Every distinct element the capture referenced but that no `MediaRef` covers —
+ * both the images held back at capture (`mediaOmitted`, D-L6-21) and any media
+ * block left in the stream with a ref that resolves to nothing.
+ *
+ * This is the seller-facing answer to "what did not come with the page": on
+ * §6's paste route it names every `<img>` whose bytes were never pasted, and
+ * `restoreOmittedMedia` is how the seller supplies one.
  * @param {any} specimen
  * @returns {string[]}
  */
@@ -486,10 +537,128 @@ export function unresolvedMediaRefs(specimen) {
   const known = new Set((specimen.media || []).map((m) => m.id));
   /** @type {Set<string>} */
   const missing = new Set();
+  for (const o of specimen.mediaOmitted || []) missing.add(o.ref);
   for (const b of specimen.blocks || []) {
     if (b.type === 'media' && !known.has(b.ref)) missing.add(b.ref);
   }
   return [...missing].sort();
+}
+
+/**
+ * §6/§8 — put an omitted image back, now that its bytes exist.
+ *
+ * `buildSpecimen` holds back a `media` block whose bytes the capture never
+ * carried (D-L6-21). This is the way back: hand it the entry (or its id, or the
+ * source ref it was omitted under) and the bytes — either an already-captured
+ * `MediaRef`, or a raw asset `{name, bytes, mime, alt}` this will capture — and
+ * the block returns to the exact position it was taken from, in `blocks` or
+ * inside the stripped region it came from.
+ *
+ * Restoring does **not** set `edited`: the block is the prospect's own content
+ * coming back, not a change to it (§18.3).
+ *
+ * @param {any} specimen
+ * @param {any} target an entry from `specimen.mediaOmitted`, its `id`, or its `ref`
+ * @param {any} supply a `MediaRef`, or an asset `{name, bytes, mime, alt}`
+ * @param {{imageQuality?: number, maxEdge?: number, idMinter?: {next: (kind: string) => string},
+ *          ledger?: import('./media.js').MediaLedger}} [options]
+ * @returns {import('../core/contracts.d.ts').Specimen}
+ */
+export function restoreOmittedMedia(specimen, target, supply, options = {}) {
+  if (!specimen) throw new Error('restoreOmittedMedia: a specimen is required');
+  const omitted = Array.isArray(specimen.mediaOmitted) ? specimen.mediaOmitted : [];
+  const entry = findOmitted(omitted, target);
+  if (!entry) throw new Error('restoreOmittedMedia: that reference is not among this specimen\'s omitted media');
+  if (!supply) throw new Error(`restoreOmittedMedia: "${entry.ref}" needs its bytes — a block that references nothing is what was held back`);
+
+  /** @type {any} */
+  let ref = null;
+  if (supply.dataUri && supply.id) ref = supply;
+  else if (supply.bytes) {
+    [ref] = captureMedia([{ name: supply.name || entry.ref, src: supply.src || entry.ref, alt: supply.alt === undefined ? entry.caption : supply.alt, mime: supply.mime, bytes: supply.bytes }], {
+      imageQuality: options.imageQuality === undefined ? 0.85 : options.imageQuality,
+      maxEdge: options.maxEdge,
+      idMinter: options.idMinter,
+      ledger: options.ledger,
+    });
+  }
+  if (!ref) throw new Error(`restoreOmittedMedia: "${entry.ref}" was supplied nothing this lane can inline — pass a MediaRef or {bytes, mime}`);
+
+  const media = (specimen.media || []).some((m) => m.id === ref.id)
+    ? [...(specimen.media || [])]
+    : [...(specimen.media || []), ref];
+  /** @type {any} */
+  const block = { type: 'media', ref: ref.id };
+  if (entry.caption) block.caption = entry.caption;
+
+  let blocks = specimen.blocks || [];
+  let blockPositions = Array.isArray(specimen.blockPositions) && specimen.blockPositions.length === blocks.length
+    ? specimen.blockPositions
+    : blocks.map((_, i) => i);
+  let stripped = specimen.stripped || [];
+
+  if (entry.origin === 'stripped') {
+    stripped = stripped.map((s) => {
+      if (s.id !== entry.strippedId) return s;
+      const merged = insertAt(s.blocks, s.positions, block, entry.position);
+      return { ...s, blocks: merged.blocks, positions: merged.positions };
+    });
+  } else {
+    const merged = insertAt(blocks, blockPositions, block, entry.position);
+    blocks = merged.blocks;
+    blockPositions = merged.positions;
+  }
+
+  const rest = omitted.filter((o) => o !== entry);
+  const meta = { ...(specimen.meta || {}) };
+  if (rest.length) meta['capture.mediaOmitted'] = String(rest.length);
+  else delete meta['capture.mediaOmitted'];
+
+  return {
+    ...specimen,
+    blocks,
+    blockPositions,
+    stripped,
+    media,
+    meta,
+    wordCount: countWords(blocks),
+    mediaOmitted: rest,
+    mediaUnresolved: [...new Set(rest.map((o) => o.ref))].sort(),
+  };
+}
+
+/** @param {any[]} omitted @param {any} wanted @returns {any|null} */
+function findOmitted(omitted, wanted) {
+  if (!wanted) return null;
+  if (typeof wanted === 'string') {
+    return omitted.find((o) => o.id === wanted) || omitted.find((o) => o.ref === wanted) || null;
+  }
+  if (wanted.id) {
+    const byId = omitted.find((o) => o.id === wanted.id);
+    if (byId) return byId;
+  }
+  if (wanted.ref) {
+    const byRef = omitted.find((o) => o.ref === wanted.ref
+      && (wanted.position === undefined || o.position === wanted.position));
+    if (byRef) return byRef;
+  }
+  return null;
+}
+
+/**
+ * Insert one block into a position-ordered stream, keeping both arrays aligned.
+ * @param {any[]} blocks @param {number[]} positions @param {any} block @param {number} at
+ * @returns {{blocks: any[], positions: number[]}}
+ */
+function insertAt(blocks, positions, block, at) {
+  const list = Array.isArray(blocks) ? blocks : [];
+  const pos = Array.isArray(positions) && positions.length === list.length ? positions : list.map((_, i) => i);
+  let i = 0;
+  while (i < pos.length && pos[i] < at) i += 1;
+  return {
+    blocks: [...list.slice(0, i), block, ...list.slice(i)],
+    positions: [...pos.slice(0, i), at, ...pos.slice(i)],
+  };
 }
 
 /**

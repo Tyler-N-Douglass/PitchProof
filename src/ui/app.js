@@ -117,6 +117,10 @@ export class StudioApp extends Emitter {
       sitemap: [],
       /** @type {string[]} auto-fix labels applied this session, for the history panel */
       fixes: [],
+      // What each auto-fix actually did, keyed by finding id. `src/ui/gate.js`
+      // owns the shape and the reasoning; CRITIQUE-3 P2 is why it exists.
+      /** @type {import('./gate.js').FixAttempt[]} */
+      fixAttempts: [],
     };
 
     this.noticeSeq = 0;

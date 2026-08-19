@@ -40,6 +40,8 @@ import {
 import { collectColors } from '../../src/brand/color.js';
 import { emit } from '../../src/emit/index.js';
 import { registerAllLayouts } from '../../src/scene/index.js';
+import { renderLayout } from '../../src/runtime/layouts.js';
+import { toHtml } from '../../src/core/vdom.js';
 import { buildRuntime } from '../../scripts/build.mjs';
 
 registerAllLayouts();
@@ -253,6 +255,99 @@ test('sectionBlocks never loses or duplicates a block', () => {
 test('sectionBlocks handles the empty case without inventing one', () => {
   assert.deepEqual(sectionBlocks([]), []);
   assert.deepEqual(sectionBlocks(null), []);
+});
+
+test('every rendition came out of a recipe, not out of its own specimen', async () => {
+  // CRITIQUE-3 P5. This fixture used to call `buildRendition` directly with the
+  // specimen's own blocks, so all 31 renditions were verbatim slices of their
+  // own source, labelled with recipe *names*. Every §20 critic pass judged a
+  // pipeline with L7's whole stage skipped — the splitBeforeAfter scenes put the
+  // prospect's copy on the left and a slice of the same copy on the right, under
+  // "Illustrative example — not client-approved content".
+  const p = await proof();
+  assert.deepEqual([...new Set(p.renditions.map((r) => r.producedBy))], ['template'],
+    'a rendition not produced by a template did not come from renderRecipe');
+
+  // The stronger claim, and the one that catches a regression to hand-built
+  // renditions: no rendition's blocks may be a **contiguous slice** of its
+  // specimen's. That is exactly what the old fixture produced — `sectionBlocks`
+  // cut the source at heading boundaries and handed the pieces straight to
+  // `buildRendition`.
+  //
+  // Deliberately *not* "the text must differ". §18.2 forbids fabrication, so a
+  // recipe's output is largely the client's own words: `channel-variants`'s
+  // "Paid social" is a heading and a paragraph lifted verbatim, plus a table the
+  // recipe wrote. Demanding new text would demand invention, which is the one
+  // thing §18.2 is there to prevent. What a recipe changes is *structure*.
+  const specimenById = new Map(p.specimens.map((s) => [s.id, s]));
+  const shape = (blocks) => JSON.stringify(blocks.map((b) => [b.type, b.text ?? null]));
+
+  /** @type {string[]} */
+  const passthrough = [];
+  for (const rendition of p.renditions) {
+    const specimen = specimenById.get(rendition.specimenId);
+    if (!specimen || rendition.blocks.length === 0) continue;
+    const source = specimen.blocks || [];
+    const needle = shape(rendition.blocks);
+    for (let i = 0; i + rendition.blocks.length <= source.length; i += 1) {
+      if (shape(source.slice(i, i + rendition.blocks.length)) === needle) {
+        passthrough.push(`${rendition.label} (specimen blocks ${i}..${i + rendition.blocks.length - 1})`);
+        break;
+      }
+    }
+  }
+  assert.deepEqual(passthrough, [],
+    `these renditions are contiguous slices of their own specimen: ${passthrough.join(', ')}`);
+});
+
+test('the deck carries a right-to-left rendition, on a layout that can show it', async () => {
+  // Two ways this fixture lost the coverage, both silently, both found by the
+  // §20 critic rather than by a test. The fan-out cap took the first five of
+  // `locale-fanout`'s nine markets and ar-SA is ninth — the only RTL market in
+  // the library — so the corpus carried no `dir` at all. And a blind layout
+  // rotation then put the one RTL rendition on `systemMap`, which renders a
+  // rendition's *label* and not its prose, so the direction had nowhere to
+  // appear.
+  //
+  // Without both fixed, pass 2's C8 fix cannot regress-test itself on the proof
+  // every critic pass judges: there is no `dir` in it to lose.
+  const p = await proof();
+  const rtl = p.renditions.filter((r) => r.dir === 'rtl');
+  assert.ok(rtl.length > 0, 'no rendition in the corpus proof reads right to left');
+
+  for (const rendition of rtl) {
+    const scene = p.spine.concat(...p.branches.map((b) => b.scenes))
+      .find((sc) => sc.renditionIds.includes(rendition.id));
+    assert.ok(scene, `${rendition.label} is on no scene`);
+    assert.ok(!['systemMap', 'contentsIndex'].includes(scene.layout),
+      `${rendition.label} is laid out by ${scene.layout}, which renders a rendition's label and not its prose`);
+  }
+});
+
+test('the rendered right-to-left scene actually carries dir="rtl"', async () => {
+  // Asked of the rendered tree, not of the emitted file: the artifact carries
+  // its model compressed, so only the opening beat's first-paint markup is
+  // literal in the bytes. Grepping the file for `dir="rtl"` finds nothing and
+  // means nothing — which is exactly the false negative that sent me looking
+  // for a defect in L8 that was not there.
+  const p = await proof();
+  const rtl = p.renditions.find((r) => r.dir === 'rtl');
+  assert.ok(rtl, 'no right-to-left rendition to render');
+  const scene = p.spine.find((sc) => sc.renditionIds.includes(rtl.id));
+  const specimen = p.specimens.find((s) => s.id === scene.specimenId) || null;
+
+  const html = toHtml(renderLayout({
+    scene, specimen, renditions: [rtl], brand: p.brand,
+    el: (path) => `el_${path}`, revealed: () => true,
+  }));
+  const marks = (html.match(/dir="rtl"/g) || []).length;
+  assert.ok(marks > 0, `the ${scene.layout} layout rendered ${rtl.label} with no dir="rtl" anywhere`);
+
+  // And §18.2: the text is still the source's English, so nothing may claim it
+  // is Arabic. `dir` is the market's; `lang` is the source's.
+  assert.ok(!html.includes('lang="ar-SA"'),
+    'a block claims lang="ar-SA" over text that is still the source\'s English — '
+    + 'that hands a screen reader an Arabic voice for English words');
 });
 
 test('the deck exercises more than one layout and more than one recipe', async () => {
